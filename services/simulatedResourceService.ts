@@ -149,3 +149,67 @@ export const judgeResource = async (
     await recalculateAttemptsForExam(classId, exam.id!, updatedExam);
   }
 };
+
+/**
+ * Creates an admin-initiated official correction (retificação oficial) directly
+ * without needing an existing student resource.
+ */
+export const createAdminCorrection = async (
+  classId: string,
+  exam: SimulatedExam,
+  questionNumber: number,
+  type: ResourceType,
+  justification: string,
+  newAlternative?: string
+): Promise<string> => {
+  const collectionRef = collection(db, 'simulated_resources');
+  
+  // 1. Create a simulated resource document that is already 'accepted' (approved) and marked as official
+  const resourceData: any = {
+    classId,
+    examId: exam.id!,
+    examTitle: exam.title || '',
+    userId: 'admin_correction',
+    userName: 'BANCA EXAMINADORA',
+    userEmail: 'admin@banca.com',
+    questionNumber,
+    type,
+    justification,
+    status: 'accepted' as ResourceStatus,
+    adminResponse: justification,
+    isOfficial: true,
+  };
+
+  if (type === 'alterar_gabarito' && newAlternative) {
+    resourceData.newAlternative = newAlternative;
+  }
+
+  const docRef = await addDoc(collectionRef, {
+    ...resourceData,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp()
+  });
+
+  // 2. Apply the automatic changes based on correction type to the exam questions
+  let updatedQuestions = [...(exam.questions || [])];
+  if (type === 'anular_questao') {
+    updatedQuestions = updatedQuestions.map(q => 
+      q.index === questionNumber ? { ...q, isAnnulled: true } : q
+    );
+  } else if (type === 'alterar_gabarito') {
+    if (!newAlternative) {
+      throw new Error('Uma nova alternativa correta deve ser fornecida para alterar o gabarito.');
+    }
+    updatedQuestions = updatedQuestions.map(q => 
+      q.index === questionNumber ? { ...q, answer: newAlternative, isAnnulled: false } : q
+    );
+  }
+
+  // 3. Save updated questions and recalculate attempts
+  await updateExamQuestions(classId, exam.id!, updatedQuestions);
+  
+  const updatedExam: SimulatedExam = { ...exam, questions: updatedQuestions };
+  await recalculateAttemptsForExam(classId, exam.id!, updatedExam);
+
+  return docRef.id;
+};

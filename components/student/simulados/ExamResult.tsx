@@ -1004,38 +1004,92 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
                                     Confira as questões que foram anuladas ou que tiveram alteração de gabarito após análise dos recursos pela banca examinadora.
                                 </p>
 
-                                {exam.questions?.some(q => q.isAnnulled) || allExamResources.some(r => r.status === 'accepted' && r.type === 'alterar_gabarito') ? (
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                        {/* Questões Anuladas */}
-                                        {exam.questions?.filter(q => q.isAnnulled).map(q => (
-                                            <div key={`annulled-${q.index}`} className="bg-red-950/10 border border-red-900/30 rounded-xl p-4 flex items-start gap-3">
-                                                <div className="p-2 bg-red-950/30 rounded-lg text-red-500">
-                                                    <AlertTriangle size={18} />
-                                                </div>
-                                                <div>
-                                                    <h4 className="text-white font-black text-xs uppercase">Questão {q.index}</h4>
-                                                    <p className="text-[10px] text-red-400 font-bold uppercase mt-1">ANULADA</p>
-                                                    <p className="text-[10px] text-zinc-500 mt-2">Pontuação atribuída a todos os candidatos.</p>
-                                                </div>
-                                            </div>
-                                        ))}
+                                {allExamResources.some(r => r.status === 'accepted' || r.status === 'accepted_summary') || exam.questions?.some(q => q.isAnnulled) ? (
+                                    <div className="space-y-4">
+                                        {/* Retificações da Banca (Banca de Ofício ou Deferidas) */}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                            {allExamResources
+                                                .filter(r => r.status === 'accepted' || r.status === 'accepted_summary')
+                                                .map(r => {
+                                                    const isOfficial = r.userId === 'admin_correction' || (r as any).isOfficial;
+                                                    const questionInfo = exam.questions?.find(q => q.index === Number(r.questionNumber));
+                                                    
+                                                    return (
+                                                        <div 
+                                                            key={r.id} 
+                                                            className={`border rounded-xl p-5 space-y-3 transition-all ${
+                                                                isOfficial 
+                                                                    ? 'bg-zinc-900/50 border-brand-red/30 shadow-[0_0_15px_rgba(220,38,38,0.05)]' 
+                                                                    : 'bg-zinc-900/30 border-zinc-800'
+                                                            }`}
+                                                        >
+                                                            <div className="flex justify-between items-start gap-2 border-b border-zinc-800/40 pb-2.5">
+                                                                <div className="flex items-center gap-2">
+                                                                    <div className={`p-1.5 rounded-lg ${
+                                                                        r.type === 'anular_questao' 
+                                                                            ? 'bg-red-500/10 text-red-500' 
+                                                                            : 'bg-emerald-500/10 text-emerald-500'
+                                                                    }`}>
+                                                                        {r.type === 'anular_questao' ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+                                                                    </div>
+                                                                    <div>
+                                                                        <h4 className="text-white font-black text-xs uppercase">Questão {r.questionNumber}</h4>
+                                                                        <p className={`text-[9px] font-bold uppercase mt-0.5 ${
+                                                                            r.type === 'anular_questao' ? 'text-red-400' : 'text-emerald-400'
+                                                                        }`}>
+                                                                            {r.type === 'anular_questao' ? 'ANULADA' : 'GABARITO ALTERADO'}
+                                                                        </p>
+                                                                    </div>
+                                                                </div>
+                                                                
+                                                                <span className="px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-zinc-800 border border-zinc-700 text-zinc-400">
+                                                                    {isOfficial ? 'Banca' : 'Recurso Deferido'}
+                                                                </span>
+                                                            </div>
 
-                                        {/* Questões com Gabarito Alterado */}
-                                        {allExamResources.filter(r => r.status === 'accepted' && r.type === 'alterar_gabarito').map(r => {
-                                            const questionInfo = exam.questions?.find(q => q.index === Number(r.questionNumber));
-                                            return (
-                                                <div key={`changed-${r.id}`} className="bg-emerald-950/10 border border-emerald-900/30 rounded-xl p-4 flex items-start gap-3">
-                                                    <div className="p-2 bg-emerald-950/30 rounded-lg text-emerald-500">
-                                                        <CheckCircle2 size={18} />
+                                                            <div className="space-y-1">
+                                                                {r.type === 'alterar_gabarito' && (
+                                                                    <p className="text-[10px] text-zinc-300 uppercase font-semibold">
+                                                                        Novo gabarito correto: <strong className="text-emerald-400 uppercase">{questionInfo?.answer || r.newAlternative}</strong>
+                                                                    </p>
+                                                                )}
+                                                                {r.type === 'anular_questao' && (
+                                                                    <p className="text-[10px] text-zinc-400 uppercase font-semibold leading-relaxed">
+                                                                        Pontuação atribuída a todos os candidatos.
+                                                                    </p>
+                                                                )}
+                                                            </div>
+
+                                                            <div className="bg-zinc-950 p-3 rounded-lg border border-zinc-800/50 space-y-1.5">
+                                                                <span className="block text-[8px] font-black uppercase text-zinc-500 tracking-wider">
+                                                                    {isOfficial ? 'Fundamentação Oficial da Banca:' : 'Análise / Resposta da Banca:'}
+                                                                </span>
+                                                                <p className="text-[11px] text-zinc-300 font-medium leading-relaxed italic">
+                                                                    "{isOfficial ? r.justification : (r.adminResponse || 'Recurso deferido pela banca examinadora.')}"
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+
+                                            {/* Fallback para questões que foram marcadas como anuladas diretamente no exame, caso não haja um recurso registrado correspondente */}
+                                            {exam.questions?.filter(q => q.isAnnulled && !allExamResources.some(r => Number(r.questionNumber) === q.index && r.type === 'anular_questao' && (r.status === 'accepted' || r.status === 'accepted_summary'))).map(q => (
+                                                <div key={`fallback-annulled-${q.index}`} className="bg-zinc-900/30 border border-zinc-800 rounded-xl p-5 space-y-3">
+                                                    <div className="flex items-center gap-2 border-b border-zinc-800/40 pb-2.5">
+                                                        <div className="p-1.5 bg-red-500/10 text-red-500 rounded-lg">
+                                                            <AlertTriangle size={14} />
+                                                        </div>
+                                                        <div>
+                                                            <h4 className="text-white font-black text-xs uppercase">Questão {q.index}</h4>
+                                                            <p className="text-[9px] text-red-400 font-bold uppercase mt-0.5">ANULADA</p>
+                                                        </div>
                                                     </div>
-                                                    <div>
-                                                        <h4 className="text-white font-black text-xs uppercase">Questão {r.questionNumber}</h4>
-                                                        <p className="text-[10px] text-emerald-400 font-bold uppercase mt-1">GABARITO ALTERADO</p>
-                                                        <p className="text-[10px] text-zinc-400 mt-2">Nova resposta correta: <strong className="text-emerald-400 uppercase">{questionInfo?.answer || r.newAlternative}</strong></p>
-                                                    </div>
+                                                    <p className="text-[10px] text-zinc-400 font-semibold uppercase leading-normal">
+                                                        Pontuação atribuída a todos os candidatos de forma administrativa.
+                                                    </p>
                                                 </div>
-                                            );
-                                        })}
+                                            ))}
+                                        </div>
                                     </div>
                                 ) : (
                                     <div className="p-6 bg-zinc-950 rounded-lg border border-zinc-800/50 text-center text-zinc-500 text-xs font-bold uppercase tracking-wider">

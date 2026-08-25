@@ -16,7 +16,8 @@ import { recalculateAttemptsForExam } from '../../../services/simulatedAttemptSe
 import { 
   getResourcesForExam, 
   judgeResource, 
-  SimulatedResource 
+  SimulatedResource,
+  createAdminCorrection
 } from '../../../services/simulatedResourceService';
 import { Scale, MessageSquare, Check, X, ShieldAlert } from 'lucide-react';
 import { toast } from 'react-hot-toast';
@@ -50,6 +51,14 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
   const [judgmentResponse, setJudgmentResponse] = useState('');
   const [judgmentNewAlternative, setJudgmentNewAlternative] = useState('A');
   const [isSubmittingJudgment, setIsSubmittingJudgment] = useState(false);
+
+  // Admin Correction modal state
+  const [isAdminCorrectionModalOpen, setIsAdminCorrectionModalOpen] = useState(false);
+  const [adminCorrectionQuestionNumber, setAdminCorrectionQuestionNumber] = useState<number>(1);
+  const [adminCorrectionType, setAdminCorrectionType] = useState<'alterar_gabarito' | 'anular_questao'>('alterar_gabarito');
+  const [adminCorrectionJustification, setAdminCorrectionJustification] = useState('');
+  const [adminCorrectionNewAlternative, setAdminCorrectionNewAlternative] = useState('A');
+  const [isSubmittingAdminCorrection, setIsSubmittingAdminCorrection] = useState(false);
 
   const loadResources = useCallback(async () => {
     if (!exam.id) return;
@@ -682,13 +691,28 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                   Analise recursos interpostos pelos alunos para alteração de gabarito ou anulação de questões.
                 </p>
               </div>
-              <button 
-                onClick={loadResources}
-                disabled={loadingResources}
-                className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-850 text-white rounded-lg text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50"
-              >
-                {loadingResources ? 'Atualizando...' : 'Atualizar Lista'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => {
+                    setAdminCorrectionQuestionNumber(1);
+                    setAdminCorrectionType('alterar_gabarito');
+                    setAdminCorrectionJustification('');
+                    setAdminCorrectionNewAlternative('A');
+                    setIsAdminCorrectionModalOpen(true);
+                  }}
+                  className="px-4 py-2 bg-brand-red hover:bg-red-600 text-white rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-lg shadow-red-950/20"
+                >
+                  <Plus size={12} />
+                  Nova Retificação da Banca
+                </button>
+                <button 
+                  onClick={loadResources}
+                  disabled={loadingResources}
+                  className="px-4 py-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-850 text-white rounded-lg text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50"
+                >
+                  {loadingResources ? 'Atualizando...' : 'Atualizar Lista'}
+                </button>
+              </div>
             </div>
 
             {loadingResources ? (
@@ -707,64 +731,92 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
             ) : (
               <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-4">
                 <div className="grid grid-cols-1 gap-4">
-                  {resources.map((res) => (
-                    <div key={res.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4 relative overflow-hidden">
-                      {/* Badge Topo */}
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/50 pb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-zinc-950 border border-zinc-800 flex items-center justify-center overflow-hidden">
-                            {res.userPhoto ? (
-                              <img src={res.userPhoto} alt={res.userName} className="w-full h-full object-cover" />
-                            ) : (
-                              <span className="text-zinc-600 font-black text-xs uppercase">{res.userName.substring(0, 2)}</span>
-                            )}
+                  {resources.map((res) => {
+                    const isOfficial = res.userId === 'admin_correction' || (res as any).isOfficial;
+                    return (
+                      <div 
+                        key={res.id} 
+                        className={`border rounded-xl p-5 space-y-4 relative overflow-hidden transition-all ${
+                          isOfficial 
+                            ? 'bg-zinc-900/50 border-brand-red/30 shadow-[0_0_15px_rgba(220,38,38,0.05)]' 
+                            : 'bg-zinc-900 border-zinc-800'
+                        }`}
+                      >
+                        {/* Badge Topo */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/50 pb-3">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden border ${
+                              isOfficial 
+                                ? 'bg-brand-red/10 border-brand-red/20 text-brand-red' 
+                                : 'bg-zinc-950 border-zinc-800 text-zinc-600'
+                            }`}>
+                              {isOfficial ? (
+                                <ShieldAlert size={20} />
+                              ) : res.userPhoto ? (
+                                <img src={res.userPhoto} alt={res.userName} className="w-full h-full object-cover" />
+                              ) : (
+                                <span className="font-black text-xs uppercase">{res.userName.substring(0, 2)}</span>
+                              )}
+                            </div>
+                            <div>
+                              <span className="block text-xs font-black text-white uppercase tracking-tight">
+                                {res.userName} 
+                                {isOfficial && <span className="text-brand-red ml-1.5 text-[9px] font-black uppercase bg-brand-red/10 px-2 py-0.5 rounded border border-brand-red/10">Banca</span>}
+                              </span>
+                              <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{res.userEmail}</span>
+                            </div>
                           </div>
-                          <div>
-                            <span className="block text-xs font-black text-white uppercase tracking-tight">{res.userName}</span>
-                            <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-widest">{res.userEmail}</span>
+
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-wider border ${
+                              isOfficial ? 'bg-brand-red/10 text-brand-red border-brand-red/20' :
+                              res.status === 'pending' ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' :
+                              res.status === 'accepted' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
+                              res.status === 'accepted_summary' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' :
+                              'bg-red-500/10 text-red-500 border-red-500/20'
+                            }`}>
+                              {isOfficial ? 'Retificação de Ofício' :
+                               res.status === 'pending' ? 'Pendente' :
+                               res.status === 'accepted' ? 'Deferido' :
+                               res.status === 'accepted_summary' ? 'Deferido Sumariamente' : 'Indeferido'}
+                            </span>
+
+                            <span className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-wider border bg-zinc-950 text-zinc-400 border-zinc-800`}>
+                              Q{res.questionNumber} • {res.type === 'anular_questao' ? 'Anulação' : 'Alteração'}
+                            </span>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2">
-                          <span className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-wider border ${
-                            res.status === 'pending' ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' :
-                            res.status === 'accepted' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
-                            res.status === 'accepted_summary' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' :
-                            'bg-red-500/10 text-red-500 border-red-500/20'
-                          }`}>
-                            {res.status === 'pending' ? 'Pendente' :
-                             res.status === 'accepted' ? 'Deferido' :
-                             res.status === 'accepted_summary' ? 'Deferido Sumariamente' : 'Indeferido'}
+                        {/* Conteúdo */}
+                        <div className="space-y-2">
+                          <span className="block text-[9px] font-black uppercase text-zinc-500 tracking-wider">
+                            {isOfficial ? 'Justificativa / Fundamentação da Banca:' : 'Argumentação / Justificativa do Aluno:'}
                           </span>
-
-                          <span className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-wider border bg-zinc-950 text-zinc-400 border-zinc-800`}>
-                            Q{res.questionNumber} • {res.type === 'anular_questao' ? 'Anulação' : 'Alteração'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Conteúdo */}
-                      <div className="space-y-2">
-                        <span className="block text-[9px] font-black uppercase text-zinc-500 tracking-wider">Argumentação / Justificativa do Aluno:</span>
-                        <p className="text-xs text-zinc-300 font-medium leading-relaxed bg-zinc-950 p-3.5 rounded-lg border border-zinc-800/50">
-                          "{res.justification}"
-                        </p>
-                      </div>
-
-                      {/* Resposta do Admin (se houver) */}
-                      {res.adminResponse && (
-                        <div className="bg-zinc-950/40 border-l-2 border-brand-red p-4 rounded-r-lg space-y-1">
-                          <span className="block text-[8px] font-black uppercase text-zinc-500 tracking-wider">Resposta da Banca / Administrador:</span>
-                          <p className="text-xs text-zinc-400 font-semibold leading-relaxed">
-                            {res.adminResponse}
+                          <p className="text-xs text-zinc-300 font-medium leading-relaxed bg-zinc-950 p-3.5 rounded-lg border border-zinc-800/50">
+                            "{res.justification}"
                           </p>
-                          {res.newAlternative && (
-                            <p className="text-[10px] text-emerald-400 font-bold uppercase mt-1">
+                          {isOfficial && res.type === 'alterar_gabarito' && res.newAlternative && (
+                            <p className="text-[10px] text-emerald-400 font-bold uppercase mt-2 flex items-center gap-1.5">
+                              <CheckCircle size={12} />
                               Novo Gabarito Aplicado: Alternativa {res.newAlternative}
                             </p>
                           )}
                         </div>
-                      )}
+
+                        {/* Resposta do Admin (se houver e não for oficial) */}
+                        {!isOfficial && res.adminResponse && (
+                          <div className="bg-zinc-950/40 border-l-2 border-brand-red p-4 rounded-r-lg space-y-1">
+                            <span className="block text-[8px] font-black uppercase text-zinc-500 tracking-wider">Resposta da Banca / Administrador:</span>
+                            <p className="text-xs text-zinc-400 font-semibold leading-relaxed">
+                              {res.adminResponse}
+                            </p>
+                            {res.newAlternative && (
+                              <p className="text-[10px] text-emerald-400 font-bold uppercase mt-1">
+                                Novo Gabarito Aplicado: Alternativa {res.newAlternative}
+                              </p>
+                            )}
+                          </div>
+                        )}
 
                       {/* Ações para Recursos Pendentes */}
                       {res.status === 'pending' && (
@@ -785,7 +837,7 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                         </div>
                       )}
                     </div>
-                  ))}
+                  )})}
                 </div>
               </div>
             )}
@@ -924,6 +976,162 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                   className="px-5 py-2 bg-brand-red hover:bg-red-600 text-white rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2"
                 >
                   {isSubmittingJudgment ? 'Processando...' : 'Confirmar Decisão'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ADMIN CORRECTION MODAL (Nova Retificação da Banca) */}
+      {isAdminCorrectionModalOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/85 backdrop-blur-sm animate-in fade-in duration-300 p-4">
+          <div className="w-full max-w-xl bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-brand-red/20 rounded-xl flex items-center justify-center text-brand-red border border-brand-red/20">
+                  <ShieldAlert size={20} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white uppercase tracking-tighter">Retificação Oficial da Banca</h3>
+                  <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest mt-1">Aplique anulações ou alterações diretamente</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsAdminCorrectionModalOpen(false)}
+                className="p-1.5 hover:bg-zinc-800 text-zinc-500 hover:text-white rounded-lg transition-all"
+              >
+                <XIcon size={18} />
+              </button>
+            </div>
+
+            {/* Modal Content / Form */}
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              if (!adminCorrectionJustification.trim()) {
+                toast.error('Por favor, forneça uma justificativa para a retificação.');
+                return;
+              }
+              setIsSubmittingAdminCorrection(true);
+              try {
+                await createAdminCorrection(
+                  classId,
+                  exam,
+                  adminCorrectionQuestionNumber,
+                  adminCorrectionType,
+                  adminCorrectionJustification,
+                  adminCorrectionType === 'alterar_gabarito' ? adminCorrectionNewAlternative : undefined
+                );
+                toast.success('Retificação oficial aplicada com sucesso!');
+                setIsAdminCorrectionModalOpen(false);
+                
+                // Refresh parent lists if callbacks exist
+                if (onUpdate) onUpdate();
+                await loadResources();
+              } catch (error: any) {
+                console.error("Erro ao aplicar retificação:", error);
+                toast.error(error.message || 'Erro ao aplicar retificação.');
+              } finally {
+                setIsSubmittingAdminCorrection(false);
+              }
+            }} className="p-6 space-y-4">
+              
+              {/* Question Number */}
+              <div>
+                <label className="block text-[10px] font-black uppercase text-zinc-500 tracking-wider mb-2">Selecione a Questão</label>
+                <select 
+                  value={adminCorrectionQuestionNumber}
+                  onChange={(e) => setAdminCorrectionQuestionNumber(Number(e.target.value))}
+                  className="w-full bg-zinc-900 text-white text-xs font-bold p-3 rounded-lg border border-zinc-800 focus:border-brand-red focus:outline-none uppercase"
+                >
+                  {Array.from({ length: exam.questionCount || 0 }).map((_, idx) => (
+                    <option key={idx + 1} value={idx + 1}>Questão {idx + 1}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Correction Type */}
+              <div>
+                <label className="block text-[10px] font-black uppercase text-zinc-500 tracking-wider mb-2">Ação Administrativa</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAdminCorrectionType('alterar_gabarito')}
+                    className={`py-3 px-3 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all text-center ${
+                      adminCorrectionType === 'alterar_gabarito'
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 font-bold'
+                        : 'bg-zinc-900 text-zinc-500 border-zinc-800 hover:text-zinc-300'
+                    }`}
+                  >
+                    Alterar Gabarito
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdminCorrectionType('anular_questao')}
+                    className={`py-3 px-3 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all text-center ${
+                      adminCorrectionType === 'anular_questao'
+                        ? 'bg-red-500/10 text-red-400 border-red-500/30 font-bold'
+                        : 'bg-zinc-900 text-zinc-500 border-zinc-800 hover:text-zinc-300'
+                    }`}
+                  >
+                    Anular Questão
+                  </button>
+                </div>
+              </div>
+
+              {/* New alternative choice if alterar_gabarito */}
+              {adminCorrectionType === 'alterar_gabarito' && (
+                <div className="bg-emerald-950/15 border border-emerald-900/20 p-4 rounded-xl space-y-3 animate-in slide-in-from-top-2 duration-300">
+                  <div className="flex items-center gap-2 text-emerald-500">
+                    <ShieldAlert size={14} />
+                    <span className="text-[10px] font-black uppercase tracking-wider">Novo Gabarito Oficial</span>
+                  </div>
+                  <p className="text-[10px] text-zinc-400 uppercase leading-normal">
+                    Selecione qual será a nova alternativa correta para esta questão. O sistema recalculará a pontuação de todos os candidatos de forma automática.
+                  </p>
+                  <select
+                    value={adminCorrectionNewAlternative}
+                    onChange={(e) => setAdminCorrectionNewAlternative(e.target.value)}
+                    className="w-full bg-zinc-950 text-white text-xs font-bold p-3 rounded-lg border border-zinc-800 focus:border-brand-red focus:outline-none uppercase"
+                  >
+                    {['A', 'B', 'C', 'D', 'E'].map(opt => (
+                      <option key={opt} value={opt}>Alternativa {opt}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Justification Textarea */}
+              <div>
+                <label className="block text-[10px] font-black uppercase text-zinc-500 tracking-wider mb-2">Justificativa / Fundamentação Oficial da Banca</label>
+                <p className="text-[9px] text-zinc-500 uppercase tracking-wide mb-2 leading-normal">
+                  Esta justificativa ficará visível para os alunos na seção de retificações oficiais do simulado.
+                </p>
+                <textarea
+                  placeholder="Escreva detalhadamente a justificativa para a anulação ou alteração tomada diretamente pela banca..."
+                  value={adminCorrectionJustification}
+                  onChange={(e) => setAdminCorrectionJustification(e.target.value)}
+                  className="w-full min-h-[100px] bg-zinc-900 text-white text-xs font-semibold p-3 rounded-lg border border-zinc-800 focus:border-brand-red focus:outline-none resize-none font-medium"
+                  required
+                />
+              </div>
+
+              {/* Submit / Cancel Buttons */}
+              <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800/50">
+                <button
+                  type="button"
+                  onClick={() => setIsAdminCorrectionModalOpen(false)}
+                  className="px-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white rounded-lg text-[10px] font-black uppercase tracking-widest transition-all"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingAdminCorrection}
+                  className="px-5 py-2 bg-brand-red hover:bg-red-600 text-white rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2"
+                >
+                  {isSubmittingAdminCorrection ? 'Processando...' : 'Aplicar Retificação'}
                 </button>
               </div>
             </form>
