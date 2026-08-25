@@ -1,0 +1,11 @@
+{
+  "name": "Remix BAKCUP VERCEL - INSANUS EDUCACIONAL - V5",
+  "description": "Uma plataforma futurista de gestão de estudos para concursos, com foco em gamificação, ciclos de estudo inteligentes e gestão financeira de coprodutores.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

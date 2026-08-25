@@ -1,0 +1,191 @@
+{
+  "entities": {
+    "Feedback": {
+      "title": "Feedback",
+      "description": "Feedback submitted by a student about a product or teacher.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userProfile": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "email": { "type": "string" },
+            "photoUrl": { "type": "string" }
+          }
+        },
+        "productType": {
+          "type": "string",
+          "enum": ["plano", "curso_online", "turma_presencial", "simulado", "evento_ao_vivo"]
+        },
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "category": {
+          "type": "string",
+          "enum": ["idea", "compliment", "complaint", "teacher_evaluation"]
+        },
+        "message": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "teacherId": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "rating": { "type": "number" }
+      },
+      "required": ["userId", "productType", "productId", "category", "message", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "A digital product being sold on the platform.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "tictoId": { "type": "string" },
+        "type": { "type": "string" },
+        "accessDays": { "type": "number" },
+        "coverUrl": { "type": "string" },
+        "offers": { "type": "array", "items": { "$ref": "ProductOffer" } },
+        "coproduction": { "type": "array", "items": { "$ref": "ProductSplit" } }
+      }
+    },
+    "ProductOffer": {
+      "title": "ProductOffer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "isAffiliationEnabled": { "type": "boolean" },
+        "affiliateCommission": { "type": "number" }
+      }
+    },
+    "ProductSplit": {
+      "title": "ProductSplit",
+      "description": "Configuration for payment splitting between coproducers.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "coproducerId": { "type": "string" },
+        "coproducerName": { "type": "string" },
+        "coproducerEmail": { "type": "string" },
+        "percentage": { "type": "number" },
+        "pagarmeRecipientId": { "type": "string" }
+      },
+      "required": ["productId", "coproducerId", "percentage"]
+    },
+    "Coproducer": {
+      "title": "Coproducer",
+      "description": "A financial partner that receives a percentage of sales.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "document": { "type": "string" },
+        "pagarmeRecipientId": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "email"]
+    },
+    "AdminSalesReport": {
+      "title": "AdminSalesReport",
+      "description": "Detailed report of sales for admin analysis.",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "courseName": { "type": "string" },
+        "grossValue": { "type": "number" },
+        "gatewayFee": { "type": "number" },
+        "affiliatePart": { "type": "number" },
+        "coproductionPart": { "type": "number" },
+        "netCompanyValue": { "type": "number" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "CoproductionCommission": {
+      "title": "CoproductionCommission",
+      "description": "Commission record for a coproducer.",
+      "type": "object",
+      "properties": {
+        "coproducerId": { "type": "string" },
+        "orderId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "courseName": { "type": "string" },
+        "commissionValue": { "type": "number" },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "A global announcement or notice for students of a specific plan.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "planId": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "forcePopUp": { "type": "boolean" },
+        "createdAt": { "type": "number" },
+        "readBy": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["planId", "title", "content", "forcePopUp", "createdAt"]
+    },
+    "SimulatedResource": {
+      "title": "SimulatedResource",
+      "description": "An appeal resource submitted by a student regarding an exam question.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "classId": { "type": "string" },
+        "examId": { "type": "string" },
+        "examTitle": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userPhoto": { "type": "string" },
+        "questionNumber": { "type": "number" },
+        "type": { "type": "string", "enum": ["alterar_gabarito", "anular_questao"] },
+        "justification": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "rejected", "accepted_summary"] },
+        "adminResponse": { "type": "string" },
+        "newAlternative": { "type": "string" }
+      },
+      "required": ["classId", "examId", "userId", "questionNumber", "type", "justification", "status"]
+    }
+  },
+  "firestore": {
+    "feedbacks/{feedbackId}": {
+      "schema": "Feedback",
+      "description": "Collection of student feedbacks."
+    },
+    "ticto_products/{productId}": {
+      "schema": "Product",
+      "description": "Collection of products sold via Ticto or Mercado Pago."
+    },
+    "coproducers/{coproducerId}": {
+      "schema": "Coproducer",
+      "description": "Collection of coproducers for split payments."
+    },
+    "admin_sales_report/{reportId}": {
+      "schema": "AdminSalesReport",
+      "description": "Financial reports for the master account."
+    },
+    "coproduction_commissions/{commissionId}": {
+      "schema": "CoproductionCommission",
+      "description": "Individual commission records for partners."
+    },
+    "announcements/{announcementId}": {
+      "schema": "Announcement",
+      "description": "Collection of global announcements for plans."
+    },
+    "simulated_resources/{resourceId}": {
+      "schema": "SimulatedResource",
+      "description": "Collection of students resources/appeals for exam questions."
+    }
+  }
+}
