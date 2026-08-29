@@ -32,7 +32,9 @@ const normalizeText = (text: string | undefined | null) => {
 
 export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, events, gaps, teachers, subjects, topics, onAddException, onAddManualAppointment, onDeleteAppointment, onUpdateEventStatus }) => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [viewMode, setViewMode] = useState<'month' | 'week'>('month');
+  const [viewMode, setViewMode] = useState<'month' | 'week' | 'weekend'>(
+    classData?.isWeekendOnly ? 'weekend' : 'month'
+  );
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
   const [editingEvent, setEditingEvent] = useState<ClassScheduleEvent | null>(null);
   const [selectedSubstituteId, setSelectedSubstituteId] = useState('');
@@ -261,6 +263,331 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
     return module ? module.name : 'Módulo desconhecido';
   };
 
+  const getWeekendsOfMonth = (year: number, month: number) => {
+    const weekendsList: { number: number; saturday: string; sunday: string; satDay: number; sunDay: number }[] = [];
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    
+    let currentWeekend: any = null;
+    let weekendCount = 1;
+    
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(year, month, d);
+      const dayOfWeek = date.getDay(); // 0 = Sun, 6 = Sat
+      const dateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      
+      if (dayOfWeek === 6) { // Saturday
+        currentWeekend = {
+          number: weekendCount++,
+          saturday: dateString,
+          satDay: d,
+          sunday: '',
+          sunDay: 0
+        };
+        if (d + 1 <= daysInMonth) {
+          const sunDateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(d + 1).padStart(2, '0')}`;
+          currentWeekend.sunday = sunDateString;
+          currentWeekend.sunDay = d + 1;
+        } else {
+          const nextMonthDate = new Date(year, month, d + 1);
+          const sunDateString = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-${String(nextMonthDate.getDate()).padStart(2, '0')}`;
+          currentWeekend.sunday = sunDateString;
+          currentWeekend.sunDay = nextMonthDate.getDate();
+        }
+        weekendsList.push(currentWeekend);
+      } else if (dayOfWeek === 0) { // Sunday
+        const hasPaired = weekendsList.some(w => w.sunday === dateString);
+        if (!hasPaired) {
+          const prevMonthDate = new Date(year, month, d - 1);
+          const satDateString = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}-${String(prevMonthDate.getDate()).padStart(2, '0')}`;
+          
+          currentWeekend = {
+            number: weekendCount++,
+            saturday: satDateString,
+            satDay: prevMonthDate.getDate(),
+            sunday: dateString,
+            sunDay: d
+          };
+          weekendsList.push(currentWeekend);
+        }
+      }
+    }
+    
+    return weekendsList;
+  };
+
+  const weekends = useMemo(() => {
+    return getWeekendsOfMonth(currentDate.getFullYear(), currentDate.getMonth());
+  }, [currentDate]);
+
+  const renderDayContent = (dateString: string) => {
+    const dayEvents = events.filter(e => e.date === dateString);
+    const dayGaps = gaps.filter(g => g.date === dateString);
+    const holidayGap = dayGaps.find((g: ScheduleGap) => g.reason === 'HOLIDAY');
+
+    const timeline = holidayGap 
+      ? [] 
+      : [
+          ...dayEvents.map((e: ClassScheduleEvent) => ({ type: 'event' as const, data: e, startTime: e.startTime, shift: e.shift || classData?.shift || 'MORNING' })),
+          ...dayGaps.filter((g: ScheduleGap) => {
+            if (!g.startTime || !g.endTime) return false;
+            const hasOverlappingEvent = dayEvents.some(e => 
+              (e.startTime < g.endTime! && e.endTime > g.startTime!)
+            );
+            return !hasOverlappingEvent;
+          }).map((g: ScheduleGap) => ({ type: 'gap' as const, data: g, startTime: g.startTime!, shift: classData?.shift || 'MORNING' }))
+        ].sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+    const eventsByShift = timeline.reduce((acc, item) => {
+      const shiftName = item.shift === 'MORNING' ? 'Manhã' : item.shift === 'AFTERNOON' ? 'Tarde' : 'Noite';
+      if (!acc[shiftName]) acc[shiftName] = [];
+      acc[shiftName].push(item);
+      return acc;
+    }, {} as Record<string, any[]>);
+
+    const hasEvents = dayEvents.length > 0;
+
+    return (
+      <div className="space-y-2">
+        {holidayGap && (
+          <div className="h-full flex flex-col items-center justify-center py-4">
+            <div className="w-full p-3 rounded-lg border border-dashed border-zinc-700 bg-zinc-800/30 text-zinc-500 flex flex-col items-center justify-center text-center gap-2">
+              <CalendarIcon className="w-5 h-5 opacity-50" />
+              <span className="text-xs font-medium">{holidayGap.description}</span>
+            </div>
+          </div>
+        )}
+
+        {!holidayGap && Object.entries(eventsByShift).map(([shiftName, shiftItems], shiftIndex) => {
+          const shiftEvents = shiftItems.filter(i => i.type === 'event').map(i => i.data as ClassScheduleEvent);
+          const firstEvent = shiftEvents[0];
+          const meetingNumber = firstEvent?.meetingNumber;
+          const isOverflow = firstEvent?.isOverflow;
+          const isShiftCompleted = shiftEvents.length > 0 && shiftEvents.every(e => e.status === 'COMPLETED');
+
+          return (
+            <div key={shiftName} className="mb-4">
+              {shiftIndex > 0 && (
+                <div className="relative my-4 flex items-center">
+                  <div className="flex-grow border-t-2 border-zinc-700"></div>
+                  <span className="flex-shrink mx-2 text-[8px] font-extrabold text-zinc-500 uppercase tracking-wider">Novo Turno</span>
+                  <div className="flex-grow border-t-2 border-zinc-700"></div>
+                </div>
+              )}
+              
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs font-bold text-zinc-500 uppercase">{shiftName}</span>
+                <div className="flex items-center gap-2">
+                  {meetingNumber && (
+                    <span className={`
+                      text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wide
+                      ${isShiftCompleted 
+                        ? 'bg-emerald-600 text-white border-emerald-500' 
+                        : isOverflow 
+                          ? 'bg-red-600 text-white border-red-500' 
+                          : 'text-brand-red bg-brand-red/10 border-brand-red/20'}
+                    `}>
+                      {isOverflow 
+                        ? `Encontro #${meetingNumber} (EXTRA)` 
+                        : `Encontro #${meetingNumber}`}
+                    </span>
+                  )}
+                  {onUpdateEventStatus && (
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCompletionModalData({ shift: shiftName, events: shiftEvents });
+                        setSelectedEventIds(shiftEvents.filter(e => e.status === 'COMPLETED').map(e => e.id));
+                      }}
+                      className={`${isShiftCompleted ? 'text-emerald-500' : 'text-zinc-500'} hover:text-emerald-500 transition-colors`}
+                      title="Concluir Aulas"
+                    >
+                      <CheckCircle className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {shiftItems.map((item, index) => {
+                  if (item.type === 'event') {
+                    const event = item.data as ClassScheduleEvent;
+                    const subject = getSubject(event.subjectId);
+                    const isExpanded = expandedEventId === event.id;
+                    const borderColor = subject?.color || '#52525b';
+                    const isOverflow = event.isOverflow;
+
+                    return (
+                      <React.Fragment key={event.id}>
+                        <div 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedEventId(isExpanded ? null : event.id);
+                          }}
+                          className={`
+                            rounded-lg border-l-4 transition-all cursor-pointer overflow-hidden
+                            ${isExpanded ? 'bg-zinc-800 shadow-lg ring-1 ring-zinc-700 z-20 relative' : 'bg-zinc-800/50 hover:bg-zinc-800'}
+                            ${isOverflow ? 'border-red-500 bg-red-900/20' : ''}
+                            ${event.status === 'COMPLETED' ? 'border-emerald-500 bg-emerald-900/10 opacity-80' : ''}
+                          `}
+                          style={{ borderLeftColor: event.status === 'COMPLETED' ? '#10b981' : borderColor }}
+                        >
+                          <div className="p-2">
+                            <div className="flex justify-between items-center mb-1">
+                              <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
+                                {index + 1}º Tempo
+                              </div>
+                              <div className="flex gap-1">
+                                {event.status === 'COMPLETED' && (
+                                  <span className="text-[8px] font-bold text-emerald-500 bg-emerald-950/50 px-1 py-0.5 rounded border border-emerald-900/50 uppercase tracking-wider flex items-center gap-1">
+                                    <CheckCircle className="w-2 h-2" />
+                                    CONCLUÍDO
+                                  </span>
+                                )}
+                                {event.isSubstitute && (
+                                  <span className="text-[8px] font-bold text-black bg-yellow-500 px-1 py-0.5 rounded border border-yellow-600 uppercase tracking-wider flex items-center gap-1">
+                                    SUBSTITUIÇÃO
+                                  </span>
+                                )}
+                                {isOverflow && (
+                                  <span className="text-[8px] font-bold text-red-400 bg-red-950/50 px-1 py-0.5 rounded border border-red-900/50 uppercase tracking-wider flex items-center gap-1">
+                                    <AlertTriangle className="w-2 h-2" />
+                                    ⚠️ Além do limite da turma
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex justify-between items-start gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-zinc-400 mb-0.5">
+                                  <Clock className="w-3 h-3" />
+                                  <span>{event.startTime} - {event.endTime}</span>
+                                </div>
+                                <div className="font-bold text-xs text-zinc-200 truncate leading-tight">
+                                  {subject?.name || 'Disciplina Desconhecida'}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const newParams = new URLSearchParams(searchParams);
+                                    newParams.set('tab', 'PLANNING');
+                                    if (event.subjectId) newParams.set('subjectId', event.subjectId);
+                                    if (event.topicId) newParams.set('topicId', event.topicId);
+                                    if (event.moduleId) newParams.set('moduleId', event.moduleId);
+                                    setSearchParams(newParams);
+                                  }}
+                                  className="p-1 text-zinc-500 hover:text-brand-red transition-colors"
+                                  title="Ver materiais no Planejamento"
+                                >
+                                  <BookOpen className="w-3 h-3" />
+                                </button>
+                                <div className="text-zinc-500">
+                                  {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="px-2 pb-2 pt-0 space-y-2 animate-in slide-in-from-top-1 duration-200">
+                              <div className="h-px bg-zinc-700/50 w-full my-1" />
+                              
+                              <div>
+                                <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Módulo</span>
+                                <p className="text-[11px] text-zinc-300 leading-tight">
+                                  {getModuleName(event.topicId, event.moduleId)}
+                                </p>
+                              </div>
+
+                              <div>
+                                <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Professor</span>
+                                <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                                  <User className="w-3 h-3 text-zinc-500" />
+                                  <span>{getTeacherName(event.teacherId)}</span>
+                                </div>
+                              </div>
+
+                              {!event.teacherId && (
+                                <div className="flex items-center gap-1.5 text-[10px] text-yellow-500 bg-yellow-900/20 p-1.5 rounded border border-yellow-700/30 mt-1">
+                                  <AlertTriangle className="w-3 h-3" />
+                                  <span>Professor não alocado</span>
+                                </div>
+                              )}
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingEvent(event);
+                                }}
+                                className="w-full flex items-center justify-center gap-1.5 mt-2 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 text-[10px] font-bold uppercase rounded transition-colors"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                                Gerenciar Encontro
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {index === 0 && shiftItems.length > 1 && (
+                          <div className="flex items-center gap-2 my-2 opacity-50">
+                            <div className="h-px bg-zinc-700 border-t border-dashed border-zinc-600 flex-1"></div>
+                            <span className="text-[9px] text-zinc-500 font-medium whitespace-nowrap">Intervalo (15 min)</span>
+                            <div className="h-px bg-zinc-700 border-t border-dashed border-zinc-600 flex-1"></div>
+                          </div>
+                        )}
+                      </React.Fragment>
+                    );
+                  } else {
+                    const gap = item.data as ScheduleGap;
+                    return (
+                      <React.Fragment key={`gap-${index}`}>
+                        <div className="rounded-lg border border-dashed border-zinc-700 bg-zinc-800/30 p-2">
+                          <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider mb-1">
+                            {index + 1}º Tempo
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-zinc-500">
+                              <Clock className="w-3 h-3" />
+                              <span>{gap.startTime} - {gap.endTime}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+                              <AlertTriangle className="w-3 h-3" />
+                              <span className="leading-tight">{gap.description}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {index === 0 && shiftItems.length > 1 && (
+                          <div className="flex items-center gap-2 my-2 opacity-50">
+                            <div className="h-px bg-zinc-700 border-t border-dashed border-zinc-600 flex-1"></div>
+                            <span className="text-[9px] text-zinc-500 font-medium whitespace-nowrap">Intervalo (15 min)</span>
+                            <div className="h-px bg-zinc-700 border-t border-dashed border-zinc-600 flex-1"></div>
+                          </div>
+                        )}
+                      </React.Fragment>
+                    );
+                  }
+                })}
+              </div>
+            </div>
+          );
+        })}
+        
+        <button
+          onClick={() => setSelectedDateForManual(dateString)}
+          className={`w-full mt-2 flex items-center justify-center gap-1.5 py-2 hover:bg-zinc-700/80 hover:text-white text-[10px] font-bold uppercase tracking-wider rounded border border-dashed transition-colors ${
+            hasEvents 
+              ? 'bg-zinc-800/20 text-zinc-500 border-zinc-800 hover:border-zinc-700' 
+              : 'bg-zinc-800/50 text-zinc-400 border-zinc-700'
+          }`}
+        >
+          + Adicionar Agendamento
+        </button>
+      </div>
+    );
+  };
+
   const handleSaveCompletion = async () => {
     if (!completionModalData || !onUpdateEventStatus) return;
     setIsUpdatingStatus(true);
@@ -371,7 +698,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
             <div className="flex items-center gap-1 bg-zinc-800 rounded-lg p-1 border border-zinc-700">
               <button
                 onClick={() => {
-                  if (viewMode === 'week') {
+                  if (viewMode !== 'month') {
                     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
                     setViewMode('month');
                   }
@@ -383,7 +710,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
               </button>
               <button
                 onClick={() => {
-                  if (viewMode === 'month') {
+                  if (viewMode !== 'week') {
                     const today = new Date();
                     if (currentDate.getMonth() === today.getMonth() && currentDate.getFullYear() === today.getFullYear()) {
                       setCurrentDate(today);
@@ -396,6 +723,18 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
               >
                 <List className="w-4 h-4" />
               </button>
+              {classData?.isWeekendOnly && (
+                <button
+                  onClick={() => {
+                    setViewMode('weekend');
+                  }}
+                  className={`p-1.5 rounded-md transition-all flex items-center gap-1.5 ${viewMode === 'weekend' ? 'bg-zinc-700 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+                  title="Apenas Finais de Semana"
+                >
+                  <CalendarIcon className="w-3.5 h-3.5 text-brand-red" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">Finais de Semana</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -422,324 +761,106 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
         </div>
 
         {/* Weekday Headers */}
-        <div className="grid grid-cols-7 border-b border-zinc-800 bg-zinc-950">
-          {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => (
-            <div key={day} className="py-3 text-center text-xs font-bold text-zinc-500 uppercase tracking-wider">
-              {day}
-            </div>
-          ))}
-        </div>
-
-        {/* Calendar Grid */}
-        <div className={`grid grid-cols-7 bg-zinc-900 ${viewMode === 'month' ? 'auto-rows-fr' : 'h-[600px]'}`}>
-          {calendarCells.map((cell: any) => {
-            if (cell.type === 'empty') {
-              return <div key={cell.key} className="min-h-[140px] border-b border-r border-zinc-800/50 bg-zinc-950/30"></div>;
-            }
-
-            const isToday = new Date().toISOString().split('T')[0] === cell.dateString;
-            const dayGaps = cell.gaps || [];
-            const dayEvents = cell.events || [];
-            const holidayGap = dayGaps.find((g: ScheduleGap) => g.reason === 'HOLIDAY');
-
-            // Timeline construction
-            const timeline = holidayGap 
-              ? [] 
-              : [
-                  ...dayEvents.map((e: ClassScheduleEvent) => ({ type: 'event' as const, data: e, startTime: e.startTime, shift: e.shift || classData?.shift || 'MORNING' })),
-                  ...dayGaps.filter((g: ScheduleGap) => {
-                    if (!g.startTime || !g.endTime) return false;
-                    // Oculta o gap se houver um evento que se sobreponha a ele (mesmo horário ou dentro do intervalo)
-                    const hasOverlappingEvent = dayEvents.some(e => 
-                      (e.startTime < g.endTime! && e.endTime > g.startTime!)
-                    );
-                    return !hasOverlappingEvent;
-                  }).map((g: ScheduleGap) => ({ type: 'gap' as const, data: g, startTime: g.startTime!, shift: classData?.shift || 'MORNING' }))
-                ].sort((a, b) => a.startTime.localeCompare(b.startTime));
-
-            const eventsByShift = timeline.reduce((acc, item) => {
-              const shiftName = item.shift === 'MORNING' ? 'Manhã' : item.shift === 'AFTERNOON' ? 'Tarde' : 'Noite';
-              if (!acc[shiftName]) acc[shiftName] = [];
-              acc[shiftName].push(item);
-              return acc;
-            }, {} as Record<string, any[]>);
-
-            const hasEvents = dayEvents.length > 0;
-
-            return (
-              <div 
-                key={cell.key} 
-                className={`
-                  p-2 border-b border-r border-zinc-800 transition-colors relative group overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent
-                  ${viewMode === 'month' ? 'min-h-[140px]' : 'h-full'}
-                  ${isToday ? 'bg-brand-red/5' : 'hover:bg-zinc-800/30'}
-                `}
-              >
-                <div className="flex justify-between items-start mb-2 sticky top-0 bg-inherit z-10 pb-1">
-                  <span 
-                    className={`
-                      text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full
-                      ${isToday ? 'bg-brand-red text-white' : 'text-zinc-400 group-hover:text-zinc-200'}
-                    `}
-                  >
-                    {cell.day}
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  {/* Holiday Display */}
-                  {holidayGap && (
-                    <div className="h-full flex flex-col items-center justify-center py-4">
-                      <div className="w-full p-3 rounded-lg border border-dashed border-zinc-700 bg-zinc-800/30 text-zinc-500 flex flex-col items-center justify-center text-center gap-2">
-                        <CalendarIcon className="w-5 h-5 opacity-50" />
-                        <span className="text-xs font-medium">{holidayGap.description}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Timeline Display (Events + Gaps) grouped by shift */}
-                  {!holidayGap && Object.entries(eventsByShift).map(([shiftName, shiftItems], shiftIndex) => {
-                    const shiftEvents = shiftItems.filter(i => i.type === 'event').map(i => i.data as ClassScheduleEvent);
-                    const firstEvent = shiftEvents[0];
-                    const meetingNumber = firstEvent?.meetingNumber;
-                    const isOverflow = firstEvent?.isOverflow;
-                    const isShiftCompleted = shiftEvents.length > 0 && shiftEvents.every(e => e.status === 'COMPLETED');
-
-                    return (
-                      <div key={shiftName} className="mb-4">
-                        {/* Divisor Visual para múltiplos turnos no mesmo dia */}
-                        {shiftIndex > 0 && (
-                          <div className="relative my-4 flex items-center">
-                            <div className="flex-grow border-t-2 border-zinc-700"></div>
-                            <span className="flex-shrink mx-2 text-[8px] font-extrabold text-zinc-500 uppercase tracking-wider">Novo Turno</span>
-                            <div className="flex-grow border-t-2 border-zinc-700"></div>
-                          </div>
-                        )}
-                        
-                        {/* Cabeçalho do Turno com o Número do Encontro */}
-                        <div className="flex justify-between items-center mb-2">
-                          <span className="text-xs font-bold text-zinc-500 uppercase">{shiftName}</span>
-                          <div className="flex items-center gap-2">
-                            {meetingNumber && (
-                              <span className={`
-                                text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wide
-                                ${isShiftCompleted 
-                                  ? 'bg-emerald-600 text-white border-emerald-500' 
-                                  : isOverflow 
-                                    ? 'bg-red-600 text-white border-red-500' 
-                                    : 'text-brand-red bg-brand-red/10 border-brand-red/20'}
-                              `}>
-                                {isOverflow 
-                                  ? `Encontro #${meetingNumber} (EXTRA)` 
-                                  : `Encontro #${meetingNumber}`}
-                              </span>
-                            )}
-                            {onUpdateEventStatus && (
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setCompletionModalData({ shift: shiftName, events: shiftEvents });
-                                  setSelectedEventIds(shiftEvents.filter(e => e.status === 'COMPLETED').map(e => e.id));
-                                }}
-                                className={`${isShiftCompleted ? 'text-emerald-500' : 'text-zinc-500'} hover:text-emerald-500 transition-colors`}
-                                title="Concluir Aulas"
-                              >
-                                <CheckCircle className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Renderiza os eventos deste turno */}
-                        <div className="space-y-2">
-                          {shiftItems.map((item, index) => {
-                            if (item.type === 'event') {
-                              const event = item.data as ClassScheduleEvent;
-                              const subject = getSubject(event.subjectId);
-                              const isExpanded = expandedEventId === event.id;
-                              const borderColor = subject?.color || '#52525b';
-
-                              const isOverflow = event.isOverflow;
-
-                              return (
-                                <React.Fragment key={event.id}>
-                                  <div 
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setExpandedEventId(isExpanded ? null : event.id);
-                                    }}
-                                    className={`
-                                      rounded-lg border-l-4 transition-all cursor-pointer overflow-hidden
-                                      ${isExpanded ? 'bg-zinc-800 shadow-lg ring-1 ring-zinc-700 z-20 relative' : 'bg-zinc-800/50 hover:bg-zinc-800'}
-                                      ${isOverflow ? 'border-red-500 bg-red-900/20' : ''}
-                                      ${event.status === 'COMPLETED' ? 'border-emerald-500 bg-emerald-900/10 opacity-80' : ''}
-                                    `}
-                                    style={{ borderLeftColor: event.status === 'COMPLETED' ? '#10b981' : borderColor }}
-                                  >
-                                    {/* Card Header */}
-                                    <div className="p-2">
-                                      <div className="flex justify-between items-center mb-1">
-                                        <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
-                                          {index + 1}º Tempo
-                                        </div>
-                                        <div className="flex gap-1">
-                                          {event.status === 'COMPLETED' && (
-                                            <span className="text-[8px] font-bold text-emerald-500 bg-emerald-950/50 px-1 py-0.5 rounded border border-emerald-900/50 uppercase tracking-wider flex items-center gap-1">
-                                              <CheckCircle className="w-2 h-2" />
-                                              CONCLUÍDO
-                                            </span>
-                                          )}
-                                          {event.isSubstitute && (
-                                            <span className="text-[8px] font-bold text-black bg-yellow-500 px-1 py-0.5 rounded border border-yellow-600 uppercase tracking-wider flex items-center gap-1">
-                                              SUBSTITUIÇÃO
-                                            </span>
-                                          )}
-                                          {isOverflow && (
-                                            <span className="text-[8px] font-bold text-red-400 bg-red-950/50 px-1 py-0.5 rounded border border-red-900/50 uppercase tracking-wider flex items-center gap-1">
-                                              <AlertTriangle className="w-2 h-2" />
-                                              ⚠️ Além do limite da turma
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-                                      <div className="flex justify-between items-start gap-2">
-                                        <div className="flex-1 min-w-0">
-                                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-zinc-400 mb-0.5">
-                                            <Clock className="w-3 h-3" />
-                                            <span>{event.startTime} - {event.endTime}</span>
-                                          </div>
-                                          <div className="font-bold text-xs text-zinc-200 truncate leading-tight">
-                                            {subject?.name || 'Disciplina Desconhecida'}
-                                          </div>
-                                        </div>
-                                        <div className="flex items-center gap-1">
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              const newParams = new URLSearchParams(searchParams);
-                                              newParams.set('tab', 'PLANNING');
-                                              if (event.subjectId) newParams.set('subjectId', event.subjectId);
-                                              if (event.topicId) newParams.set('topicId', event.topicId);
-                                              if (event.moduleId) newParams.set('moduleId', event.moduleId);
-                                              setSearchParams(newParams);
-                                            }}
-                                            className="p-1 text-zinc-500 hover:text-brand-red transition-colors"
-                                            title="Ver materiais no Planejamento"
-                                          >
-                                            <BookOpen className="w-3 h-3" />
-                                          </button>
-                                          <div className="text-zinc-500">
-                                            {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    {/* Card Details */}
-                                    {isExpanded && (
-                                      <div className="px-2 pb-2 pt-0 space-y-2 animate-in slide-in-from-top-1 duration-200">
-                                        <div className="h-px bg-zinc-700/50 w-full my-1" />
-                                        
-                                        <div>
-                                          <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Módulo</span>
-                                          <p className="text-[11px] text-zinc-300 leading-tight">
-                                            {getModuleName(event.topicId, event.moduleId)}
-                                          </p>
-                                        </div>
-
-                                        <div>
-                                          <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Professor</span>
-                                          <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
-                                            <User className="w-3 h-3 text-zinc-500" />
-                                            <span>{getTeacherName(event.teacherId)}</span>
-                                          </div>
-                                        </div>
-
-                                        {!event.teacherId && (
-                                          <div className="flex items-center gap-1.5 text-[10px] text-yellow-500 bg-yellow-900/20 p-1.5 rounded border border-yellow-700/30 mt-1">
-                                            <AlertTriangle className="w-3 h-3" />
-                                            <span>Professor não alocado</span>
-                                          </div>
-                                        )}
-
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setEditingEvent(event);
-                                          }}
-                                          className="w-full flex items-center justify-center gap-1.5 mt-2 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 text-[10px] font-bold uppercase rounded transition-colors"
-                                        >
-                                          <Edit2 className="w-3 h-3" />
-                                          Gerenciar Encontro
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  {/* Interval Divider */}
-                                  {index === 0 && shiftItems.length > 1 && (
-                                    <div className="flex items-center gap-2 my-2 opacity-50">
-                                      <div className="h-px bg-zinc-700 border-t border-dashed border-zinc-600 flex-1"></div>
-                                      <span className="text-[9px] text-zinc-500 font-medium whitespace-nowrap">Intervalo (15 min)</span>
-                                      <div className="h-px bg-zinc-700 border-t border-dashed border-zinc-600 flex-1"></div>
-                                    </div>
-                                  )}
-                                </React.Fragment>
-                              );
-                            } else {
-                              // Gap Rendering
-                              const gap = item.data as ScheduleGap;
-                              return (
-                                <React.Fragment key={`gap-${index}`}>
-                                  <div className="rounded-lg border border-dashed border-zinc-700 bg-zinc-800/30 p-2">
-                                    <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider mb-1">
-                                      {index + 1}º Tempo
-                                    </div>
-                                    <div className="flex flex-col gap-1">
-                                      <div className="flex items-center gap-1.5 text-[10px] font-bold text-zinc-500">
-                                        <Clock className="w-3 h-3" />
-                                        <span>{gap.startTime} - {gap.endTime}</span>
-                                      </div>
-                                      <div className="flex items-center gap-1.5 text-[10px] text-zinc-400">
-                                        <AlertTriangle className="w-3 h-3" />
-                                        <span className="leading-tight">{gap.description}</span>
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  {/* Interval Divider */}
-                                  {index === 0 && shiftItems.length > 1 && (
-                                    <div className="flex items-center gap-2 my-2 opacity-50">
-                                      <div className="h-px bg-zinc-700 border-t border-dashed border-zinc-600 flex-1"></div>
-                                      <span className="text-[9px] text-zinc-500 font-medium whitespace-nowrap">Intervalo (15 min)</span>
-                                      <div className="h-px bg-zinc-700 border-t border-dashed border-zinc-600 flex-1"></div>
-                                    </div>
-                                  )}
-                                </React.Fragment>
-                              );
-                            }
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  
-                  {/* Add Manual Appointment Button */}
-                  <button
-                    onClick={() => setSelectedDateForManual(cell.dateString)}
-                    className={`w-full mt-2 flex items-center justify-center gap-1.5 py-2 hover:bg-zinc-700/80 hover:text-white text-[10px] font-bold uppercase tracking-wider rounded border border-dashed transition-colors ${
-                      hasEvents 
-                        ? 'bg-zinc-800/20 text-zinc-500 border-zinc-800 hover:border-zinc-700' 
-                        : 'bg-zinc-800/50 text-zinc-400 border-zinc-700'
-                    }`}
-                  >
-                    + Adicionar Agendamento
-                  </button>
-                </div>
+        {viewMode !== 'weekend' && (
+          <div className="grid grid-cols-7 border-b border-zinc-800 bg-zinc-950">
+            {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => (
+              <div key={day} className="py-3 text-center text-xs font-bold text-zinc-500 uppercase tracking-wider">
+                {day}
               </div>
-            );
-          })}
-        </div>
+            ))}
+          </div>
+        )}
+
+        {/* Calendar Grid / Weekend Grid */}
+        {viewMode === 'weekend' ? (
+          <div className="p-4 bg-zinc-950/20 overflow-x-auto">
+            <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-${weekends.length} gap-4 min-w-[800px] lg:min-w-0`}>
+              {weekends.map((wk) => {
+                const satDate = new Date(wk.saturday + 'T00:00:00');
+                const sunDate = new Date(wk.sunday + 'T00:00:00');
+                const isSatToday = new Date().toISOString().split('T')[0] === wk.saturday;
+                const isSunToday = new Date().toISOString().split('T')[0] === wk.sunday;
+
+                const formatCardDate = (date: Date) => {
+                  return date.toLocaleDateString('pt-BR', { day: 'numeric', month: 'numeric' });
+                };
+
+                return (
+                  <div key={`weekend-${wk.number}`} className="flex flex-col bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden p-3 space-y-4">
+                    {/* Weekend Header */}
+                    <div className="text-center py-2 bg-brand-red/10 border-b border-brand-red/20 rounded-lg">
+                      <span className="text-xs font-extrabold text-brand-red uppercase tracking-wider">
+                        FINAL DE SEMANA {wk.number}
+                      </span>
+                    </div>
+
+                    {/* Saturday Card */}
+                    <div className={`p-3 rounded-lg border ${isSatToday ? 'bg-brand-red/5 border-brand-red/30' : 'bg-zinc-900/40 border-zinc-800'}`}>
+                      <div className="flex justify-between items-center mb-3">
+                        <span className="text-xs font-bold text-white uppercase flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                          SÁBADO
+                        </span>
+                        <span className="text-xs font-semibold text-zinc-400">
+                          {formatCardDate(satDate)}
+                        </span>
+                      </div>
+                      {renderDayContent(wk.saturday)}
+                    </div>
+
+                    {/* Sunday Card */}
+                    <div className={`p-3 rounded-lg border ${isSunToday ? 'bg-brand-red/5 border-brand-red/30' : 'bg-zinc-900/40 border-zinc-800'}`}>
+                      <div className="flex justify-between items-center mb-3">
+                        <span className="text-xs font-bold text-white uppercase flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                          DOMINGO
+                        </span>
+                        <span className="text-xs font-semibold text-zinc-400">
+                          {formatCardDate(sunDate)}
+                        </span>
+                      </div>
+                      {renderDayContent(wk.sunday)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className={`grid grid-cols-7 bg-zinc-900 ${viewMode === 'month' ? 'auto-rows-fr' : 'h-[600px]'}`}>
+            {calendarCells.map((cell: any) => {
+              if (cell.type === 'empty') {
+                return <div key={cell.key} className="min-h-[140px] border-b border-r border-zinc-800/50 bg-zinc-950/30"></div>;
+              }
+
+              const isToday = new Date().toISOString().split('T')[0] === cell.dateString;
+
+              return (
+                <div 
+                  key={cell.key} 
+                  className={`
+                    p-2 border-b border-r border-zinc-800 transition-colors relative group overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent
+                    ${viewMode === 'month' ? 'min-h-[140px]' : 'h-full'}
+                    ${isToday ? 'bg-brand-red/5' : 'hover:bg-zinc-800/30'}
+                  `}
+                >
+                  <div className="flex justify-between items-start mb-2 sticky top-0 bg-inherit z-10 pb-1">
+                    <span 
+                      className={`
+                        text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full
+                        ${isToday ? 'bg-brand-red text-white' : 'text-zinc-400 group-hover:text-zinc-200'}
+                      `}
+                    >
+                      {cell.day}
+                    </span>
+                  </div>
+
+                  {renderDayContent(cell.dateString)}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Edit Modal */}

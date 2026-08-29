@@ -40,7 +40,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
   const [loading, setLoading] = useState(true);
 
   // View State
-  const [viewMode, setViewMode] = useState<'month' | 'week'>('week');
+  const [viewMode, setViewMode] = useState<'month' | 'week' | 'weekend'>('week');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
 
@@ -62,6 +62,11 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
         setTeachers(teachersData);
         setHolidays(holidaysData);
         setClassData(fetchedClassData);
+
+        // Se for turma de final de semana, o padrão é a visualização de finais de semana
+        if (fetchedClassData?.isWeekendOnly) {
+          setViewMode('weekend');
+        }
       } catch (error) {
         console.error("Error loading schedule data:", error);
       } finally {
@@ -71,6 +76,33 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
 
     loadData();
   }, [classId]);
+
+  const getWeekendsOfMonth = (year: number, month: number) => {
+    const weekendsList: { number: number; saturday: string; sunday: string }[] = [];
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+
+    let weekendCount = 1;
+    for (let d = new Date(firstDay); d <= lastDay; d.setDate(d.getDate() + 1)) {
+      if (d.getDay() === 6) { // Saturday
+        const satStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const sun = new Date(d);
+        sun.setDate(sun.getDate() + 1);
+        const sunStr = `${sun.getFullYear()}-${String(sun.getMonth() + 1).padStart(2, '0')}-${String(sun.getDate()).padStart(2, '0')}`;
+        
+        weekendsList.push({
+          number: weekendCount++,
+          saturday: satStr,
+          sunday: sunStr
+        });
+      }
+    }
+    return weekendsList;
+  };
+
+  const weekends = useMemo(() => {
+    return getWeekendsOfMonth(currentDate.getFullYear(), currentDate.getMonth());
+  }, [currentDate]);
 
   // Helpers
   const getSubject = (id: string) => subjects.find(s => s.id === id);
@@ -103,7 +135,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
   };
 
   const handlePrev = () => {
-    if (viewMode === 'month') {
+    if (viewMode === 'month' || viewMode === 'weekend') {
       setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
     } else {
       const newDate = new Date(currentDate);
@@ -113,7 +145,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
   };
 
   const handleNext = () => {
-    if (viewMode === 'month') {
+    if (viewMode === 'month' || viewMode === 'weekend') {
       setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
     } else {
       const newDate = new Date(currentDate);
@@ -123,7 +155,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
   };
 
   const formatHeaderDate = (date: Date) => {
-    if (viewMode === 'month') {
+    if (viewMode === 'month' || viewMode === 'weekend') {
       return date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
     } else {
       const start = getStartOfWeek(date);
@@ -193,6 +225,194 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
     return cells;
   }, [currentDate, events, holidays, viewMode]);
 
+  const renderDayContent = (dateString: string) => {
+    const dayEvents = events.filter(e => e.date === dateString)
+      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+    const isHoliday = holidays.includes(dateString);
+
+    return (
+      <div className="space-y-2">
+        {/* Holiday Display */}
+        {isHoliday && (
+          <div className="h-full flex flex-col items-center justify-center py-4">
+            <div className="w-full p-3 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/30 text-zinc-500 flex flex-col items-center justify-center text-center gap-2">
+              <CalendarIcon className="w-5 h-5 opacity-50" />
+              <span className="text-xs font-medium">Feriado</span>
+            </div>
+          </div>
+        )}
+
+        {/* Events Display */}
+        {!isHoliday && (() => {
+          const eventsByShift = dayEvents.reduce((acc, event) => {
+            const shift = event.shift || classData?.shift || 'MORNING';
+            const shiftName = shift === 'MORNING' ? 'Manhã' : shift === 'AFTERNOON' ? 'Tarde' : 'Noite';
+            if (!acc[shiftName]) acc[shiftName] = [];
+            acc[shiftName].push(event);
+            return acc;
+          }, {} as Record<string, ClassScheduleEvent[]>);
+
+          const activeShifts = ['Manhã', 'Tarde', 'Noite'].filter(s => eventsByShift[s]?.length > 0);
+
+          if (activeShifts.length === 0) {
+            return (
+              <div className="text-center py-4 text-xs text-zinc-600 border border-dashed border-zinc-800 rounded-lg">
+                Nenhuma aula agendada
+              </div>
+            );
+          }
+
+          return activeShifts.map((shiftName, shiftIndex) => {
+            const shiftEvents = eventsByShift[shiftName];
+
+            return (
+              <div key={shiftName} className={shiftIndex > 0 ? "mt-4" : ""}>
+                {/* Visual Divider between shifts */}
+                {shiftIndex > 0 && (
+                  <div className="relative my-4 flex items-center">
+                    <div className="flex-grow border-t border-zinc-800"></div>
+                    <span className="flex-shrink mx-2 text-[8px] font-extrabold text-zinc-500 uppercase tracking-wider">Novo Turno</span>
+                    <div className="flex-grow border-t border-zinc-800"></div>
+                  </div>
+                )}
+
+                {/* Shift Header */}
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">{shiftName}</span>
+                </div>
+
+                <div className="space-y-2">
+                  {shiftEvents.map((event: ClassScheduleEvent, index: number) => {
+                    const subject = getSubject(event.subjectId);
+                    const isExpanded = expandedEventId === event.id;
+                    const borderColor = subject?.color || '#52525b';
+                    const isOverflow = event.isOverflow;
+
+                    return (
+                      <React.Fragment key={event.id}>
+                        <div 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedEventId(isExpanded ? null : event.id);
+                          }}
+                          className={`
+                            rounded-lg border-l-4 transition-all cursor-pointer overflow-hidden
+                            ${isExpanded ? 'bg-zinc-900 shadow-lg ring-1 ring-zinc-800 z-20 relative' : 'bg-zinc-900/50 hover:bg-zinc-900'}
+                            ${isOverflow ? 'border-red-500 bg-red-900/20' : ''}
+                            ${event.status === 'COMPLETED' ? 'border-emerald-500 bg-emerald-900/10 opacity-80' : ''}
+                          `}
+                          style={{ borderLeftColor: event.status === 'COMPLETED' ? '#10b981' : borderColor }}
+                        >
+                          {/* Card Header */}
+                          <div className="p-2">
+                            <div className="flex justify-between items-center mb-1 flex-wrap gap-1">
+                              <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
+                                {index + 1}º Tempo
+                              </div>
+                              <div className="flex gap-1 flex-wrap justify-end">
+                                {event.status === 'COMPLETED' && (
+                                  <span className="text-[8px] font-bold text-emerald-500 bg-emerald-950/50 px-1 py-0.5 rounded border border-emerald-900/50 uppercase tracking-wider flex items-center gap-1" title="Concluído">
+                                    <CheckCircle className="w-2 h-2 shrink-0" />
+                                    <span className="hidden lg:inline">CONCLUÍDO</span>
+                                  </span>
+                                )}
+                                {event.isSubstitute && (
+                                  <span className="text-[8px] font-bold text-black bg-yellow-500 px-1 py-0.5 rounded border border-yellow-600 uppercase tracking-wider flex items-center gap-1" title="Substituição">
+                                    SUBST.
+                                  </span>
+                                )}
+                                {isOverflow && (
+                                  <span className="text-[8px] font-bold text-red-400 bg-red-950/50 px-1 py-0.5 rounded border border-red-900/50 uppercase tracking-wider flex items-center gap-1" title="Aula Extra">
+                                    <AlertTriangle className="w-2 h-2 shrink-0" />
+                                    <span className="hidden lg:inline">EXTRA</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex justify-between items-start gap-1">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1 text-[10px] font-bold text-zinc-400 mb-0.5 flex-wrap">
+                                  <Clock className="w-3 h-3 shrink-0" />
+                                  <span className="whitespace-nowrap">{event.startTime} - {event.endTime}</span>
+                                </div>
+                                <div className="font-bold text-xs text-zinc-200 truncate leading-tight" title={subject?.name}>
+                                  {subject?.name || 'Disciplina Desconhecida'}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const newParams = new URLSearchParams(searchParams);
+                                    newParams.set('tab', 'PLANNING');
+                                    if (event.subjectId) newParams.set('subjectId', event.subjectId);
+                                    if (event.topicId) newParams.set('topicId', event.topicId);
+                                    if (event.moduleId) newParams.set('moduleId', event.moduleId);
+                                    setSearchParams(newParams);
+                                  }}
+                                  className="p-1 text-zinc-500 hover:text-brand-red transition-colors"
+                                  title="Ver materiais no Planejamento"
+                                >
+                                  <BookOpen className="w-3 h-3" />
+                                </button>
+                                <div className="text-zinc-500">
+                                  {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Card Details */}
+                          {isExpanded && (
+                            <div className="px-2 pb-2 pt-0 space-y-2 animate-in slide-in-from-top-1 duration-200">
+                              <div className="h-px bg-zinc-800 w-full my-1" />
+                              
+                              <div>
+                                <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Módulo</span>
+                                <p className="text-[11px] text-zinc-300 leading-tight">
+                                  {getModuleName(event.topicId, event.moduleId)}
+                                </p>
+                              </div>
+
+                              <div>
+                                <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Assunto</span>
+                                <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                                  <BookOpen className="w-3 h-3 text-zinc-500 shrink-0" />
+                                  <span>{getTopicName(event.topicId)}</span>
+                                </div>
+                              </div>
+
+                              <div>
+                                <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Professor</span>
+                                <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                                  <User className="w-3 h-3 text-zinc-500 shrink-0" />
+                                  <span>{getTeacherName(event.teacherId)}</span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Interval Divider */}
+                        {index === 0 && shiftEvents.length > 1 && (
+                          <div className="flex items-center gap-2 my-2 opacity-50">
+                            <div className="h-px bg-zinc-800 border-t border-dashed border-zinc-700 flex-1"></div>
+                            <span className="text-[9px] text-zinc-500 font-medium whitespace-nowrap">Intervalo (15 min)</span>
+                            <div className="h-px bg-zinc-800 border-t border-dashed border-zinc-700 flex-1"></div>
+                          </div>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          });
+        })()}
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center py-12">
@@ -222,19 +442,42 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
           </h2>
           <div className="flex items-center gap-1 bg-zinc-900 rounded-lg p-1 border border-zinc-800">
             <button
-              onClick={() => setViewMode('month')}
+              onClick={() => {
+                if (viewMode !== 'month') {
+                  setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
+                  setViewMode('month');
+                }
+              }}
               className={`p-1.5 rounded-md transition-all ${viewMode === 'month' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
               title="Visualização Mensal"
             >
               <LayoutGrid className="w-4 h-4" />
             </button>
             <button
-              onClick={() => setViewMode('week')}
+              onClick={() => {
+                if (viewMode !== 'week') {
+                  const today = new Date();
+                  if (currentDate.getMonth() === today.getMonth() && currentDate.getFullYear() === today.getFullYear()) {
+                    setCurrentDate(today);
+                  }
+                  setViewMode('week');
+                }
+              }}
               className={`p-1.5 rounded-md transition-all ${viewMode === 'week' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
               title="Visualização Semanal"
             >
               <List className="w-4 h-4" />
             </button>
+            {classData?.isWeekendOnly && (
+              <button
+                onClick={() => setViewMode('weekend')}
+                className={`p-1.5 rounded-md transition-all flex items-center gap-1.5 ${viewMode === 'weekend' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+                title="Apenas Finais de Semana"
+              >
+                <CalendarIcon className="w-3.5 h-3.5 text-brand-red" />
+                <span className="text-[10px] font-bold uppercase tracking-wider">Finais de Semana</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -264,245 +507,115 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
       <div className="overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
         <div className="min-w-full md:min-w-[900px]">
           {/* Weekday Headers */}
-          <div className="hidden md:grid grid-cols-7 border-b border-zinc-800 bg-black">
-            {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => (
-              <div key={day} className="py-3 text-center text-xs font-bold text-zinc-500 uppercase tracking-wider">
-                {day}
-              </div>
-            ))}
-          </div>
-
-          {/* Calendar Grid */}
-          <div className={`grid grid-cols-1 md:grid-cols-7 bg-black ${viewMode === 'month' ? 'auto-rows-fr' : 'md:h-[600px]'}`}>
-            {calendarCells.map((cell: any) => {
-              if (cell.type === 'empty') {
-                return <div key={cell.key} className="hidden md:block min-h-[140px] border-b border-r border-zinc-800/50 bg-black"></div>;
-              }
-
-              const isToday = new Date().toISOString().split('T')[0] === cell.dateString;
-              const dayEvents = cell.events || [];
-              const isHoliday = cell.isHoliday;
-              const hasEvents = dayEvents.length > 0;
-              const isDayCompleted = hasEvents && dayEvents.every(e => e.status === 'COMPLETED');
-              
-              // Obter o dia da semana abreviado para exibir no mobile
-              const dateObj = new Date(cell.dateString + 'T12:00:00');
-              const dayOfWeek = dateObj.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
-
-              return (
-                <div 
-                  key={cell.key} 
-                  className={`
-                    p-2 border-b border-r border-zinc-800 transition-colors relative group overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent
-                    ${viewMode === 'month' ? 'min-h-[140px]' : 'h-auto md:h-full'}
-                    ${isToday ? 'bg-brand-red/5' : 'hover:bg-zinc-900/30'}
-                  `}
-                >
-                  <div className="flex justify-between items-start mb-2 sticky top-0 bg-inherit z-10 pb-1">
-                    <div className="flex items-center gap-2">
-                      <span 
-                        className={`
-                          text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full
-                          ${isToday ? 'bg-brand-red text-white' : 'text-zinc-400 group-hover:text-zinc-200'}
-                        `}
-                      >
-                        {cell.day}
-                      </span>
-                      <span className="md:hidden text-xs font-bold text-zinc-500 uppercase tracking-wider">
-                        {dayOfWeek}
-                      </span>
-                    </div>
-                    {hasEvents && (
-                      <span className={`
-                        text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wide
-                        ${isDayCompleted 
-                          ? 'bg-emerald-600 text-white border-emerald-500' 
-                          : dayEvents[0].isOverflow 
-                            ? 'bg-red-600 text-white border-red-500' 
-                            : 'text-brand-red bg-brand-red/10 border-brand-red/20'}
-                      `}>
-                        {dayEvents[0].isOverflow 
-                          ? `Encontro #${dayEvents[0].meetingNumber} (EXTRA)` 
-                          : `Encontro #${dayEvents[0].meetingNumber}`}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    {/* Holiday Display */}
-                    {isHoliday && (
-                      <div className="h-full flex flex-col items-center justify-center py-4">
-                        <div className="w-full p-3 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/30 text-zinc-500 flex flex-col items-center justify-center text-center gap-2">
-                          <CalendarIcon className="w-5 h-5 opacity-50" />
-                          <span className="text-xs font-medium">Feriado</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Events Display */}
-                    {!isHoliday && (() => {
-                      const eventsByShift = dayEvents.reduce((acc, event) => {
-                        const shift = event.shift || classData?.shift || 'MORNING';
-                        const shiftName = shift === 'MORNING' ? 'Manhã' : shift === 'AFTERNOON' ? 'Tarde' : 'Noite';
-                        if (!acc[shiftName]) acc[shiftName] = [];
-                        acc[shiftName].push(event);
-                        return acc;
-                      }, {} as Record<string, ClassScheduleEvent[]>);
-
-                      const activeShifts = ['Manhã', 'Tarde', 'Noite'].filter(s => eventsByShift[s]?.length > 0);
-
-                      return activeShifts.map((shiftName, shiftIndex) => {
-                        const shiftEvents = eventsByShift[shiftName];
-
-                        return (
-                          <div key={shiftName} className={shiftIndex > 0 ? "mt-4" : ""}>
-                            {/* Visual Divider between shifts */}
-                            {shiftIndex > 0 && (
-                              <div className="relative my-4 flex items-center">
-                                <div className="flex-grow border-t border-zinc-800"></div>
-                                <span className="flex-shrink mx-2 text-[8px] font-extrabold text-zinc-500 uppercase tracking-wider">Novo Turno</span>
-                                <div className="flex-grow border-t border-zinc-800"></div>
-                              </div>
-                            )}
-
-                            {/* Shift Header */}
-                            <div className="flex justify-between items-center mb-2">
-                              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">{shiftName}</span>
-                            </div>
-
-                            <div className="space-y-2">
-                              {shiftEvents.map((event: ClassScheduleEvent, index: number) => {
-                                const subject = getSubject(event.subjectId);
-                                const isExpanded = expandedEventId === event.id;
-                                const borderColor = subject?.color || '#52525b';
-                                const isOverflow = event.isOverflow;
-
-                                return (
-                                  <React.Fragment key={event.id}>
-                                    <div 
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setExpandedEventId(isExpanded ? null : event.id);
-                                      }}
-                                      className={`
-                                        rounded-lg border-l-4 transition-all cursor-pointer overflow-hidden
-                                        ${isExpanded ? 'bg-zinc-900 shadow-lg ring-1 ring-zinc-800 z-20 relative' : 'bg-zinc-900/50 hover:bg-zinc-900'}
-                                        ${isOverflow ? 'border-red-500 bg-red-900/20' : ''}
-                                        ${event.status === 'COMPLETED' ? 'border-emerald-500 bg-emerald-900/10 opacity-80' : ''}
-                                      `}
-                                      style={{ borderLeftColor: event.status === 'COMPLETED' ? '#10b981' : borderColor }}
-                                    >
-                                      {/* Card Header */}
-                                      <div className="p-2">
-                                        <div className="flex justify-between items-center mb-1 flex-wrap gap-1">
-                                          <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
-                                            {index + 1}º Tempo
-                                          </div>
-                                          <div className="flex gap-1 flex-wrap justify-end">
-                                            {event.status === 'COMPLETED' && (
-                                              <span className="text-[8px] font-bold text-emerald-500 bg-emerald-950/50 px-1 py-0.5 rounded border border-emerald-900/50 uppercase tracking-wider flex items-center gap-1" title="Concluído">
-                                                <CheckCircle className="w-2 h-2 shrink-0" />
-                                                <span className="hidden lg:inline">CONCLUÍDO</span>
-                                              </span>
-                                            )}
-                                            {event.isSubstitute && (
-                                              <span className="text-[8px] font-bold text-black bg-yellow-500 px-1 py-0.5 rounded border border-yellow-600 uppercase tracking-wider flex items-center gap-1" title="Substituição">
-                                                SUBST.
-                                              </span>
-                                            )}
-                                            {isOverflow && (
-                                              <span className="text-[8px] font-bold text-red-400 bg-red-950/50 px-1 py-0.5 rounded border border-red-900/50 uppercase tracking-wider flex items-center gap-1" title="Aula Extra">
-                                                <AlertTriangle className="w-2 h-2 shrink-0" />
-                                                <span className="hidden lg:inline">EXTRA</span>
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
-                                        <div className="flex justify-between items-start gap-1">
-                                          <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-1 text-[10px] font-bold text-zinc-400 mb-0.5 flex-wrap">
-                                              <Clock className="w-3 h-3 shrink-0" />
-                                              <span className="whitespace-nowrap">{event.startTime} - {event.endTime}</span>
-                                            </div>
-                                            <div className="font-bold text-xs text-zinc-200 truncate leading-tight" title={subject?.name}>
-                                              {subject?.name || 'Disciplina Desconhecida'}
-                                            </div>
-                                          </div>
-                                          <div className="flex items-center gap-1 shrink-0">
-                                            <button
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                const newParams = new URLSearchParams(searchParams);
-                                                newParams.set('tab', 'PLANNING');
-                                                if (event.subjectId) newParams.set('subjectId', event.subjectId);
-                                                if (event.topicId) newParams.set('topicId', event.topicId);
-                                                if (event.moduleId) newParams.set('moduleId', event.moduleId);
-                                                setSearchParams(newParams);
-                                              }}
-                                              className="p-1 text-zinc-500 hover:text-brand-red transition-colors"
-                                              title="Ver materiais no Planejamento"
-                                            >
-                                              <BookOpen className="w-3 h-3" />
-                                            </button>
-                                            <div className="text-zinc-500">
-                                              {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                                            </div>
-                                          </div>
-                                        </div>
-                                      </div>
-
-                                      {/* Card Details */}
-                                      {isExpanded && (
-                                        <div className="px-2 pb-2 pt-0 space-y-2 animate-in slide-in-from-top-1 duration-200">
-                                          <div className="h-px bg-zinc-800 w-full my-1" />
-                                          
-                                          <div>
-                                            <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Módulo</span>
-                                            <p className="text-[11px] text-zinc-300 leading-tight">
-                                              {getModuleName(event.topicId, event.moduleId)}
-                                            </p>
-                                          </div>
-
-                                          <div>
-                                            <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Assunto</span>
-                                            <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
-                                              <BookOpen className="w-3 h-3 text-zinc-500 shrink-0" />
-                                              <span>{getTopicName(event.topicId)}</span>
-                                            </div>
-                                          </div>
-
-                                          <div>
-                                            <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Professor</span>
-                                            <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
-                                              <User className="w-3 h-3 text-zinc-500 shrink-0" />
-                                              <span>{getTeacherName(event.teacherId)}</span>
-                                            </div>
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    {/* Interval Divider */}
-                                    {index === 0 && shiftEvents.length > 1 && (
-                                      <div className="flex items-center gap-2 my-2 opacity-50">
-                                        <div className="h-px bg-zinc-800 border-t border-dashed border-zinc-700 flex-1"></div>
-                                        <span className="text-[9px] text-zinc-500 font-medium whitespace-nowrap">Intervalo (15 min)</span>
-                                        <div className="h-px bg-zinc-800 border-t border-dashed border-zinc-700 flex-1"></div>
-                                      </div>
-                                    )}
-                                  </React.Fragment>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      });
-                    })()}
-                  </div>
+          {viewMode !== 'weekend' && (
+            <div className="hidden md:grid grid-cols-7 border-b border-zinc-800 bg-black">
+              {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => (
+                <div key={day} className="py-3 text-center text-xs font-bold text-zinc-500 uppercase tracking-wider">
+                  {day}
                 </div>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
+
+          {/* Calendar Grid / Weekend Grid */}
+          {viewMode === 'weekend' ? (
+            <div className="p-4 bg-zinc-950/20 overflow-x-auto">
+              <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-${weekends.length} gap-4 min-w-[800px] lg:min-w-0`}>
+                {weekends.map((wk) => {
+                  const satDate = new Date(wk.saturday + 'T00:00:00');
+                  const sunDate = new Date(wk.sunday + 'T00:00:00');
+                  const isSatToday = new Date().toISOString().split('T')[0] === wk.saturday;
+                  const isSunToday = new Date().toISOString().split('T')[0] === wk.sunday;
+
+                  const formatCardDate = (date: Date) => {
+                    return date.toLocaleDateString('pt-BR', { day: 'numeric', month: 'numeric' });
+                  };
+
+                  return (
+                    <div key={`weekend-${wk.number}`} className="flex flex-col bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden p-3 space-y-4">
+                      {/* Weekend Header */}
+                      <div className="text-center py-2 bg-brand-red/10 border-b border-brand-red/20 rounded-lg">
+                        <span className="text-xs font-extrabold text-brand-red uppercase tracking-wider">
+                          FINAL DE SEMANA {wk.number}
+                        </span>
+                      </div>
+
+                      {/* Saturday Card */}
+                      <div className={`p-3 rounded-lg border ${isSatToday ? 'bg-brand-red/5 border-brand-red/30' : 'bg-zinc-900/40 border-zinc-800'}`}>
+                        <div className="flex justify-between items-center mb-3">
+                          <span className="text-xs font-bold text-white uppercase flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                            SÁBADO
+                          </span>
+                          <span className="text-xs font-semibold text-zinc-400">
+                            {formatCardDate(satDate)}
+                          </span>
+                        </div>
+                        {renderDayContent(wk.saturday)}
+                      </div>
+
+                      {/* Sunday Card */}
+                      <div className={`p-3 rounded-lg border ${isSunToday ? 'bg-brand-red/5 border-brand-red/30' : 'bg-zinc-900/40 border-zinc-800'}`}>
+                        <div className="flex justify-between items-center mb-3">
+                          <span className="text-xs font-bold text-white uppercase flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                            DOMINGO
+                          </span>
+                          <span className="text-xs font-semibold text-zinc-400">
+                            {formatCardDate(sunDate)}
+                          </span>
+                        </div>
+                        {renderDayContent(wk.sunday)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className={`grid grid-cols-1 md:grid-cols-7 bg-black ${viewMode === 'month' ? 'auto-rows-fr' : 'md:h-[600px]'}`}>
+              {calendarCells.map((cell: any) => {
+                if (cell.type === 'empty') {
+                  return <div key={cell.key} className="hidden md:block min-h-[140px] border-b border-r border-zinc-800/50 bg-black"></div>;
+                }
+
+                const isToday = new Date().toISOString().split('T')[0] === cell.dateString;
+                
+                // Obter o dia da semana abreviado para exibir no mobile
+                const dateObj = new Date(cell.dateString + 'T12:00:00');
+                const dayOfWeek = dateObj.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
+
+                return (
+                  <div 
+                    key={cell.key} 
+                    className={`
+                      p-2 border-b border-r border-zinc-800 transition-colors relative group overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent
+                      ${viewMode === 'month' ? 'min-h-[140px]' : 'h-auto md:h-full'}
+                      ${isToday ? 'bg-brand-red/5' : 'hover:bg-zinc-900/30'}
+                    `}
+                  >
+                    <div className="flex justify-between items-start mb-2 sticky top-0 bg-inherit z-10 pb-1">
+                      <div className="flex items-center gap-2">
+                        <span 
+                          className={`
+                            text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full
+                            ${isToday ? 'bg-brand-red text-white' : 'text-zinc-400 group-hover:text-zinc-200'}
+                          `}
+                        >
+                          {cell.day}
+                        </span>
+                        <span className="md:hidden text-xs font-bold text-zinc-500 uppercase tracking-wider">
+                          {dayOfWeek}
+                        </span>
+                      </div>
+                    </div>
+
+                    {renderDayContent(cell.dateString)}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

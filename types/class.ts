@@ -61,6 +61,7 @@ export interface Class {
   };
   masterClassId?: string;
   isMasterClass?: boolean;
+  isWeekendOnly?: boolean;
   linkedCourseId?: string | null;
   linkedCourseTabLabel?: string;
   linkedCourseSharedTabs?: {

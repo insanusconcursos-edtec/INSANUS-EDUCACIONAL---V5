@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Upload, Video, FileText, Type, X, Filter, Layers, Building2, Image as ImageIcon, Smartphone, Monitor, GitMerge, GitBranch } from 'lucide-react';
+import { Upload, Video, FileText, Type, X, Filter, Layers, Building2, Image as ImageIcon, Smartphone, Monitor, GitMerge, GitBranch, Calendar } from 'lucide-react';
 import { Class } from '../../../../../types/class';
 import { classMetadataService, MetadataItem } from '../../../../../services/classMetadataService';
 import { getSimulatedClasses, SimulatedClass } from '../../../../../services/simulatedService';
@@ -640,6 +640,35 @@ export const ClassIdentityForm: React.FC<ClassIdentityFormProps> = ({
             </div>
             <div className={`w-12 h-6 rounded-full p-1 transition-colors ${data.hasRecordings ? 'bg-brand-red' : 'bg-zinc-600'}`}>
               <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${data.hasRecordings ? 'translate-x-6' : 'translate-x-0'}`} />
+            </div>
+          </div>
+        </div>
+
+        {/* Turma de FINAL DE SEMANA */}
+        <div className="col-span-2">
+          <div 
+            onClick={() => onChange({ isWeekendOnly: !data.isWeekendOnly })}
+            className={`flex items-center justify-between p-4 rounded-xl border cursor-pointer transition-all ${
+              data.isWeekendOnly 
+                ? 'bg-brand-red/10 border-brand-red/30' 
+                : 'bg-zinc-800 border-zinc-700 hover:border-zinc-600'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg ${data.isWeekendOnly ? 'bg-brand-red text-white' : 'bg-zinc-700 text-zinc-400'}`}>
+                <Calendar className="w-5 h-5" />
+              </div>
+              <div>
+                <span className={`block text-sm font-bold uppercase ${data.isWeekendOnly ? 'text-white' : 'text-zinc-300'}`}>
+                  Turma de FINAL DE SEMANA
+                </span>
+                <span className="text-xs text-zinc-500">
+                  Habilita o calendário e cronograma exclusivo focado apenas nos finais de semana
+                </span>
+              </div>
+            </div>
+            <div className={`w-12 h-6 rounded-full p-1 transition-colors ${data.isWeekendOnly ? 'bg-brand-red' : 'bg-zinc-600'}`}>
+              <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${data.isWeekendOnly ? 'translate-x-6' : 'translate-x-0'}`} />
             </div>
           </div>
         </div>
