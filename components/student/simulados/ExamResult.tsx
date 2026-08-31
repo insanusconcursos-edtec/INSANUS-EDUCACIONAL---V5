@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
 import { 
   BarChart2, ArrowLeft, Trophy, Search, ChevronDown, Brain, ListChecks, Check, X, Minus, Medal, AlertCircle, FileText, SwitchCamera, BarChart
 } from 'lucide-react';
@@ -102,8 +103,11 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
         }
     }, [currentUser, userData, exam, attemptData]);
     
+    const [searchParams] = useSearchParams();
+    const initialTab = searchParams.get('tab') === 'recursos' ? 'RECURSOS' : 'PERFORMANCE';
+    
     // Estado para controlar as Abas
-    const [activeTab, setActiveTab] = useState<'PERFORMANCE' | 'RANKING' | 'AUTODIAGNOSIS' | 'RECURSOS'>('PERFORMANCE'); 
+    const [activeTab, setActiveTab] = useState<'PERFORMANCE' | 'RANKING' | 'AUTODIAGNOSIS' | 'RECURSOS'>(initialTab); 
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);    
     const [chartMode, setChartMode] = useState<'quantity' | 'percentage' | 'autodiagnosis'>('quantity');
 

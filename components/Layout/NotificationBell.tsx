@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bell, MessageSquare, Megaphone, X, Check } from 'lucide-react';
+import { Bell, MessageSquare, Megaphone, X, Check, Scale } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Announcement, subscribeToAnnouncements, markAnnouncementAsRead } from '../../services/announcementService';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { useNavigate } from 'react-router-dom';
 
 interface NotificationItem {
   id: string;
-  type: 'announcement' | 'chat';
+  type: 'announcement' | 'chat' | 'simulated_resource';
   title: string;
   content: string;
   timestamp: number;
@@ -109,6 +109,36 @@ export const NotificationBell: React.FC = () => {
       unsubs.push(unsubChat);
     }
 
+    // 3. Subscribe to User Personal Notifications (e.g. simulated resource responses)
+    if (userRole === 'STUDENT') {
+      const qPersonal = query(
+        collection(db, 'user_notifications'),
+        where('userId', '==', currentUser.uid),
+        where('read', '==', false)
+      );
+
+      const unsubPersonal = onSnapshot(qPersonal, (snapshot) => {
+        const personalNotifications = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            type: 'simulated_resource' as const,
+            title: data.title || 'Nova Notificação',
+            content: data.content || '',
+            timestamp: data.timestamp || Date.now(),
+            data: data.data || {}
+          };
+        });
+
+        setNotifications(prev => {
+          const others = prev.filter(n => n.type !== 'simulated_resource');
+          const merged = [...others, ...personalNotifications].sort((a, b) => b.timestamp - a.timestamp);
+          return merged.filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
+        });
+      });
+      unsubs.push(unsubPersonal);
+    }
+
     return () => unsubs.forEach(unsub => unsub());
   }, [currentUser, userRole, userData]);
 
@@ -119,12 +149,19 @@ export const NotificationBell: React.FC = () => {
       } catch (err) {
         console.error("Erro ao marcar como lido:", err);
       }
+    } else if (item.type === 'simulated_resource') {
+      try {
+        const docRef = doc(db, 'user_notifications', item.id);
+        await updateDoc(docRef, { read: true });
+      } catch (err) {
+        console.error("Erro ao marcar como lido:", err);
+      }
     } else {
       handleItemClick(item);
     }
   };
 
-  const handleItemClick = (item: NotificationItem) => {
+  const handleItemClick = async (item: NotificationItem) => {
     if (item.type === 'chat') {
       if (userRole === 'STUDENT') {
         navigate(`/app/dashboard?tab=call${item.data.mentorId ? `&mentorId=${item.data.mentorId}` : ''}`);
@@ -136,6 +173,14 @@ export const NotificationBell: React.FC = () => {
       if (userRole === 'STUDENT') {
         navigate('/app/dashboard');
       }
+    } else if (item.type === 'simulated_resource') {
+      try {
+        const docRef = doc(db, 'user_notifications', item.id);
+        await updateDoc(docRef, { read: true });
+      } catch (err) {
+        console.error("Erro ao marcar como lido:", err);
+      }
+      navigate(`/app/simulated?classId=${item.data.classId}&examId=${item.data.examId}&view=recursos&tab=recursos`);
     }
     setIsOpen(false);
   };
@@ -187,10 +232,13 @@ export const NotificationBell: React.FC = () => {
                     >
                       <div className="flex gap-3">
                         <div className={`mt-0.5 w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                          item.type === 'announcement' ? 'bg-amber-500/10 text-amber-500' : 'bg-brand-red/10 text-brand-red'
+                          item.type === 'announcement' ? 'bg-amber-500/10 text-amber-500' :
+                          item.type === 'simulated_resource' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-brand-red/10 text-brand-red'
                         }`}>
                           {item.type === 'announcement' ? (
                             <Megaphone className="w-4 h-4" />
+                          ) : item.type === 'simulated_resource' ? (
+                            <Scale className="w-4 h-4" />
                           ) : (
                             <MessageSquare className="w-4 h-4" />
                           )}

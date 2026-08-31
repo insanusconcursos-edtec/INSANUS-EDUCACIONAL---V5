@@ -79,7 +79,7 @@ const StudentSimulated: React.FC = () => {
     const view = searchParams.get('view');
 
     if (currentUser && classId && examId) {
-        handleAutoOpen(classId, examId, start === 'true', view === 'result');
+        handleAutoOpen(classId, examId, start === 'true', view === 'result' || view === 'recursos');
     }
   }, [currentUser, searchParams]);
 

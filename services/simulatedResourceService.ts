@@ -104,10 +104,8 @@ export const judgeResource = async (
 
   if (decision === 'INDEFERIR') {
     finalStatus = 'rejected';
-  } else if (decision === 'DEFERIR_SUMARIAMENTE') {
-    finalStatus = 'accepted_summary';
-  } else if (decision === 'DEFERIR') {
-    finalStatus = 'accepted';
+  } else if (decision === 'DEFERIR_SUMARIAMENTE' || decision === 'DEFERIR') {
+    finalStatus = decision === 'DEFERIR_SUMARIAMENTE' ? 'accepted_summary' : 'accepted';
 
     // Apply the automatic changes based on resource type
     if (resourceData.type === 'anular_questao') {
@@ -116,12 +114,13 @@ export const judgeResource = async (
         q.index === questionNumber ? { ...q, isAnnulled: true } : q
       );
     } else if (resourceData.type === 'alterar_gabarito') {
-      if (!newAlternative) {
+      const resolvedAlternative = newAlternative || resourceData.newAlternative;
+      if (!resolvedAlternative) {
         throw new Error('Uma nova alternativa correta deve ser fornecida para alterar o gabarito.');
       }
       // Change the correct answer automatically
       updatedQuestions = updatedQuestions.map(q => 
-        q.index === questionNumber ? { ...q, answer: newAlternative, isAnnulled: false } : q
+        q.index === questionNumber ? { ...q, answer: resolvedAlternative, isAnnulled: false } : q
       );
     }
   }
@@ -134,19 +133,47 @@ export const judgeResource = async (
   if (adminResponse.trim()) {
     resourceUpdates.adminResponse = adminResponse.trim();
   }
-  if (decision === 'DEFERIR' && resourceData.type === 'alterar_gabarito' && newAlternative) {
-    resourceUpdates.newAlternative = newAlternative;
+  const resolvedAlternative = newAlternative || resourceData.newAlternative;
+  if ((decision === 'DEFERIR' || decision === 'DEFERIR_SUMARIAMENTE') && resourceData.type === 'alterar_gabarito' && resolvedAlternative) {
+    resourceUpdates.newAlternative = resolvedAlternative;
   }
   await updateDoc(resourceRef, resourceUpdates);
 
-  // 2. If Deferir (Approved), update the Exam answers key and recalculate student scores
-  if (decision === 'DEFERIR') {
+  // 2. If Deferir or Deferir Sumariamente (Approved), update the Exam answers key and recalculate student scores
+  if (decision === 'DEFERIR' || decision === 'DEFERIR_SUMARIAMENTE') {
     // Save updated questions to simulated subcollection
     await updateExamQuestions(classId, exam.id!, updatedQuestions);
     
     // Recalculate all student attempts for this exam with the updated questions
     const updatedExam: SimulatedExam = { ...exam, questions: updatedQuestions };
     await recalculateAttemptsForExam(classId, exam.id!, updatedExam);
+  }
+
+  // 3. Create a student notification
+  if (resourceData.userId && resourceData.userId !== 'admin_correction') {
+    try {
+      const decisionText = decision === 'INDEFERIR' ? 'INDEFERIDO' : 'DEFERIDO';
+      const detailText = decision === 'DEFERIR_SUMARIAMENTE' ? ' (Sumariamente)' : '';
+      const title = 'Resultado de Recurso';
+      const content = `Seu recurso para a Questão ${questionNumber} do simulado "${exam.title || 'Simulado'}" foi ${decisionText}${detailText} pela banca examinadora.`;
+      
+      await addDoc(collection(db, 'user_notifications'), {
+        userId: resourceData.userId,
+        type: 'simulated_resource',
+        title,
+        content,
+        timestamp: Date.now(),
+        read: false,
+        data: {
+          classId,
+          examId: exam.id!,
+          questionNumber,
+          decision: decisionText
+        }
+      });
+    } catch (notificationError) {
+      console.error("Erro ao gerar notificação para o aluno:", notificationError);
+    }
   }
 };
 

@@ -42,6 +42,7 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
 
   // Resources state
   const [resources, setResources] = useState<SimulatedResource[]>([]);
+  const [resourceSubTab, setResourceSubTab] = useState<'BANCA' | 'PENDING' | 'ACCEPTED' | 'REJECTED'>('BANCA');
   const [loadingResources, setLoadingResources] = useState(false);
   const [selectedResource, setSelectedResource] = useState<SimulatedResource | null>(null);
   
@@ -715,23 +716,116 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
               </div>
             </div>
 
+            {/* Sub-tabs de recursos */}
+            <div className="px-6 py-3 border-b border-zinc-800 bg-zinc-950 flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setResourceSubTab('BANCA')}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-2 border ${
+                  resourceSubTab === 'BANCA'
+                    ? 'bg-brand-red/10 border-brand-red/30 text-brand-red shadow-sm shadow-red-950/20'
+                    : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+              >
+                <span>Banca Examinadora</span>
+                <span className={`px-1.5 py-0.5 rounded text-[8px] font-black ${
+                  resourceSubTab === 'BANCA' ? 'bg-brand-red/20 text-brand-red' : 'bg-zinc-800 text-zinc-500'
+                }`}>
+                  {resources.filter(r => r.userId === 'admin_correction' || (r as any).isOfficial).length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setResourceSubTab('PENDING')}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-2 border ${
+                  resourceSubTab === 'PENDING'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-500 shadow-sm shadow-amber-950/20'
+                    : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+              >
+                <span>Em Aberto</span>
+                <span className={`px-1.5 py-0.5 rounded text-[8px] font-black ${
+                  resourceSubTab === 'PENDING' ? 'bg-amber-500/20 text-amber-500' : 'bg-zinc-800 text-zinc-500'
+                }`}>
+                  {resources.filter(r => !(r.userId === 'admin_correction' || (r as any).isOfficial) && r.status === 'pending').length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setResourceSubTab('ACCEPTED')}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-2 border ${
+                  resourceSubTab === 'ACCEPTED'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-sm shadow-emerald-950/20'
+                    : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+              >
+                <span>Deferidos</span>
+                <span className={`px-1.5 py-0.5 rounded text-[8px] font-black ${
+                  resourceSubTab === 'ACCEPTED' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-500'
+                }`}>
+                  {resources.filter(r => !(r.userId === 'admin_correction' || (r as any).isOfficial) && (r.status === 'accepted' || r.status === 'accepted_summary')).length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setResourceSubTab('REJECTED')}
+                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-2 border ${
+                  resourceSubTab === 'REJECTED'
+                    ? 'bg-red-500/10 border-red-500/30 text-red-500 shadow-sm shadow-red-950/20'
+                    : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+              >
+                <span>Indeferidos</span>
+                <span className={`px-1.5 py-0.5 rounded text-[8px] font-black ${
+                  resourceSubTab === 'REJECTED' ? 'bg-red-500/20 text-red-500' : 'bg-zinc-800 text-zinc-500'
+                }`}>
+                  {resources.filter(r => !(r.userId === 'admin_correction' || (r as any).isOfficial) && r.status === 'rejected').length}
+                </span>
+              </button>
+            </div>
+
             {loadingResources ? (
               <div className="flex-1 flex flex-col items-center justify-center gap-4 text-zinc-500">
                 <Loader2 size={40} className="animate-spin text-brand-red" />
                 <span className="text-[10px] font-black uppercase tracking-widest">Carregando Recursos...</span>
               </div>
-            ) : resources.length === 0 ? (
+            ) : resources.filter(res => {
+              const isOfficial = res.userId === 'admin_correction' || (res as any).isOfficial;
+              if (resourceSubTab === 'BANCA') return isOfficial;
+              if (isOfficial) return false;
+              if (resourceSubTab === 'PENDING') return res.status === 'pending';
+              if (resourceSubTab === 'ACCEPTED') return res.status === 'accepted' || res.status === 'accepted_summary';
+              if (resourceSubTab === 'REJECTED') return res.status === 'rejected';
+              return true;
+            }).length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center text-center p-12">
                 <div className="w-16 h-16 bg-zinc-900 rounded-full flex items-center justify-center text-zinc-700 mb-4 border border-zinc-800">
                   <Scale size={32} />
                 </div>
-                <h3 className="text-white font-black uppercase tracking-tighter text-lg">Nenhum Recurso Enviado</h3>
-                <p className="text-zinc-500 text-xs mt-2 max-w-xs uppercase tracking-wider font-bold">Os recursos enviados pelos alunos para este simulado serão listados aqui.</p>
+                <h3 className="text-white font-black uppercase tracking-tighter text-lg">
+                  {resourceSubTab === 'BANCA' ? 'Nenhuma Retificação Registrada' :
+                   resourceSubTab === 'PENDING' ? 'Nenhum Recurso em Aberto' :
+                   resourceSubTab === 'ACCEPTED' ? 'Nenhum Recurso Deferido' :
+                   'Nenhum Recurso Indeferido'}
+                </h3>
+                <p className="text-zinc-500 text-xs mt-2 max-w-xs uppercase tracking-wider font-bold">
+                  {resourceSubTab === 'BANCA' ? 'As retificações de ofício efetuadas pela banca serão exibidas aqui.' :
+                   resourceSubTab === 'PENDING' ? 'Não existem recursos pendentes de análise no momento.' :
+                   resourceSubTab === 'ACCEPTED' ? 'Os recursos de alunos que foram aprovados serão listados nesta área.' :
+                   'Os recursos de alunos que foram rejeitados serão listados nesta área.'}
+                </p>
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-4">
                 <div className="grid grid-cols-1 gap-4">
-                  {resources.map((res) => {
+                  {resources.filter(res => {
+                    const isOfficial = res.userId === 'admin_correction' || (res as any).isOfficial;
+                    if (resourceSubTab === 'BANCA') return isOfficial;
+                    if (isOfficial) return false;
+                    if (resourceSubTab === 'PENDING') return res.status === 'pending';
+                    if (resourceSubTab === 'ACCEPTED') return res.status === 'accepted' || res.status === 'accepted_summary';
+                    if (resourceSubTab === 'REJECTED') return res.status === 'rejected';
+                    return true;
+                  }).map((res) => {
                     const isOfficial = res.userId === 'admin_correction' || (res as any).isOfficial;
                     return (
                       <div 
@@ -810,7 +904,7 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                             <p className="text-xs text-zinc-400 font-semibold leading-relaxed">
                               {res.adminResponse}
                             </p>
-                            {res.newAlternative && (
+                            {res.newAlternative && (res.status === 'accepted' || res.status === 'accepted_summary') && (
                               <p className="text-[10px] text-emerald-400 font-bold uppercase mt-1">
                                 Novo Gabarito Aplicado: Alternativa {res.newAlternative}
                               </p>
@@ -826,7 +920,7 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                               setSelectedResource(res);
                               setJudgmentDecision('DEFERIR');
                               setJudgmentResponse('');
-                              setJudgmentNewAlternative('A');
+                              setJudgmentNewAlternative(res.newAlternative || 'A');
                               setIsJudgingModalOpen(true);
                             }}
                             className="px-4 py-2 bg-brand-red hover:bg-red-600 text-white rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 shadow-lg shadow-red-950/20"
@@ -880,7 +974,7 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                   exam,
                   judgmentDecision,
                   judgmentResponse,
-                  judgmentDecision === 'DEFERIR' && selectedResource.type === 'alterar_gabarito' ? judgmentNewAlternative : undefined
+                  (judgmentDecision === 'DEFERIR' || judgmentDecision === 'DEFERIR_SUMARIAMENTE') && selectedResource.type === 'alterar_gabarito' ? judgmentNewAlternative : undefined
                 );
                 toast.success('Decisão aplicada com sucesso!');
                 setIsJudgingModalOpen(false);
@@ -929,7 +1023,7 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
               </div>
 
               {/* Optional: If deferring an answer change request, specify the new answer */}
-              {judgmentDecision === 'DEFERIR' && selectedResource.type === 'alterar_gabarito' && (
+              {(judgmentDecision === 'DEFERIR' || judgmentDecision === 'DEFERIR_SUMARIAMENTE') && selectedResource.type === 'alterar_gabarito' && (
                 <div className="bg-emerald-950/15 border border-emerald-900/20 p-4 rounded-xl space-y-3 animate-in slide-in-from-top-2 duration-300">
                   <div className="flex items-center gap-2 text-emerald-500">
                     <ShieldAlert size={14} />
