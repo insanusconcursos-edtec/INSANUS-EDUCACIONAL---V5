@@ -322,7 +322,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
   const renderDayContent = (dateString: string) => {
     const dayEvents = events.filter(e => e.date === dateString);
     const dayGaps = gaps.filter(g => g.date === dateString);
-    const holidayGap = dayGaps.find((g: ScheduleGap) => g.reason === 'HOLIDAY');
+    const holidayGap = dayEvents.length === 0 ? dayGaps.find((g: ScheduleGap) => g.reason === 'HOLIDAY') : undefined;
 
     const timeline = holidayGap 
       ? [] 

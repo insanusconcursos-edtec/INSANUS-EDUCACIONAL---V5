@@ -186,7 +186,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
         const dateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         const dayEvents = events.filter(e => e.date === dateString)
           .sort((a, b) => a.startTime.localeCompare(b.startTime));
-        const isHoliday = holidays.includes(dateString);
+        const isHoliday = holidays.includes(dateString) && dayEvents.length === 0;
         
         cells.push({
           type: 'day',
@@ -209,7 +209,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
         const dateString = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         const dayEvents = events.filter(e => e.date === dateString)
           .sort((a, b) => a.startTime.localeCompare(b.startTime));
-        const isHoliday = holidays.includes(dateString);
+        const isHoliday = holidays.includes(dateString) && dayEvents.length === 0;
 
         cells.push({
           type: 'day',
@@ -228,7 +228,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
   const renderDayContent = (dateString: string) => {
     const dayEvents = events.filter(e => e.date === dateString)
       .sort((a, b) => a.startTime.localeCompare(b.startTime));
-    const isHoliday = holidays.includes(dateString);
+    const isHoliday = holidays.includes(dateString) && dayEvents.length === 0;
 
     return (
       <div className="space-y-2">
