@@ -22,7 +22,7 @@ import {
   arrayUnion,
   arrayRemove
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL, deleteObject, getBlob } from 'firebase/storage';
 import { OnlineCourse, CourseFormData, CourseModule, CourseSubModule, CourseLesson, CourseContent, CourseStructureModule, CourseStructureFolder } from '../types/course';
 import { CourseEditalStructure } from '../types/courseEdital';
 
@@ -37,13 +37,60 @@ const EDITAL_COLLECTION = 'course_edital';
 export const courseService = {
   // --- AUXILIARES ---
   
+  cloneStorageFile: async (url?: string): Promise<string | undefined> => {
+    if (!url || !url.includes('firebasestorage.googleapis.com')) return url;
+    try {
+      console.log(`[STORAGE_SAFE] Tentando clonar arquivo de storage: ${url}`);
+      let blob: Blob;
+      try {
+        const sourceRef = ref(storage, url);
+        blob = await getBlob(sourceRef);
+      } catch (sdkError) {
+        console.warn("[STORAGE_SAFE] Falha ao clonar via SDK, tentando fetch...", sdkError);
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        blob = await response.blob();
+      }
+
+      // Determinar pasta de destino com base no tipo
+      let folder = 'course_pdfs';
+      if (url.includes('/course_covers/')) folder = 'course_covers';
+      else if (url.includes('/course_banners/')) folder = 'course_banners';
+
+      // Extrair nome original se possível
+      let originalName = 'file';
+      try {
+        const decodedUrl = decodeURIComponent(url);
+        const urlParts = decodedUrl.split('/');
+        const lastPart = urlParts[urlParts.length - 1].split('?')[0];
+        if (lastPart.includes('_')) {
+          originalName = lastPart.substring(lastPart.indexOf('_') + 1);
+        } else {
+          originalName = lastPart;
+        }
+      } catch (e) {
+        console.warn("[STORAGE_SAFE] Não foi possível decodificar o nome original do arquivo:", e);
+      }
+
+      const targetPath = `${folder}/dup_${Date.now()}_${originalName}`;
+      const targetRef = ref(storage, targetPath);
+      
+      const snapshot = await uploadBytes(targetRef, blob);
+      const newUrl = await getDownloadURL(snapshot.ref);
+      console.log(`[STORAGE_SAFE] Arquivo clonado com sucesso para: ${newUrl}`);
+      return newUrl;
+    } catch (error) {
+      console.error("[STORAGE_SAFE] Falha ao duplicar o arquivo físico no storage, mantendo link original como fallback:", error);
+      return url;
+    }
+  },
+  
   safeDeleteStorageFile: async (url?: string) => {
     if (!url || !url.includes('firebasestorage.googleapis.com')) return;
     try {
-      // Desativado temporariamente para evitar deleção acidental de arquivos compartilhados entre módulos copiados
-      // const fileRef = ref(storage, url);
-      // await deleteObject(fileRef);
-      console.log("[STORAGE_SAFE] Deleção de arquivo ignorada para segurança:", url);
+      const fileRef = ref(storage, url);
+      await deleteObject(fileRef);
+      console.log("[STORAGE_SAFE] Arquivo físico deletado do Storage com sucesso:", url);
     } catch (error: any) {
       if (error.code === 'storage/object-not-found') return;
       console.warn("Erro ao deletar arquivo do storage:", error);
@@ -316,15 +363,27 @@ export const courseService = {
 
           // 5. Conteúdos da Aula
           const contents = await courseService.getContents(lesson.id);
-          contents.forEach(content => {
+          await Promise.all(contents.map(async (content) => {
             const newContentRef = doc(collection(db, CONTENTS_COLLECTION));
+            
+            let clonedFileUrl = content.fileUrl;
+            if (content.type === 'pdf' && content.fileUrl) {
+              clonedFileUrl = await courseService.cloneStorageFile(content.fileUrl);
+            }
+            let clonedCommentedKeyUrl = content.commentedAnswerKeyUrl;
+            if (content.commentedAnswerKeyUrl) {
+              clonedCommentedKeyUrl = await courseService.cloneStorageFile(content.commentedAnswerKeyUrl);
+            }
+
             const newContentData: any = {
               ...content,
+              fileUrl: clonedFileUrl || null,
+              commentedAnswerKeyUrl: clonedCommentedKeyUrl || null,
               lessonId: newLessonRef.id
             };
             delete newContentData.id;
             operations.push({ ref: newContentRef, data: newContentData });
-          });
+          }));
         }));
       }));
 
@@ -530,12 +589,27 @@ export const courseService = {
 
         // Conteúdos vinculados
         const contents = await courseService.getContents(lessonDoc.id);
-        contents.forEach(content => {
+        for (const content of contents) {
           const contentRef = doc(collection(db, CONTENTS_COLLECTION));
-          const newContentData = { ...toPlainObject(content), lessonId: newLessonRef.id };
+          
+          let clonedFileUrl = content.fileUrl;
+          if (content.type === 'pdf' && content.fileUrl) {
+            clonedFileUrl = await courseService.cloneStorageFile(content.fileUrl);
+          }
+          let clonedCommentedKeyUrl = content.commentedAnswerKeyUrl;
+          if (content.commentedAnswerKeyUrl) {
+            clonedCommentedKeyUrl = await courseService.cloneStorageFile(content.commentedAnswerKeyUrl);
+          }
+
+          const newContentData = { 
+            ...toPlainObject(content), 
+            fileUrl: clonedFileUrl || null,
+            commentedAnswerKeyUrl: clonedCommentedKeyUrl || null,
+            lessonId: newLessonRef.id 
+          };
           delete (newContentData as any).id;
           operations.push({ ref: contentRef, data: newContentData });
-        });
+        }
       }
 
       // 7. Persistência Atômica por Lotes
@@ -645,12 +719,27 @@ export const courseService = {
 
         // Conteúdos vinculados
         const contents = await courseService.getContents(lesson.id);
-        contents.forEach(content => {
+        for (const content of contents) {
           const contentRef = doc(collection(db, CONTENTS_COLLECTION));
-          const newContentData = { ...toPlainObject(content), lessonId: newLessonRef.id };
+          
+          let clonedFileUrl = content.fileUrl;
+          if (content.type === 'pdf' && content.fileUrl) {
+            clonedFileUrl = await courseService.cloneStorageFile(content.fileUrl);
+          }
+          let clonedCommentedKeyUrl = content.commentedAnswerKeyUrl;
+          if (content.commentedAnswerKeyUrl) {
+            clonedCommentedKeyUrl = await courseService.cloneStorageFile(content.commentedAnswerKeyUrl);
+          }
+
+          const newContentData = { 
+            ...toPlainObject(content), 
+            fileUrl: clonedFileUrl || null,
+            commentedAnswerKeyUrl: clonedCommentedKeyUrl || null,
+            lessonId: newLessonRef.id 
+          };
           delete (newContentData as any).id;
           operations.push({ ref: contentRef, data: newContentData });
-        });
+        }
       }
 
       // 7. Persistência em Lote
@@ -1160,8 +1249,7 @@ export const courseService = {
         if (content.type === 'video') await updateDoc(lessonRef, { videoCount: increment(-1) });
         else if (content.type === 'pdf') await updateDoc(lessonRef, { pdfCount: increment(-1) });
 
-        // DELEÇÃO DE ARQUIVO FÍSICO (Storage) - DESATIVADO PARA SEGURANÇA (Arquivos compartilhados entre módulos)
-        /*
+        // DELEÇÃO DE ARQUIVO FÍSICO (Storage) - ATIVADA COM SEGURANÇA (Arquivos agora duplicados de forma isolada)
         if (content.fileUrl) {
             await courseService.safeDeleteStorageFile(content.fileUrl);
         }
@@ -1173,7 +1261,6 @@ export const courseService = {
         if (content.videoUrl && content.videoPlatform !== 'panda' && content.videoPlatform !== 'youtube') {
             await courseService.safeDeleteStorageFile(content.videoUrl);
         }
-        */
 
         await deleteDoc(contentRef);
       }
