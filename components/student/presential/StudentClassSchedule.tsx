@@ -104,6 +104,25 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
     return getWeekendsOfMonth(currentDate.getFullYear(), currentDate.getMonth());
   }, [currentDate]);
 
+  const [selectedWeekendIndex, setSelectedWeekendIndex] = useState(0);
+
+  useEffect(() => {
+    if (weekends.length > 0) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const index = weekends.findIndex(wk => wk.saturday === todayStr || wk.sunday === todayStr);
+      if (index !== -1) {
+        setSelectedWeekendIndex(index);
+      } else {
+        const futureIndex = weekends.findIndex(wk => wk.saturday >= todayStr);
+        if (futureIndex !== -1) {
+          setSelectedWeekendIndex(futureIndex);
+        } else {
+          setSelectedWeekendIndex(0);
+        }
+      }
+    }
+  }, [weekends]);
+
   // Helpers
   const getSubject = (id: string) => subjects.find(s => s.id === id);
   const getTopicName = (id: string) => topics.find(t => t.id === id)?.name || 'Assunto não encontrado';
@@ -505,7 +524,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
 
       {/* Calendar Container with Horizontal Scroll for Tablets */}
       <div className="overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
-        <div className="min-w-full md:min-w-[900px]">
+        <div className={viewMode === 'weekend' ? "min-w-full" : "min-w-full md:min-w-[900px]"}>
           {/* Weekday Headers */}
           {viewMode !== 'weekend' && (
             <div className="hidden md:grid grid-cols-7 border-b border-zinc-800 bg-black">
@@ -519,8 +538,32 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
 
           {/* Calendar Grid / Weekend Grid */}
           {viewMode === 'weekend' ? (
-            <div className="p-4 bg-zinc-950/20 overflow-x-auto">
-              <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-${weekends.length} gap-4 min-w-[800px] lg:min-w-0`}>
+            <div className="p-4 bg-zinc-950/20">
+              {/* Weekend View Tabs for Mobile/Tablet (lg:hidden) */}
+              <div className="flex lg:hidden overflow-x-auto gap-2 mb-4 pb-2 scrollbar-none">
+                {weekends.map((wk, index) => {
+                  const isSelected = selectedWeekendIndex === index;
+                  const isCurrent = new Date().toISOString().split('T')[0] === wk.saturday || new Date().toISOString().split('T')[0] === wk.sunday;
+                  return (
+                    <button
+                      key={`tab-wk-${wk.number}`}
+                      onClick={() => setSelectedWeekendIndex(index)}
+                      className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider whitespace-nowrap border transition-all flex items-center gap-1.5 ${
+                        isSelected 
+                          ? 'bg-brand-red border-brand-red text-white shadow-md' 
+                          : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                      }`}
+                    >
+                      {isCurrent && <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span>}
+                      FDS {wk.number}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Grid Wrapper */}
+              {/* On Large Screens (lg): show all weekends side-by-side without overflow */}
+              <div className="hidden lg:grid gap-4" style={{ gridTemplateColumns: `repeat(${weekends.length}, minmax(0, 1fr))` }}>
                 {weekends.map((wk) => {
                   const satDate = new Date(wk.saturday + 'T00:00:00');
                   const sunDate = new Date(wk.sunday + 'T00:00:00');
@@ -532,7 +575,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                   };
 
                   return (
-                    <div key={`weekend-${wk.number}`} className="flex flex-col bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden p-3 space-y-4">
+                    <div key={`weekend-desktop-${wk.number}`} className="flex flex-col bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden p-3 space-y-4">
                       {/* Weekend Header */}
                       <div className="text-center py-2 bg-brand-red/10 border-b border-brand-red/20 rounded-lg">
                         <span className="text-xs font-extrabold text-brand-red uppercase tracking-wider">
@@ -570,6 +613,63 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                     </div>
                   );
                 })}
+              </div>
+
+              {/* On Mobile/Tablet: only show the selected weekend in a full-width container */}
+              <div className="block lg:hidden">
+                {weekends[selectedWeekendIndex] && (() => {
+                  const wk = weekends[selectedWeekendIndex];
+                  const satDate = new Date(wk.saturday + 'T00:00:00');
+                  const sunDate = new Date(wk.sunday + 'T00:00:00');
+                  const isSatToday = new Date().toISOString().split('T')[0] === wk.saturday;
+                  const isSunToday = new Date().toISOString().split('T')[0] === wk.sunday;
+
+                  const formatCardDate = (date: Date) => {
+                    return date.toLocaleDateString('pt-BR', { day: 'numeric', month: 'numeric' });
+                  };
+
+                  return (
+                    <div className="flex flex-col bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden p-4 space-y-4">
+                      {/* Weekend Header */}
+                      <div className="text-center py-2 bg-brand-red/10 border-b border-brand-red/20 rounded-lg">
+                        <span className="text-xs font-extrabold text-brand-red uppercase tracking-wider">
+                          FINAL DE SEMANA {wk.number}
+                        </span>
+                      </div>
+
+                      {/* On tablets (md) show saturday/sunday side-by-side, on mobile stacked */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Saturday Card */}
+                        <div className={`p-4 rounded-lg border ${isSatToday ? 'bg-brand-red/5 border-brand-red/30' : 'bg-zinc-900/40 border-zinc-800'}`}>
+                          <div className="flex justify-between items-center mb-3">
+                            <span className="text-xs font-bold text-white uppercase flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                              SÁBADO
+                            </span>
+                            <span className="text-xs font-semibold text-zinc-400">
+                              {formatCardDate(satDate)}
+                            </span>
+                          </div>
+                          {renderDayContent(wk.saturday)}
+                        </div>
+
+                        {/* Sunday Card */}
+                        <div className={`p-4 rounded-lg border ${isSunToday ? 'bg-brand-red/5 border-brand-red/30' : 'bg-zinc-900/40 border-zinc-800'}`}>
+                          <div className="flex justify-between items-center mb-3">
+                            <span className="text-xs font-bold text-white uppercase flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                              DOMINGO
+                            </span>
+                            <span className="text-xs font-semibold text-zinc-400">
+                              {formatCardDate(sunDate)}
+                            </span>
+                          </div>
+                          {renderDayContent(wk.sunday)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           ) : (
