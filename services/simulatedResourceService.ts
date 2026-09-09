@@ -42,8 +42,18 @@ export interface SimulatedResource {
  */
 export const submitResource = async (resourceData: Omit<SimulatedResource, 'id' | 'status' | 'createdAt' | 'updatedAt'>): Promise<string> => {
   const collectionRef = collection(db, 'simulated_resources');
+  
+  // Clean up undefined fields to avoid Firestore crashes (e.g. newAlternative is undefined)
+  const cleanedData: any = {};
+  Object.keys(resourceData).forEach((key) => {
+    const value = (resourceData as any)[key];
+    if (value !== undefined) {
+      cleanedData[key] = value;
+    }
+  });
+
   const docRef = await addDoc(collectionRef, {
-    ...resourceData,
+    ...cleanedData,
     status: 'pending' as ResourceStatus,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
