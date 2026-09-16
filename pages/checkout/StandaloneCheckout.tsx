@@ -1283,14 +1283,17 @@ export default function StandaloneCheckout() {
                      alt={product.name} 
                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" 
                    />
-                   <div className="absolute inset-0 bg-gradient-to-t from-zinc-900 via-transparent to-transparent" />
-                   <div className="absolute bottom-4 left-4 right-4">
-                      <span className="bg-red-600 text-white text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-widest mb-2 inline-block shadow-lg shadow-red-600/20">Produto Selecionado</span>
-                      <h2 className="text-lg font-black text-white leading-tight uppercase tracking-tighter">{product.name}</h2>
-                   </div>
                 </div>
 
-                <div className="p-6 space-y-6">
+                <div className="p-6 pb-2 space-y-2">
+                   <div>
+                      <span className="bg-red-600 text-white text-[9px] font-black px-2 py-1 rounded uppercase tracking-widest inline-block shadow-lg shadow-red-600/20">Produto Selecionado</span>
+                   </div>
+                   <h2 className="text-lg font-black text-white leading-tight uppercase tracking-tighter">{product.name}</h2>
+                   <div className="h-px bg-zinc-800/30 pt-2" />
+                </div>
+
+                <div className="p-6 pt-2 space-y-6">
                    <div className="space-y-3">
                       <div className="flex justify-between items-center text-zinc-500 text-[10px] font-bold uppercase tracking-widest">
                          <span>Oferta Selecionada</span>

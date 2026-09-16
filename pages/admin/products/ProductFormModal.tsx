@@ -109,7 +109,7 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    if (!name || !gatewayId || !type || !accessDays) {
+    if (!name || !type || !accessDays) {
       setError('Preencha todos os campos obrigatórios.');
       setLoading(false);
       return;
@@ -314,20 +314,6 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Ex: Combo Polícia Civil VIP"
                     className="w-full bg-zinc-950 border border-zinc-800 text-white rounded-xl px-4 py-3 focus:outline-none focus:border-red-500 transition-colors"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
-                    ID de Checkout (URL) *
-                  </label>
-                  <input
-                    type="text"
-                    value={gatewayId}
-                    onChange={(e) => setGatewayId(e.target.value)}
-                    placeholder="Ex: 12345"
-                    className="w-full bg-zinc-950 border border-zinc-800 text-white rounded-xl px-4 py-3 focus:outline-none focus:border-red-500 font-mono transition-colors"
                     required
                   />
                 </div>
