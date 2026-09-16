@@ -213,9 +213,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     // Update user data context just in case
                     setUserData(snapData as UserData);
 
-                    // Check if blocked by Geofencing or piracy
+                    // Check if blocked by Geofencing, suspension, or piracy
                     if (snapData.blocked) {
-                      alert(`Acesso bloqueado: ${snapData.blockReason === 'geofencing' ? 'Identificamos acessos distintos em locais diferentes em um curto espaço de tempo. Entre em contato com o suporte: pedagogico.insanus@gmail.com' : 'Sua conta foi bloqueada. Contate o suporte.'}`);
+                      let blockMsg = 'Sua conta foi bloqueada. Contate o suporte.';
+                      if (snapData.blockReason === 'geofencing') {
+                        blockMsg = 'Identificamos acessos distintos em locais diferentes em um curto espaço de tempo. Entre em contato com o suporte: pedagogico.insanus@gmail.com';
+                      } else if (snapData.blockReason === 'suspension') {
+                        if (snapData.suspendedUntil) {
+                          const untilDate = new Date(snapData.suspendedUntil);
+                          const formattedDate = untilDate.toLocaleString('pt-BR', {
+                            day: '2-digit', month: '2-digit', year: 'numeric',
+                            hour: '2-digit', minute: '2-digit'
+                          });
+                          blockMsg = `Seu acesso foi suspenso temporariamente até ${formattedDate}.`;
+                        } else {
+                          blockMsg = 'Seu acesso foi suspenso temporariamente pela administração.';
+                        }
+                      } else if (snapData.blockReason) {
+                        blockMsg = `Motivo do bloqueio: ${snapData.blockReason}`;
+                      }
+                      alert(`Acesso bloqueado: ${blockMsg}`);
                       signOut(auth);
                       return;
                     }

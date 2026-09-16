@@ -338,7 +338,6 @@ export const getStudentsPaginated = async (
 export const getBlockedStudents = async (): Promise<Student[]> => {
   const q = query(
     collection(db, 'users'),
-    where('role', '==', 'student'),
     where('blocked', '==', true)
   );
   const snapshot = await getDocs(q);
@@ -354,7 +353,6 @@ export const getBlockedStudents = async (): Promise<Student[]> => {
 export const getWhitelistStudents = async (): Promise<Student[]> => {
   const q = query(
     collection(db, 'users'),
-    where('role', '==', 'student'),
     where('isException', '==', true)
   );
   const snapshot = await getDocs(q);
@@ -417,7 +415,7 @@ export const searchStudentsGlobal = async (searchTerm: string): Promise<Student[
   snapshots.forEach(snapshot => {
     snapshot.docs.forEach((docSnap: any) => {
       const data = docSnap.data();
-      if (data.role === 'student') {
+      if (!data.role || data.role.toLowerCase() === 'student') {
         studentMap.set(docSnap.id, toPlainObject({
           ...data,
           uid: docSnap.id
@@ -957,19 +955,32 @@ export const syncProductResourcesForStudents = async (productId: string, newReso
   console.log(`[UserService] Sincronização concluída com sucesso.`);
 };
 
-export const blockStudent = async (uid: string, reason: string) => {
+export const blockStudent = async (uid: string, reason: string, suspendedUntil: string | null = null) => {
   const userRef = doc(db, 'users', uid);
-  await updateDoc(userRef, { blocked: true, blockReason: reason });
+  await updateDoc(userRef, { 
+    blocked: true, 
+    blockReason: reason, 
+    suspendedUntil: suspendedUntil 
+  });
 };
 
 export const unblockStudent = async (uid: string) => {
   const userRef = doc(db, 'users', uid);
-  await updateDoc(userRef, { blocked: false, blockReason: '' });
+  await updateDoc(userRef, { 
+    blocked: false, 
+    blockReason: '', 
+    suspendedUntil: null 
+  });
 };
 
 export const setExceptionStatus = async (uid: string, isException: boolean) => {
   const userRef = doc(db, 'users', uid);
   await updateDoc(userRef, { isException });
+};
+
+export const clearActiveSessions = async (uid: string) => {
+  const userRef = doc(db, 'users', uid);
+  await updateDoc(userRef, { activeSessionIds: [] });
 };
 
 export const userService = {
@@ -993,5 +1004,6 @@ export const userService = {
   syncProductResourcesForStudents,
   blockStudent,
   unblockStudent,
-  setExceptionStatus
+  setExceptionStatus,
+  clearActiveSessions
 };

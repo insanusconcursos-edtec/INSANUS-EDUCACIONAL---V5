@@ -872,9 +872,29 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
           isStudent = true;
         }
 
-        // Se estiver bloqueado previamente, já retorna erro
+        // Se estiver bloqueado previamente, verifica se expirou ou já retorna erro
         if (udata?.blocked) {
-           return res.status(403).json({ success: false, blocked: true, blockReason: udata.blockReason });
+           if (udata.suspendedUntil) {
+             const untilDate = new Date(udata.suspendedUntil);
+             if (now > untilDate) {
+               // A suspensão expirou! Desbloquear automaticamente
+               await userRef.update({ blocked: false, blockReason: '', suspendedUntil: null });
+             } else {
+               const formatOptions: Intl.DateTimeFormatOptions = { 
+                 day: '2-digit', month: '2-digit', year: 'numeric', 
+                 hour: '2-digit', minute: '2-digit' 
+               };
+               const formattedDate = untilDate.toLocaleString('pt-BR', formatOptions);
+               return res.status(403).json({ 
+                 success: false, 
+                 blocked: true, 
+                 blockReason: 'suspension', 
+                 blockDetails: `Sua conta está suspensa temporariamente até ${formattedDate}.` 
+               });
+             }
+           } else {
+             return res.status(403).json({ success: false, blocked: true, blockReason: udata.blockReason });
+           }
         }
 
         if (isStudent && sessionId && !udata?.isException) {
