@@ -340,35 +340,41 @@ export default function StandaloneCheckout() {
       if (!offerId) return;
       try {
         const result = await getProductByOfferId(offerId);
-        if (result && result.offer.isActive) {
-          setProduct(result.product);
-          setOffer(result.offer);
+        if (result) {
+          if (result.product.active === false) {
+            setError('Este produto não está disponível para vendas no momento.');
+          } else if (!result.offer.isActive) {
+            setError('Esta oferta não está mais disponível ou é inválida.');
+          } else {
+            setProduct(result.product);
+            setOffer(result.offer);
 
-          // Ajusta método de pagamento padrão se o atual não for permitido
-          const allowed = result.offer.paymentMethods || { creditCard: true, pix: true, boleto: true };
-          if (paymentMethod === 'credit_card' && !allowed.creditCard) {
-            if (allowed.pix) setPaymentMethod('pix');
-            else if (allowed.boleto) setPaymentMethod('ticket');
-          } else if (paymentMethod === 'pix' && !allowed.pix) {
-            if (allowed.creditCard) setPaymentMethod('credit_card');
-            else if (allowed.boleto) setPaymentMethod('ticket');
-          } else if (paymentMethod === 'ticket' && !allowed.boleto) {
-            if (allowed.creditCard) setPaymentMethod('credit_card');
-            else if (allowed.pix) setPaymentMethod('pix');
-          }
+            // Ajusta método de pagamento padrão se o atual não for permitido
+            const allowed = result.offer.paymentMethods || { creditCard: true, pix: true, boleto: true };
+            if (paymentMethod === 'credit_card' && !allowed.creditCard) {
+              if (allowed.pix) setPaymentMethod('pix');
+              else if (allowed.boleto) setPaymentMethod('ticket');
+            } else if (paymentMethod === 'pix' && !allowed.pix) {
+              if (allowed.creditCard) setPaymentMethod('credit_card');
+              else if (allowed.boleto) setPaymentMethod('ticket');
+            } else if (paymentMethod === 'ticket' && !allowed.boleto) {
+              if (allowed.creditCard) setPaymentMethod('credit_card');
+              else if (allowed.pix) setPaymentMethod('pix');
+            }
 
-          // If it's a presential event, load event details
-          if (result.product.type === 'EVENTO_PRESENCIAL' && result.product.linkedResources?.presentialEvents?.[0]) {
-            const eventId = result.product.linkedResources.presentialEvents[0];
-            const eventData = await presentialEventService.getEventById(eventId);
-            setEvent(eventData);
+            // If it's a presential event, load event details
+            if (result.product.type === 'EVENTO_PRESENCIAL' && result.product.linkedResources?.presentialEvents?.[0]) {
+              const eventId = result.product.linkedResources.presentialEvents[0];
+              const eventData = await presentialEventService.getEventById(eventId);
+              setEvent(eventData);
 
-            if (result.offer.lotUrgencyEnabled && result.offer.lotUrgencyType === 'quantity') {
-              try {
-                const count = await presentialEventService.getRegistrationsCount(eventId);
-                setRegistrationsCount(count);
-              } catch (err) {
-                console.error("Error fetching registrations count:", err);
+              if (result.offer.lotUrgencyEnabled && result.offer.lotUrgencyType === 'quantity') {
+                try {
+                  const count = await presentialEventService.getRegistrationsCount(eventId);
+                  setRegistrationsCount(count);
+                } catch (err) {
+                  console.error("Error fetching registrations count:", err);
+                }
               }
             }
           }

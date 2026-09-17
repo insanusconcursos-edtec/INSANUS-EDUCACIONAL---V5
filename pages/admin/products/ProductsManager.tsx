@@ -243,9 +243,20 @@ export default function ProductsManager() {
                             <Image className="text-zinc-500" size={24} />
                           </div>
                         )}
-                        <span className="text-sm font-bold text-white whitespace-normal line-clamp-2 uppercase tracking-tight">
-                          {product.name}
-                        </span>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-sm font-bold text-white whitespace-normal line-clamp-2 uppercase tracking-tight">
+                            {product.name}
+                          </span>
+                          {product.active === false ? (
+                            <span className="inline-flex self-start px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-red-950/40 text-red-400 border border-red-900/30">
+                              Inativo / Suspenso
+                            </span>
+                          ) : (
+                            <span className="inline-flex self-start px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-emerald-950/40 text-emerald-400 border border-emerald-900/30">
+                              Ativo
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-6 py-4 font-bold text-white font-mono">
@@ -351,9 +362,20 @@ export default function ProductsManager() {
                               <Image className="text-zinc-500" size={24} />
                             </div>
                           )}
-                          <span className="text-sm font-bold text-white whitespace-normal line-clamp-2 uppercase tracking-tight">
-                            {product.name}
-                          </span>
+                          <div className="flex flex-col gap-1">
+                            <span className="text-sm font-bold text-white whitespace-normal line-clamp-2 uppercase tracking-tight">
+                              {product.name}
+                            </span>
+                            {product.active === false ? (
+                              <span className="inline-flex self-start px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-red-950/40 text-red-400 border border-red-900/30">
+                                Inativo / Suspenso
+                              </span>
+                            ) : (
+                              <span className="inline-flex self-start px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-emerald-950/40 text-emerald-400 border border-emerald-900/30">
+                                Ativo
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">

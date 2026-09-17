@@ -44,8 +44,9 @@ const SalesPage: React.FC = () => {
 
                 // 2. Filtro de Afiliação: 
                 // Mostramos apenas produtos com afiliação ativa ou campo affiliate_enabled TRUE.
+                // Produtos inativos/desativados são ocultados por completo.
                 const finalProducts = baseProducts.filter(p => 
-                    p.affiliate_enabled === true || p.offers?.some(o => o.isAffiliationEnabled && o.isActive)
+                    p.active !== false && (p.affiliate_enabled === true || p.offers?.some(o => o.isAffiliationEnabled && o.isActive))
                 );
 
                 setProducts(finalProducts);

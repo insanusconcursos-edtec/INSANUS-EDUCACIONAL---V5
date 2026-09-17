@@ -42,6 +42,7 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
   const [accessDays, setAccessDays] = useState(product?.accessDays || 365);
   const [coverUrl, setCoverUrl] = useState(product?.coverUrl || '');
   const [checkoutCoverUrl, setCheckoutCoverUrl] = useState(product?.checkoutCoverUrl || '');
+  const [active, setActive] = useState<boolean>(product?.active !== false);
   const [isUploading, setIsUploading] = useState(false);
   const [isUploadingCheckout, setIsUploadingCheckout] = useState(false);
   const [searchTerms] = useState({ plans: '', courses: '', classes: '', simulated: '', liveEvents: '', presentialEvents: '' });
@@ -144,6 +145,7 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
       accessDays,
       coverUrl,
       checkoutCoverUrl,
+      active,
       linkedResources: {
         plans: linkedPlans,
         onlineCourses: linkedCourses,
@@ -303,7 +305,7 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
               <h3 className="text-sm font-black text-white uppercase tracking-[0.2em]">Informações Gerais</h3>
             </div>
             <div className="p-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8">
                 <div className="md:col-span-2">
                   <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
                     Nome Interno do Produto *
@@ -392,6 +394,20 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
                     </div>
                   )
                 )}
+
+                <div>
+                  <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
+                    Status de Vendas *
+                  </label>
+                  <select
+                    value={active ? 'true' : 'false'}
+                    onChange={(e) => setActive(e.target.value === 'true')}
+                    className="w-full bg-zinc-950 border border-zinc-800 text-white rounded-xl px-4 py-3 focus:outline-none focus:border-red-500 appearance-none transition-colors font-bold"
+                  >
+                    <option value="true">ATIVO (Liberado)</option>
+                    <option value="false">INATIVO (Bloqueado)</option>
+                  </select>
+                </div>
               </div>
             </div>
           </section>

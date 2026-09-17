@@ -65,6 +65,7 @@ export interface Product {
   offers?: ProductOffer[]; // Novo: Sistema de múltiplas ofertas
   coproduction?: ProductSplit[]; // Novo: Sistema de coprodução/split
   affiliate_enabled?: boolean; // Novo: Habilita afiliação no nível do produto
+  active?: boolean; // Novo: Habilita inativação do produto
   liveEventIds?: string[]; // IDs dos eventos vinculados diretamente
   createdAt?: any;
   updatedAt?: any;
