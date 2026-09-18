@@ -21,7 +21,7 @@ export default defineConfig(({ mode }) => {
     // E injeta a API_KEY se disponível
     define: {
       'process.env': {
-        API_KEY: JSON.stringify(env.API_KEY || ''),
+        API_KEY: JSON.stringify(env.API_KEY || env.GEMINI_API_KEY || ''),
         NODE_ENV: JSON.stringify(mode)
       }
     },
