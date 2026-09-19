@@ -1658,11 +1658,30 @@ export const anticipateAndShiftGoals = async (
     }
   });
 
-  // Metas que serão redistribuídas (removendo simulados e revisões espaçadas)
-  let tasksToShift = allFutureTasks.filter(t => t.planId === planId && t.status === 'pending' && !t.isSpacedReview && t.type !== 'simulado' && t.type !== 'SIMULADO');
+  // Metas concluídas na fonte da verdade (Edital Progress e Schedules concluídas)
+  const completedMetaIds = await getStudentCompletedMetas(userId, planId);
 
-  // Metas que ficarão fixadas onde estão (incluindo metas de outros planos)
-  const fixedTasks = allFutureTasks.filter(t => t.planId !== planId || t.status !== 'pending' || t.isSpacedReview || t.type === 'simulado' || t.type === 'SIMULADO');
+  // Metas que serão redistribuídas (removendo simulados, revisões espaçadas e as já concluídas)
+  let tasksToShift = allFutureTasks.filter(t => {
+    const canonicalId = String(t.taskId || t.metaId || t.id).trim();
+    return t.planId === planId && 
+           t.status === 'pending' && 
+           !t.isSpacedReview && 
+           t.type !== 'simulado' && 
+           t.type !== 'SIMULADO' &&
+           !completedMetaIds.has(canonicalId);
+  });
+
+  // Metas que ficarão fixadas onde estão (incluindo metas de outros planos ou que já estão concluídas)
+  const fixedTasks = allFutureTasks.filter(t => {
+    const canonicalId = String(t.taskId || t.metaId || t.id).trim();
+    return t.planId !== planId || 
+           t.status !== 'pending' || 
+           t.isSpacedReview || 
+           t.type === 'simulado' || 
+           t.type === 'SIMULADO' ||
+           completedMetaIds.has(canonicalId);
+  });
 
   // Reagrupar metas fatiadas (mesmo taskId) para reconstruir a duração total antes de redistribuir
   const mergedTasksMap = new Map();

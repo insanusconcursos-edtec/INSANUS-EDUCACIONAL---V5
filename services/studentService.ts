@@ -209,7 +209,20 @@ export const toggleGoalStatus = async (
   const snapshot = await getDocs(schedulesRef);
   
   let found = false;
-  const canonicalId = String(eventId).trim();
+  let canonicalId = String(eventId).trim();
+
+  // Tenta resolver o canonicalId real (ID do edital) a partir do item no calendário para evitar IDs temporários aleatórios
+  for (const docSnap of snapshot.docs) {
+      const items = (docSnap.data().items || []) as ScheduledEvent[];
+      const matched = items.find(i => String(i.id).trim() === canonicalId);
+      if (matched) {
+          const realId = matched.taskId || matched.metaId;
+          if (realId) {
+              canonicalId = String(realId).trim();
+              break;
+          }
+      }
+  }
 
   for (const docSnap of snapshot.docs) {
       const items = (docSnap.data().items || []) as ScheduledEvent[];
