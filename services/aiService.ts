@@ -1,5 +1,5 @@
 
-import { GoogleGenAI } from "@google/genai";
+import { AIMindMapNode } from "./aiService";
 
 export interface AIMindMapNode {
   id: string;
@@ -8,22 +8,13 @@ export interface AIMindMapNode {
 }
 
 /**
- * Converte arquivo (File) para Base64 limpo para envio Inline
- * Esta abordagem resolve problemas de CORS e 404 ao enviar arquivos locais
+ * Converte arquivo (File) para base64.
  */
-export async function fileToGenerativePart(file: File): Promise<{ inlineData: { data: string; mimeType: string } }> {
+async function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
-      // O result vem como "data:application/pdf;base64,XYZ..."
-      // Pegamos apenas a parte XYZ (Base64 puro)
-      const base64Data = (reader.result as string).split(',')[1];
-      resolve({
-        inlineData: {
-          data: base64Data,
-          mimeType: file.type || "application/pdf",
-        },
-      });
+      resolve(reader.result as string);
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
@@ -31,94 +22,84 @@ export async function fileToGenerativePart(file: File): Promise<{ inlineData: { 
 }
 
 /**
- * Função Principal: Gera a Estrutura do Mapa Mental via IA
+ * Função Principal: Gera a Estrutura do Mapa Mental via IA usando a rota de API segura do servidor
  * @param pdfFile Arquivo PDF ou Imagem para análise
  */
 export async function generateMindMapStructure(pdfFile: File): Promise<AIMindMapNode> {
   try {
-    const apiKey = process.env.API_KEY || '';
-    if (!apiKey) {
-        console.warn("API Key não encontrada. Verifique seu arquivo .env ou configurações da Vercel.");
+    if (!pdfFile) throw new Error("Nenhum arquivo PDF fornecido para a IA.");
+
+    console.log("[aiService] Convertendo arquivo para base64...");
+    const base64 = await fileToBase64(pdfFile);
+
+    console.log("[aiService] Enviando requisição para a API segura (/api/generate-mindmap)...");
+    const response = await fetch('/api/generate-mindmap', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        files: [
+          {
+            name: pdfFile.name,
+            type: pdfFile.type || "application/pdf",
+            base64: base64
+          }
+        ],
+        prompt: "Crie uma estrutura detalhada e profunda focada nos principais tópicos e detalhes do material de estudo."
+      })
+    });
+
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || "Erro ao gerar o mapa mental via IA.");
     }
 
-    if (!pdfFile) throw new Error("Nenhum arquivo PDF fornecido para a IA.");
-    
-    // INICIALIZAÇÃO TARDIA (LAZY) - Previne crash no boot da aplicação
-    const ai = new GoogleGenAI({ apiKey });
+    const flatNodes = result.nodes;
+    if (!flatNodes || !Array.isArray(flatNodes) || flatNodes.length === 0) {
+      throw new Error("Estrutura inválida retornada pela API.");
+    }
 
-    console.log("1. Preparando arquivo para envio (Base64)...");
-    const pdfPart = await fileToGenerativePart(pdfFile);
+    console.log(`[aiService] Recebidos ${flatNodes.length} nós planos do servidor. Convertendo para árvore hierárquica...`);
 
-    const prompt = `
-      Você é um Professor Especialista em Concursos Públicos e Didática.
-      Tarefa: Analise o conteúdo deste arquivo PDF e crie uma Árvore de Mapa Mental altamente didática.
+    // Encontra o nó raiz (type === 'root' ou parentId ausente)
+    const rootNode = flatNodes.find((n: any) => !n.parentId || n.type === 'root') || flatNodes[0];
+    if (!rootNode) {
+      throw new Error("Nenhum nó raiz encontrado no mapa mental gerado.");
+    }
 
-      REGRA CRÍTICA DE FORMATO:
-      Retorne APENAS um objeto JSON válido. Não use blocos de código markdown (\`\`\`json).
-      O retorno deve começar com '{' e terminar com '}'.
+    // Cria o mapeamento de ID -> Nó com lista de filhos
+    const map = new Map<string, AIMindMapNode>();
+    flatNodes.forEach((node: any) => {
+      map.set(node.id, {
+        id: node.id,
+        label: node.label || 'Sem título',
+        children: []
+      });
+    });
 
-      ESTRUTURA DO JSON (Recursiva):
-      {
-        "id": "root",
-        "label": "TEMA CENTRAL DO DOCUMENTO",
-        "children": [
-          {
-            "id": "uuid-temp-1",
-            "label": "<b>Conceito Principal</b>",
-            "children": [
-               { 
-                 "id": "uuid-temp-2", 
-                 "label": "Detalhe curto ou exemplo", 
-                 "children": [] 
-               }
-            ]
-          }
-        ]
-      }
-
-      DIRETRIZES PEDAGÓGICAS:
-      1. Seja profundo: O mapa deve ter pelo menos 3 níveis hierárquicos (Tema > Tópico > Detalhe).
-      2. Seja sintético: Os textos dos nós (labels) devem ser curtos (máx 8 palavras).
-      3. Use formatação: Destaque palavras-chave importantes usando tags <b>negrito</b>.
-      4. Foco no conteúdo: Ignore índices, bibliografias ou textos introdutórios irrelevantes.
-    `;
-
-    console.log("2. Enviando requisição para Gemini 3 Flash...");
-    
-    // Usando 'gemini-3-flash-preview' para Basic Text Tasks, ou 'gemini-3-pro-preview' para complexas.
-    // Estruturação de mapa mental é uma tarefa de texto.
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', 
-      contents: {
-        parts: [
-            pdfPart, 
-            { text: prompt }
-        ]
-      },
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.7,
+    // Vincula cada nó ao seu pai correspondente
+    flatNodes.forEach((node: any) => {
+      if (node.parentId && node.id !== rootNode.id) {
+        const parent = map.get(node.parentId);
+        const child = map.get(node.id);
+        if (parent && child) {
+          parent.children = parent.children || [];
+          parent.children.push(child);
+        }
       }
     });
 
-    console.log("3. Resposta da IA recebida.");
-
-    const text = response.text;
-    if (!text) throw new Error("A IA retornou uma resposta vazia.");
-
-    // Limpeza de segurança para garantir JSON válido
-    const jsonString = text.replace(/```json|```/g, "").trim();
-    
-    return JSON.parse(jsonString) as AIMindMapNode;
-
-  } catch (error: any) {
-    console.error("ERRO NA GERAÇÃO IA:", error);
-    
-    // Tratamento de erros comuns
-    if (error.message?.includes('404')) {
-        throw new Error("Modelo não encontrado ou API Key inválida. Verifique se sua chave tem acesso ao 'gemini-3-flash-preview'.");
+    const nestedTree = map.get(rootNode.id);
+    if (!nestedTree) {
+      throw new Error("Erro ao estruturar árvore hierárquica do mapa mental.");
     }
 
-    throw new Error(`Falha ao gerar mapa: ${error.message}`);
+    return nestedTree;
+
+  } catch (error: any) {
+    console.error("[aiService] ERRO NA GERAÇÃO IA:", error);
+    throw new Error(`Falha ao gerar mapa: ${error.message || error.toString()}`);
   }
 }
+

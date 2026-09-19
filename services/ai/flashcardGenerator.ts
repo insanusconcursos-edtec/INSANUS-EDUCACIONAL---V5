@@ -1,210 +1,80 @@
 
-import { GoogleGenAI } from "@google/genai";
 import { Flashcard } from "../metaService";
 
-// ==================================================================================
-// ÁREA DE DEBUG DE CONEXÃO
-// ==================================================================================
-
-// Removido inicialização global para evitar crash se process.env for undefined
-// const ai = new GoogleGenAI({ apiKey: API_KEY }); <-- CAUSADOR DO CRASH
-
-interface AIFlashcardResult {
-  question: string;
-  answer: string;
-}
-
 /**
- * Converte arquivo (File) para o formato Part esperado pelo Gemini SDK
- * Remove o prefixo Data URI para enviar apenas o payload Base64 limpo.
+ * Converte arquivo (File) para base64.
  */
-async function fileToGenerativePart(file: File): Promise<{ inlineData: { data: string; mimeType: string } }> {
+async function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    
     reader.onloadend = () => {
-      const result = reader.result as string;
-      
-      // Extrai apenas a parte Base64 após a vírgula
-      // Ex: "data:application/pdf;base64,JVBERi0..." -> "JVBERi0..."
-      const base64Data = result.includes(',') ? result.split(',')[1] : result;
-
-      console.log(`[FlashcardGenerator] Arquivo preparado: ${file.name} (${file.type}). Bytes: ${base64Data.length}`);
-
-      resolve({
-        inlineData: {
-          data: base64Data,
-          mimeType: file.type || "application/pdf",
-        },
-      });
+      resolve(reader.result as string);
     };
-    
-    reader.onerror = (error) => {
-      console.error("[FlashcardGenerator] Erro ao ler arquivo:", error);
-      reject(error);
-    };
-    
+    reader.onerror = reject;
     reader.readAsDataURL(file);
   });
 }
 
 /**
- * Gera Flashcards a partir de múltiplos arquivos PDF usando Gemini
+ * Gera Flashcards a partir de múltiplos arquivos PDF usando a rota de API segura do servidor
  */
 export async function generateFlashcardsFromDocuments(
   files: File[],
   quantity?: number | null,
   customPrompt?: string | null
 ): Promise<Flashcard[]> {
-  const API_KEY = process.env.API_KEY || '';
-  
-  // Log de Diagnóstico (Mascarado para segurança no console)
-  const maskedKey = API_KEY 
-    ? `${API_KEY.substring(0, 6)}...${API_KEY.substring(API_KEY.length - 4)}` 
-    : "UNDEFINED/VAZIA";
-
   try {
-    // 1. Validação Rigorosa da Key
-    if (!API_KEY) {
-      console.error("[FlashcardGenerator] ERRO FATAL: API Key não encontrada.");
-      throw new Error("Erro de Configuração: API Key do Google (process.env.API_KEY) não foi encontrada.");
-    }
-
-    // INICIALIZAÇÃO TARDIA (LAZY)
-    const ai = new GoogleGenAI({ apiKey: API_KEY });
-
     if (!files || files.length === 0) {
       throw new Error("Nenhum arquivo fornecido.");
     }
 
-    console.log(`[FlashcardGenerator] Processando ${files.length} arquivos com Gemini 3 Flash...`);
+    console.log(`[FlashcardGenerator] Convertendo ${files.length} arquivos para base64...`);
 
-    // 2. Preparar Arquivos (Todos em paralelo)
-    const fileParts = await Promise.all(files.map(fileToGenerativePart));
+    const filesBase64 = await Promise.all(
+      files.map(async (file) => {
+        const base64 = await fileToBase64(file);
+        return {
+          name: file.name,
+          type: file.type || "application/pdf",
+          base64: base64
+        };
+      })
+    );
 
-    // Determine quantity instructions
-    let quantityInstruction = "";
-    if (quantity && quantity > 0) {
-      quantityInstruction = `Gere EXATAMENTE ${quantity} flashcards de alta qualidade focados no conteúdo dos documentos. Não gere mais nem menos do que ${quantity} cards.`;
-    } else {
-      // AI decides based on pdf size/count
-      const totalSizeMB = files.reduce((acc, f) => acc + f.size, 0) / 1024 / 1024;
-      const estimatedCount = Math.min(50, Math.max(10, Math.round(totalSizeMB * 8)));
-      quantityInstruction = `Determine de forma inteligente a quantidade de flashcards com base na extensão, tamanho e complexidade dos arquivos PDF enviados (tamanho total estimado em ${totalSizeMB.toFixed(2)} MB). Gere uma quantidade proporcional de cards de alta qualidade, idealmente em torno de ${estimatedCount} cards.`;
-    }
+    console.log(`[FlashcardGenerator] Enviando requisição para a API segura (/api/generate-flashcards)...`);
 
-    // Determine custom instructions or constraints
-    let customPromptInstruction = "";
-    if (customPrompt && customPrompt.trim()) {
-      customPromptInstruction = `
-      DIRETRIZES E LIMITAÇÕES DO USUÁRIO (ATENÇÃO CRÍTICA):
-      O usuário forneceu orientações adicionais que devem LIMITAR ou GUIAR estritamente o escopo da geração dos flashcards:
-      "${customPrompt.trim()}"
-      
-      Você DEVE obedecer estritamente a estas diretrizes. Se o usuário pediu para limitar a determinados artigos, seções, páginas ou tópicos, ignore todo o resto e foque APENAS na parte solicitada.
-      `;
-    }
-
-    // 3. Prompt Otimizado para JSON (Contexto Multi-Documento)
-    const prompt = `
-      Você é um sistema especialista em criar Flashcards de Estudo para Concursos Públicos.
-      
-      TAREFA:
-      Analise TODOS os documentos anexos (pode haver mais de um) e extraia os conceitos mais importantes, prazos, leis e exceções para criar flashcards de revisão (Active Recall).
-      Consolide o conhecimento de todos os arquivos em uma única lista de revisão.
-      
-      FORMATO DE RESPOSTA OBRIGATÓRIO:
-      Retorne APENAS um Array JSON puro. Sem formatação Markdown. Sem \`\`\`json.
-      
-      ${quantityInstruction}
-      
-      ${customPromptInstruction}
-      
-      SCHEMA:
-      [
-        { "question": "Pergunta objetiva?", "answer": "Resposta clara e concisa." },
-        { "question": "Defina X.", "answer": "X é ..." }
-      ]
-    `;
-
-    // 4. Chamada à API
-    // Payload Order: Text Prompt FIRST, then File Parts (conforme solicitado)
-    console.log("[FlashcardGenerator] Enviando requisição para API...");
-    
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', 
-      contents: {
-        parts: [
-            { text: prompt },
-            ...fileParts
-        ]
+    const response = await fetch('/api/generate-flashcards', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
       },
-      config: {
-        responseMimeType: "application/json", // Força modo JSON
-        temperature: 0.3,
-      }
+      body: JSON.stringify({
+        files: filesBase64,
+        prompt: customPrompt || undefined,
+        quantity: quantity || undefined
+      })
     });
 
-    console.log("[FlashcardGenerator] Resposta bruta recebida da API.");
-
-    // 5. Tratamento e Limpeza da Resposta
-    const textResponse = response.text;
+    const result = await response.json();
     
-    if (!textResponse) {
-      throw new Error("A IA retornou uma resposta vazia (null/undefined).");
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || "Erro ao gerar flashcards via IA.");
     }
 
-    // Regex robusto para remover qualquer bloco de código markdown que o modelo possa ter alucinado
-    const cleanJson = textResponse
-        .replace(/```json/gi, "") // Remove abertura ```json
-        .replace(/```/g, "")      // Remove fechamento ```
-        .trim();                  // Remove espaços extras
+    console.log(`[FlashcardGenerator] Sucesso! ${result.cards.length} cards gerados pelo servidor.`);
 
-    let rawCards: AIFlashcardResult[] = [];
-    
-    try {
-      rawCards = JSON.parse(cleanJson);
-      
-      if (!Array.isArray(rawCards)) {
-        // Tenta encontrar um array dentro do objeto se não for raiz
-        // @ts-expect-error - rawCards might be an object with a cards property
-        if (rawCards.cards && Array.isArray(rawCards.cards)) {
-            // @ts-expect-error - reassigning to a property of the object
-            rawCards = rawCards.cards;
-        } else {
-            throw new Error("O JSON retornado não é um array de cards.");
-        }
-      }
-    } catch (parseError) {
-      console.error("[FlashcardGenerator] JSON Inválido recebido:", cleanJson, parseError);
-      throw new Error("A IA gerou um texto que não é um JSON válido. Tente novamente.");
-    }
-
-    console.log(`[FlashcardGenerator] Sucesso! ${rawCards.length} cards gerados.`);
-
-    // 6. Mapeamento final
-    const processedCards: Flashcard[] = rawCards.map((card, index) => ({
-      id: `ai-${Date.now()}-${index}`,
-      front: card.question,
-      back: card.answer
+    // Mapeamento para o formato esperado pelo frontend
+    const processedCards: Flashcard[] = result.cards.map((card: any, index: number) => ({
+      id: `ai-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`,
+      front: card.front || card.question || '',
+      back: card.back || card.answer || ''
     }));
 
     return processedCards;
 
-  } catch (error) {
-    const err = error as Error;
-    console.error("[FlashcardGenerator] ERRO DETALHADO:", err);
-    
-    const msg = err.message || err.toString();
-    
-    if (msg.includes("404") || msg.includes("Not Found")) {
-      throw new Error(`Erro 404 (Modelo não encontrado ou Key inválida). Key usada: ${maskedKey}. Verifique se a API Key tem permissão para 'gemini-3-flash-preview'.`);
-    }
-
-    if (msg.includes("403") || msg.includes("Permission denied")) {
-        throw new Error("Erro 403: Sua API Key não tem permissão ou quota excedida.");
-    }
-
-    throw new Error(`Falha na IA: ${msg}`);
+  } catch (error: any) {
+    console.error("[FlashcardGenerator] ERRO DETALHADO:", error);
+    throw new Error(`Falha na IA: ${error.message || error.toString()}`);
   }
 }
+
