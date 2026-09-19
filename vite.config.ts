@@ -10,6 +10,15 @@ const __dirname = path.dirname(__filename);
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   
+  // Captura as chaves do sistema (Vercel) ou do arquivo .env
+  const apiKey = process.env.API_KEY || 
+                 process.env.GEMINI_API_KEY || 
+                 process.env.MINHA_CHAVE_GEMINI || 
+                 env.API_KEY || 
+                 env.GEMINI_API_KEY || 
+                 env.MINHA_CHAVE_GEMINI || 
+                 '';
+
   return {
     plugins: [react()],
     resolve: {
@@ -21,7 +30,7 @@ export default defineConfig(({ mode }) => {
     // E injeta a API_KEY se disponível
     define: {
       'process.env': {
-        API_KEY: JSON.stringify(env.API_KEY || env.GEMINI_API_KEY || env.MINHA_CHAVE_GEMINI || ''),
+        API_KEY: JSON.stringify(apiKey),
         NODE_ENV: JSON.stringify(mode)
       }
     },
