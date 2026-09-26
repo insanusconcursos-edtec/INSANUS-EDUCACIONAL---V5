@@ -19,6 +19,7 @@ const StudentNavbar: React.FC = () => {
   const [hasLiveEvent, setHasLiveEvent] = useState(false);
   const [activePlanId, setActivePlanId] = useState<string | null>(null);
   const [isChatDisabled, setIsChatDisabled] = useState(false);
+  const [linkedCourses, setLinkedCourses] = useState<any[]>([]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -85,10 +86,12 @@ const StudentNavbar: React.FC = () => {
                     const planData = planSnap.data();
                     setActivePlanTitle(planData.title);
                     setIsChatDisabled(!!planData.isChatDisabled);
+                    setLinkedCourses(planData.linkedCourses || []);
                 }
             } else {
                 setActivePlanTitle(null);
                 setIsChatDisabled(false);
+                setLinkedCourses([]);
             }
 
             if (planId && data.planStats && data.planStats[planId]) {
@@ -109,8 +112,8 @@ const StudentNavbar: React.FC = () => {
     return `${hours.toString().padStart(2, '0')}h ${minutes.toString().padStart(2, '0')}m`;
   };
 
-  // Level 2 Nav Items
-  const allNavItems = [
+  // Level 2 Nav Items (Base List)
+  const defaultNavItems = [
     { label: 'PLANOS', path: '/app/dashboard/planos', icon: <GraduationCap className="w-5 h-5" /> },
     { label: 'METAS DE HOJE', path: '/app/dashboard', icon: <Target className="w-5 h-5" /> },
     { label: 'CALENDÁRIO', path: '/app/calendar', icon: <CalendarDays className="w-5 h-5" /> },
@@ -146,8 +149,19 @@ const StudentNavbar: React.FC = () => {
       ),
       isSpecial: true 
     },
-    { label: 'CONFIGURAÇÃO', path: '/app/config', icon: <Settings className="w-5 h-5" /> },
   ];
+
+  // Dynamically append linked courses as navigation items
+  const courseNavItems = (linkedCourses || []).map(lc => ({
+    label: lc.tabName.toUpperCase(),
+    path: `/app/dashboard?tab=course_${lc.courseId}`,
+    icon: <GraduationCap className="w-5 h-5" />,
+    isSpecial: true
+  }));
+
+  const configItem = { label: 'CONFIGURAÇÃO', path: '/app/config', icon: <Settings className="w-5 h-5" /> };
+
+  const allNavItems = [...defaultNavItems, ...courseNavItems, configItem];
 
   // Filter based on active plan and if chat is disabled
   let planNavItems = activePlanId 

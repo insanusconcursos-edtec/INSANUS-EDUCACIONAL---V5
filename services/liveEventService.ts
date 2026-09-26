@@ -101,21 +101,50 @@ export const liveEventService = {
   },
 
   deleteLiveEvent: async (id: string, thumbnailUrl?: string): Promise<void> => {
+    const docRef = doc(db, COLLECTION_NAME, id);
+    let finalThumbnailUrl = thumbnailUrl;
+    let materials: LiveEventMaterial[] = [];
+
+    try {
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data() as LiveEvent;
+        if (data.thumbnailUrl) {
+          finalThumbnailUrl = data.thumbnailUrl;
+        }
+        if (data.materials && Array.isArray(data.materials)) {
+          materials = data.materials;
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching live event data before deletion:', error);
+    }
+
     // Delete thumbnail from storage if it exists
-    if (thumbnailUrl) {
+    if (finalThumbnailUrl) {
       try {
-        // Extract file path from URL (basic approach, might need refinement depending on exact URL structure)
-        // A safer way if we don't know the exact path is to use refFromURL if available, but ref(storage, url) often works
-        const fileRef = ref(storage, thumbnailUrl);
+        const fileRef = ref(storage, finalThumbnailUrl);
         await deleteObject(fileRef);
       } catch (error) {
         console.error('Error deleting thumbnail from storage:', error);
-        // Continue to delete the document even if image deletion fails
+      }
+    }
+
+    // Delete all materials (PDFs, etc.) from storage if they exist
+    if (materials && materials.length > 0) {
+      for (const mat of materials) {
+        if (mat.url) {
+          try {
+            const fileRef = ref(storage, mat.url);
+            await deleteObject(fileRef);
+          } catch (error) {
+            console.error(`Error deleting material "${mat.title}" from storage:`, error);
+          }
+        }
       }
     }
 
     // Delete document
-    const docRef = doc(db, COLLECTION_NAME, id);
     await deleteDoc(docRef);
   },
 

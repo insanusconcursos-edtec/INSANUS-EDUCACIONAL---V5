@@ -30,6 +30,8 @@ import { CourseReviewDashboard } from '../../components/student/courses/reviews/
 import { TopicCompletionModal } from '../../components/student/dashboard/TopicCompletionModal';
 import { courseReviewService } from '../../services/courseReviewService';
 import { useNavigate } from 'react-router-dom';
+import { CourseDetails } from '../../components/student/courses/CourseDetails';
+import { courseService } from '../../services/courseService';
 
 import { useSpacedReviewModal } from '../../contexts/SpacedReviewModalContext';
 import { PlanHeroBanner } from '../../components/student/PlanHeroBanner';
@@ -41,6 +43,45 @@ import { getPlanById } from '../../services/planService';
 import { toPlainObject } from '../../services/firestoreUtils';
 import { subscribeToAnnouncements, Announcement } from '../../services/announcementService';
 import { AnnouncementPopUp } from '../../components/student/announcements/AnnouncementPopUp';
+
+const LinkedCourseTabContent: React.FC<{ courseId: string; onBack: () => void }> = ({ courseId, onBack }) => {
+  const [course, setCourse] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadCourse = async () => {
+      setLoading(true);
+      try {
+        const c = await courseService.getCourse(courseId);
+        setCourse(c);
+      } catch (error) {
+        console.error("Erro ao carregar curso vinculado:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (courseId) loadCourse();
+  }, [courseId]);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4">
+        <Loader2 size={40} className="animate-spin text-red-600" />
+        <p className="text-zinc-500 text-xs font-bold uppercase tracking-widest">Carregando curso...</p>
+      </div>
+    );
+  }
+
+  if (!course) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] text-center p-6">
+        <p className="text-zinc-400 text-sm font-bold uppercase tracking-wider">Curso não encontrado ou indisponível.</p>
+      </div>
+    );
+  }
+
+  return <CourseDetails course={course} onBack={onBack} />;
+};
 
 const StudentDashboard: React.FC = () => {
   const { currentUser, userData } = useAuth();
@@ -1318,6 +1359,20 @@ const StudentDashboard: React.FC = () => {
   const completedTodayCount = todayGoals.filter(g => g.isCompleted).length;
   const totalTodayCount = todayGoals.length;
   const progress = totalTodayCount > 0 ? (completedTodayCount / totalTodayCount) * 100 : 0;
+
+  // --- RENDERIZAÇÃO DE CURSOS VINCULADOS DINAMICAMENTE ---
+  if (currentTab && currentTab.startsWith('course_')) {
+      const targetCourseId = currentTab.replace('course_', '');
+      
+      return (
+          <div className="relative w-full min-h-screen bg-zinc-950 flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <LinkedCourseTabContent 
+              courseId={targetCourseId} 
+              onBack={() => navigate('/app/dashboard')}
+            />
+          </div>
+      );
+  }
 
   // --- RENDERIZAÇÃO DA ABA DE MENTORIA ---
   if (currentTab === 'mentorship') {

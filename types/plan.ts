@@ -23,6 +23,12 @@ export interface Cycle {
   items: CycleItem[];
 }
 
+export interface LinkedCourse {
+  courseId: string;
+  tabName: string;
+  visibleTabs: string[];
+}
+
 export interface Plan {
   id?: string;
   title: string;
@@ -45,6 +51,7 @@ export interface Plan {
   linkedSimuladoClassId?: string;
   simuladosVinculados?: string[];
   linkedMentors?: string[]; // IDs dos mentores vinculados
+  linkedCourses?: LinkedCourse[]; // Cursos online vinculados com abas customizadas
   isGenerationBlocked?: boolean;
   isChatDisabled?: boolean;
   createdAt?: any;

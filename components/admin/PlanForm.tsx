@@ -4,6 +4,8 @@ import { Plan, Category, createPlan, updatePlan, uploadPlanImage } from '../../s
 import { getSimulatedClasses, SimulatedClass } from '../../services/simulatedService';
 import { subscribeToMentors } from '../../services/mentorService';
 import { Mentor } from '../../types/chat';
+import { courseService } from '../../services/courseService';
+import { OnlineCourse } from '../../types/course';
 
 interface PlanFormProps {
   isOpen: boolean;
@@ -23,6 +25,7 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
     purchaseLink: '',
     linkedSimuladoClassId: '', // NOVO: Campo de vínculo
     linkedMentors: [] as string[],
+    linkedCourses: [] as { courseId: string; tabName: string; visibleTabs: string[] }[],
     isGenerationBlocked: false,
     isChatDisabled: false
   });
@@ -36,14 +39,16 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
   // Estado para as turmas de simulados e mentores
   const [simClasses, setSimClasses] = useState<SimulatedClass[]>([]);
   const [availableMentors, setAvailableMentors] = useState<Mentor[]>([]);
+  const [availableCourses, setAvailableCourses] = useState<OnlineCourse[]>([]);
 
   useEffect(() => {
-    // Busca turmas e mentores disponíveis ao abrir
+    // Busca turmas, mentores e cursos disponíveis ao abrir
     let unsubscribeMentors: () => void;
 
     if (isOpen) {
         getSimulatedClasses().then(setSimClasses).catch(console.error);
         unsubscribeMentors = subscribeToMentors(setAvailableMentors);
+        courseService.getCourses().then(setAvailableCourses).catch(console.error);
     }
 
     if (planToEdit) {
@@ -56,6 +61,7 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
         purchaseLink: planToEdit.purchaseLink,
         linkedSimuladoClassId: planToEdit.linkedSimuladoClassId || '',
         linkedMentors: planToEdit.linkedMentors || [],
+        linkedCourses: planToEdit.linkedCourses || [],
         isGenerationBlocked: planToEdit.isGenerationBlocked || false,
         isChatDisabled: planToEdit.isChatDisabled || false
       });
@@ -71,6 +77,7 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
         purchaseLink: '',
         linkedSimuladoClassId: '',
         linkedMentors: [],
+        linkedCourses: [],
         isGenerationBlocked: false,
         isChatDisabled: false
       });
@@ -348,6 +355,135 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
                       <p className="col-span-full text-[10px] text-zinc-600 italic">Nenhum mentor cadastrado.</p>
                     )}
                 </div>
+          </div>
+
+          {/* --- VINCULAÇÃO DE CURSOS ONLINE --- */}
+          <div className="bg-[#1a1d24] p-6 rounded-2xl border border-gray-800 mb-6 mt-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-500">
+                  <GraduationCap size={20} />
+                </div>
+                <div>
+                  <h3 className="text-white font-bold text-sm uppercase tracking-wider">Cursos Online Vinculados</h3>
+                  <p className="text-gray-500 text-[10px] mt-0.5">Vincule cursos online e configure as abas visíveis aos alunos deste plano.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setFormData(prev => ({
+                    ...prev,
+                    linkedCourses: [...(prev.linkedCourses || []), { courseId: '', tabName: '', visibleTabs: ['MODULES', 'EDITAL'] }]
+                  }));
+                }}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[9px] font-black uppercase tracking-widest transition-colors flex items-center gap-1.5"
+              >
+                + Vincular Curso
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {(formData.linkedCourses || []).map((linkedCourse, index) => (
+                <div key={index} className="p-4 bg-zinc-900/60 border border-zinc-800 rounded-xl space-y-3 relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData(prev => ({
+                        ...prev,
+                        linkedCourses: (prev.linkedCourses || []).filter((_, i) => i !== index)
+                      }));
+                    }}
+                    className="absolute top-3 right-3 text-zinc-500 hover:text-red-500 transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+
+                  {/* Seleção do Curso */}
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Curso Online</label>
+                    <select
+                      value={linkedCourse.courseId}
+                      required
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setFormData(prev => {
+                          const updated = [...(prev.linkedCourses || [])];
+                          updated[index] = { ...updated[index], courseId: val };
+                          return { ...prev, linkedCourses: updated };
+                        });
+                      }}
+                      className="w-full bg-zinc-950 border border-zinc-800 text-xs text-white rounded-lg p-2.5 focus:outline-none focus:border-brand-red uppercase font-bold"
+                    >
+                      <option value="">Selecione o Curso...</option>
+                      {availableCourses.map(c => (
+                        <option key={c.id} value={c.id}>{c.title.toUpperCase()}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Nome da Aba */}
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Nome da Aba (Aluno)</label>
+                    <input
+                      type="text"
+                      value={linkedCourse.tabName}
+                      required
+                      placeholder="EX: BÔNUS - PC AC ONLINE"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setFormData(prev => {
+                          const updated = [...(prev.linkedCourses || [])];
+                          updated[index] = { ...updated[index], tabName: val };
+                          return { ...prev, linkedCourses: updated };
+                        });
+                      }}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-xs text-white placeholder-zinc-700 focus:outline-none focus:border-brand-red uppercase font-bold"
+                    />
+                  </div>
+
+                  {/* Abas Visíveis */}
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest block">Abas Visíveis no Curso</label>
+                    <div className="grid grid-cols-2 gap-2 bg-zinc-950 p-2.5 rounded-lg border border-zinc-800">
+                      {[
+                        { id: 'MODULES', label: 'Módulos' },
+                        { id: 'EDITAL', label: 'Edital' },
+                        { id: 'LIVE', label: 'Ao Vivo' },
+                        { id: 'PRESENTIAL', label: 'Presencial' }
+                      ].map(tab => {
+                        const isChecked = linkedCourse.visibleTabs?.includes(tab.id);
+                        return (
+                          <label key={tab.id} className="flex items-center gap-2 cursor-pointer text-[10px] text-zinc-400 font-bold uppercase select-none">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {
+                                setFormData(prev => {
+                                  const updated = [...(prev.linkedCourses || [])];
+                                  const currentTabs = updated[index].visibleTabs || [];
+                                  const newTabs = currentTabs.includes(tab.id)
+                                    ? currentTabs.filter(id => id !== tab.id)
+                                    : [...currentTabs, tab.id];
+                                  updated[index] = { ...updated[index], visibleTabs: newTabs };
+                                  return { ...prev, linkedCourses: updated };
+                                });
+                              }}
+                              className="w-3.5 h-3.5 rounded border-zinc-800 bg-zinc-950 text-emerald-600 focus:ring-emerald-600 focus:ring-opacity-25"
+                            />
+                            <span>{tab.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {(formData.linkedCourses || []).length === 0 && (
+                <p className="text-[10px] text-zinc-500 italic text-center">Nenhum curso online vinculado.</p>
+              )}
+            </div>
           </div>
 
           <div className="space-y-2">

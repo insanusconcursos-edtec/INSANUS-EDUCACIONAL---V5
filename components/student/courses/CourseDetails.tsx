@@ -38,6 +38,7 @@ export function CourseDetails({ course, onBack }: CourseDetailsProps) {
   const [loading, setLoading] = useState(true);
   const [loadingPresential, setLoadingPresential] = useState(false);
   const [selectedModule, setSelectedModule] = useState<CourseModule | null>(null);
+  const [linkedCourseConfig, setLinkedCourseConfig] = useState<{ courseId: string; tabName: string; visibleTabs: string[] } | null>(null);
 
   // ESTADO DE CONTEÚDOS DAS AULAS DO PRESENCIAL
   const [lessonContents, setLessonContents] = useState<Record<string, CourseContent[]>>({});
@@ -234,6 +235,26 @@ export function CourseDetails({ course, onBack }: CourseDetailsProps) {
                 
                 setDetailedProgress(detailed);
                 setCurrentPlanId(config?.currentPlanId);
+
+                // --- VINCULAÇÃO DE CURSO AO PLANO (FILTRAR ABAS) ---
+                if (config?.currentPlanId) {
+                    try {
+                        const { getPlanById } = await import('../../../services/planService');
+                        const planData = await getPlanById(config.currentPlanId);
+                        if (planData && planData.linkedCourses) {
+                            const matchingConfig = planData.linkedCourses.find((lc: any) => lc.courseId === course.id);
+                            if (matchingConfig) {
+                                setLinkedCourseConfig(matchingConfig);
+                                if (matchingConfig.visibleTabs && matchingConfig.visibleTabs.length > 0) {
+                                    setActiveTab(matchingConfig.visibleTabs[0] as any);
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.error("Erro ao carregar config de abas do plano:", err);
+                    }
+                }
+
                 const total = stats.totalLessons;
                 const completed = completedLessons.length;
                 const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -446,32 +467,37 @@ export function CourseDetails({ course, onBack }: CourseDetailsProps) {
 
           {/* SISTEMA DE ABAS (NOVO) */}
           <div className="flex items-center gap-6 md:gap-8 border-b border-gray-800 mb-8 overflow-x-auto scrollbar-none whitespace-nowrap px-1">
-            <button 
-                onClick={() => {
-                    setActiveTab('MODULES');
-                    setFocusTopicId(null);
-                }}
-                className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0
-                    ${activeTab === 'MODULES' ? 'border-[var(--plan-theme)] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}
-                `}
-            >
-                <LayoutList size={16} className="md:w-[18px] md:h-[18px]" />
-                Módulos do Curso
-            </button>
-            <button 
-                onClick={() => {
-                    setActiveTab('EDITAL');
-                    setFocusTopicId(null);
-                }}
-                className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0
-                    ${activeTab === 'EDITAL' ? 'border-[var(--plan-theme)] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}
-                `}
-            >
-                <ListTree size={16} className="md:w-[18px] md:h-[18px]" />
-                Edital Verticalizado
-            </button>
+            {(!linkedCourseConfig || linkedCourseConfig.visibleTabs?.includes('MODULES')) && (
+              <button 
+                  onClick={() => {
+                      setActiveTab('MODULES');
+                      setFocusTopicId(null);
+                  }}
+                  className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0
+                      ${activeTab === 'MODULES' ? 'border-[var(--plan-theme)] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}
+                  `}
+              >
+                  <LayoutList size={16} className="md:w-[18px] md:h-[18px]" />
+                  Módulos do Curso
+              </button>
+            )}
+            
+            {(!linkedCourseConfig || linkedCourseConfig.visibleTabs?.includes('EDITAL')) && (
+              <button 
+                  onClick={() => {
+                      setActiveTab('EDITAL');
+                      setFocusTopicId(null);
+                  }}
+                  className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0
+                      ${activeTab === 'EDITAL' ? 'border-[var(--plan-theme)] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}
+                  `}
+              >
+                  <ListTree size={16} className="md:w-[18px] md:h-[18px]" />
+                  Edital Verticalizado
+              </button>
+            )}
  
-            {courseLiveEvents.length > 0 && (
+            {courseLiveEvents.length > 0 && (!linkedCourseConfig || linkedCourseConfig.visibleTabs?.includes('LIVE')) && (
                 <button 
                     onClick={() => {
                         setActiveTab('LIVE');
@@ -486,7 +512,7 @@ export function CourseDetails({ course, onBack }: CourseDetailsProps) {
                 </button>
             )}
  
-            {course.linkedPresentialId && (
+            {course.linkedPresentialId && (!linkedCourseConfig || linkedCourseConfig.visibleTabs?.includes('PRESENTIAL')) && (
               <button 
                   onClick={() => {
                       setActiveTab('PRESENTIAL');
