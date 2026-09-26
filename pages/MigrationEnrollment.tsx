@@ -159,6 +159,17 @@ export default function MigrationEnrollment() {
       
       const enrollmentId = `mig_${crypto.randomUUID()}`;
 
+      // Buscar o título real do curso para não deixar o campo em branco no painel
+      let courseTitle = 'Curso Online';
+      try {
+        const courseSnap = await getDoc(doc(db, 'online_courses', linkData.courseId));
+        if (courseSnap.exists()) {
+          courseTitle = courseSnap.data().title || 'Curso Online';
+        }
+      } catch (courseErr) {
+        console.error('Erro ao buscar título do curso para migração:', courseErr);
+      }
+
       const userDoc = {
         uid: user.uid,
         name: formData.name,
@@ -172,6 +183,7 @@ export default function MigrationEnrollment() {
             id: enrollmentId,
             type: 'course',
             targetId: linkData.courseId,
+            title: courseTitle,
             isActive: true,
             enrollmentType: 'MIGRACAO',
             diaInicio: Timestamp.fromDate(startDate),
@@ -251,12 +263,24 @@ export default function MigrationEnrollment() {
       
       const enrollmentId = `mig_${crypto.randomUUID()}`;
 
+      // Buscar o título real do curso para não deixar o campo em branco no painel
+      let courseTitle = 'Curso Online';
+      try {
+        const courseSnap = await getDoc(doc(db, 'online_courses', linkData.courseId));
+        if (courseSnap.exists()) {
+          courseTitle = courseSnap.data().title || 'Curso Online';
+        }
+      } catch (courseErr) {
+        console.error('Erro ao buscar título do curso para migração:', courseErr);
+      }
+
       const userRef = doc(db, 'users', user.uid);
       await updateDoc(userRef, {
         access: arrayUnion({
           id: enrollmentId,
           type: 'course',
           targetId: linkData.courseId,
+          title: courseTitle,
           isActive: true,
           enrollmentType: 'MIGRACAO',
           diaInicio: Timestamp.fromDate(startDate),

@@ -465,16 +465,47 @@ const StudentAccessManager: React.FC<StudentAccessManagerProps> = ({ student: in
   };
 
   // Filtering existing access
+  // Enrich accesses that might be missing a title (e.g. legacy migrations) dynamically using the loaded lists
+  const enrichedAccess = (localStudent.access || []).map(item => {
+    if (item.title) return item;
+    
+    let resolvedTitle = '';
+    if (item.type === 'course') {
+      const c = courses.find(x => x.id === item.targetId);
+      resolvedTitle = c?.title || 'Curso Online';
+    } else if (item.type === 'plan') {
+      const p = plans.find(x => x.id === item.targetId);
+      resolvedTitle = p?.title || 'Plano de Estudos';
+    } else if (item.type === 'simulated_class') {
+      const s = simClasses.find(x => x.id === item.targetId);
+      resolvedTitle = s?.title || 'Turma de Simulado';
+    } else if (item.type === 'presential_class') {
+      const pc = presentialClasses.find(x => x.id === item.targetId);
+      resolvedTitle = pc?.name || 'Turma Presencial';
+    } else if (item.type === 'presential_event') {
+      const pe = presentialEvents.find(x => x.id === item.targetId);
+      resolvedTitle = pe?.title || 'Evento Presencial';
+    } else if (item.type === 'live_events') {
+      const le = liveEvents.find(x => x.id === item.targetId);
+      resolvedTitle = le?.title || 'Evento ao Vivo';
+    }
+    
+    return {
+      ...item,
+      title: resolvedTitle || `Recurso (${item.type})`
+    };
+  });
+
   const productAccessFromProducts = localStudent.products?.filter(a => a.isActive) || [];
-  const productAccessFromAccess = localStudent.access?.filter(a => a.type === 'product' && a.isActive) || [];
+  const productAccessFromAccess = enrichedAccess.filter(a => a.type === 'product' && a.isActive);
   const productAccess = [...productAccessFromProducts, ...productAccessFromAccess];
 
-  const planAccess = localStudent.access?.filter(a => a.type === 'plan' && a.isActive) || [];
-  const simAccess = localStudent.access?.filter(a => a.type === 'simulated_class' && a.isActive) || [];
-  const courseAccess = localStudent.access?.filter(a => a.type === 'course' && a.isActive) || [];
-  const presentialAccess = localStudent.access?.filter(a => a.type === 'presential_class' && a.isActive) || [];
-  const presentialEventAccess = localStudent.access?.filter(a => a.type === 'presential_event' && a.isActive) || [];
-  const liveEventAccess = localStudent.access?.filter(a => a.type === 'live_events' && a.isActive) || [];
+  const planAccess = enrichedAccess.filter(a => a.type === 'plan' && a.isActive);
+  const simAccess = enrichedAccess.filter(a => a.type === 'simulated_class' && a.isActive);
+  const courseAccess = enrichedAccess.filter(a => a.type === 'course' && a.isActive);
+  const presentialAccess = enrichedAccess.filter(a => a.type === 'presential_class' && a.isActive);
+  const presentialEventAccess = enrichedAccess.filter(a => a.type === 'presential_event' && a.isActive);
+  const liveEventAccess = enrichedAccess.filter(a => a.type === 'live_events' && a.isActive);
 
   return (
     <div className="fixed inset-0 z-40 bg-gray-950 pt-[100px] pb-6 flex flex-col overflow-hidden">

@@ -24,7 +24,7 @@ export const cleanObject = (obj: Record<string, any> | any[] | null | undefined)
   });
   return newObj;
 };
-import { Student } from './userService';
+import { Student, AccessItem } from './userService';
 import { Plan } from './planService';
 import { Meta } from './metaService';
 import { ScheduledEvent, generateSpacedReviews, computeSimuladoPrerequisites, fetchFullPlanData, getStudentCompletedMetas, StudentRoutine, StudyProfile } from './scheduleService';
@@ -829,3 +829,96 @@ export const getStudentsByPlan = async (planId: string) => {
 
   return enrolledStudents;
 };
+
+/**
+ * Libera o acesso em lote de alunos de uma turma presencial para outra.
+ */
+export const batchReleaseClassAccess = async (
+  sourceClassId: string,
+  targetClassId: string,
+  targetClassTitle: string,
+  days: number,
+  studentType: 'all' | 'regular' | 'scholarship',
+  keepScholarshipStatus: boolean
+): Promise<number> => {
+  const students = await getStudentsByClass(sourceClassId);
+  if (students.length === 0) return 0;
+
+  const diaInicio = new Date();
+  const diaFim = new Date();
+  diaFim.setDate(diaInicio.getDate() + days);
+
+  const startTimestamp = Timestamp.fromDate(diaInicio);
+  const endTimestamp = Timestamp.fromDate(diaFim);
+
+  interface UpdateOperation {
+    ref: any;
+    data: any;
+  }
+  const updates: UpdateOperation[] = [];
+
+  for (const student of students) {
+    const isScholarship = student.classAccess?.isScholarship || false;
+
+    // Filtra de acordo com o tipo de estudante selecionado
+    if (studentType === 'regular' && isScholarship) continue;
+    if (studentType === 'scholarship' && !isScholarship) continue;
+
+    // Determina o status de bolsista para o novo acesso
+    const newScholarshipStatus = keepScholarshipStatus ? isScholarship : false;
+
+    const accesses = student.access || [];
+    const updatedAccess = [...accesses];
+
+    // Verifica se o aluno já tem acesso à turma de destino
+    const existingTargetAccessIndex = updatedAccess.findIndex(
+      (a: AccessItem) => a.targetId === targetClassId && a.type === 'presential_class'
+    );
+
+    if (existingTargetAccessIndex !== -1) {
+      // Atualiza o acesso existente
+      updatedAccess[existingTargetAccessIndex] = {
+        ...updatedAccess[existingTargetAccessIndex],
+        isActive: true,
+        days: days,
+        diaInicio: startTimestamp,
+        diaFim: endTimestamp,
+        isScholarship: newScholarshipStatus,
+        title: targetClassTitle
+      };
+    } else {
+      // Adiciona um novo acesso
+      const newAccessItem: AccessItem = {
+        id: crypto.randomUUID(),
+        type: 'presential_class',
+        targetId: targetClassId,
+        title: targetClassTitle,
+        days: days,
+        diaInicio: startTimestamp,
+        diaFim: endTimestamp,
+        isActive: true,
+        isScholarship: newScholarshipStatus
+      };
+      updatedAccess.push(newAccessItem);
+    }
+
+    updates.push({
+      ref: doc(db, 'users', student.id || student.uid),
+      data: { access: updatedAccess }
+    });
+  }
+
+  // Commit updates in chunks of 400 to prevent exceeding Firestore batch limits
+  const chunkSize = 400;
+  for (let i = 0; i < updates.length; i += chunkSize) {
+    const chunk = updates.slice(i, i + chunkSize);
+    const chunkBatch = writeBatch(db);
+    chunk.forEach(op => {
+      chunkBatch.update(op.ref, op.data);
+    });
+    await chunkBatch.commit();
+  }
+
+  return updates.length;
+};
+
