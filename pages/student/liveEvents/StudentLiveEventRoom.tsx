@@ -167,10 +167,12 @@ export const StudentLiveEventRoom: React.FC = () => {
     const isIsolatedForUser = event.isIsolatedProduct && userAccess.isolatedProducts.includes(event.id!);
     if (isIsolatedForUser) return true;
 
-    const { plans, onlineCourses, presentialClasses, simulated } = event.accessControl;
+    const { plans = [], onlineCourses = [], presentialClasses = [], simulated = [] } = event.accessControl || {};
     
+    // Se não há recursos selecionados de controle de acesso, o evento não é público
+    // e o usuário não possui acesso ao produto isoladamente, então ninguém tem acesso (bloqueio de segurança)
     if (plans.length === 0 && onlineCourses.length === 0 && presentialClasses.length === 0 && simulated.length === 0) {
-      return true;
+      return false;
     }
 
     const hasPlanAccess = plans.some(id => userAccess.plans.includes(id));
@@ -217,6 +219,25 @@ export const StudentLiveEventRoom: React.FC = () => {
         <button 
           onClick={() => navigate(returnPath)}
           className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors mt-4"
+        >
+          Voltar para a lista
+        </button>
+      </div>
+    );
+  }
+
+  // --- TRAVA DE SEGURANÇA PARA ACESSO DIRETO À SALA ---
+  if (!hasAccess()) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-black text-center p-6 animate-in fade-in duration-500">
+        <div className="w-20 h-20 bg-zinc-900 rounded-3xl flex items-center justify-center mb-6 border border-zinc-800 shadow-2xl">
+          <ShieldAlert size={40} className="text-red-500 animate-pulse" />
+        </div>
+        <h2 className="text-2xl font-black text-white uppercase tracking-tighter mb-2">Acesso Restrito</h2>
+        <p className="text-zinc-500 max-w-md mx-auto font-medium">Você não possui permissão para acessar esta sala de transmissão.</p>
+        <button 
+          onClick={() => navigate(returnPath)}
+          className="mt-8 px-8 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl transition-all font-black uppercase text-xs tracking-widest border border-zinc-700"
         >
           Voltar para a lista
         </button>

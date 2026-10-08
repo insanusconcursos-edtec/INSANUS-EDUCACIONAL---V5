@@ -288,13 +288,26 @@ export const courseService = {
   duplicateCourse: async (originalCourse: OnlineCourse) => {
     try {
       console.log(`[DUPLICATE] Iniciando duplicação do curso: ${originalCourse.title}`);
-      const operations: { ref: DocumentReference, data: object }[] = [];
+      const operations: { ref: any, data: object }[] = [];
 
-      // 1. Criar novo curso (Metadata)
+      // 1. Criar novo curso (Metadata) com clonagem fidedigna de mídias para isolamento absoluto no Storage
+      const [clonedCover, clonedBannerD, clonedBannerT, clonedBannerM, clonedWelcomeV] = await Promise.all([
+        courseService.cloneStorageFile(originalCourse.coverUrl),
+        courseService.cloneStorageFile(originalCourse.bannerUrlDesktop),
+        courseService.cloneStorageFile(originalCourse.bannerUrlTablet),
+        courseService.cloneStorageFile(originalCourse.bannerUrlMobile),
+        courseService.cloneStorageFile(originalCourse.welcomeVideoUrl)
+      ]);
+
       const newCourseRef = doc(collection(db, COLLECTION_NAME));
       const newCourseData: any = {
         ...originalCourse,
         title: `${originalCourse.title} - Cópia`,
+        coverUrl: clonedCover || '',
+        bannerUrlDesktop: clonedBannerD || '',
+        bannerUrlTablet: clonedBannerT || '',
+        bannerUrlMobile: clonedBannerM || '',
+        welcomeVideoUrl: clonedWelcomeV || '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         active: true,
@@ -320,9 +333,16 @@ export const courseService = {
         const newModRef = doc(collection(db, MODULES_COLLECTION));
         moduleMapping[mod.id] = newModRef.id;
         
+        const [clonedModCover, clonedModBanner] = await Promise.all([
+          courseService.cloneStorageFile(mod.coverUrl),
+          courseService.cloneStorageFile(mod.bannerUrl)
+        ]);
+
         const newModData: any = {
           ...mod,
-          courseId: newCourseRef.id
+          courseId: newCourseRef.id,
+          coverUrl: clonedModCover || '',
+          bannerUrl: clonedModBanner || ''
         };
         delete newModData.id;
         operations.push({ ref: newModRef, data: newModData });
@@ -351,9 +371,12 @@ export const courseService = {
           const newLessonRef = doc(collection(db, LESSONS_COLLECTION));
           lessonMapping[lesson.id] = newLessonRef.id;
           
+          const clonedLessonCover = await courseService.cloneStorageFile(lesson.coverUrl);
+
           const newLessonData: any = {
             ...lesson,
             moduleId: newModRef.id,
+            coverUrl: clonedLessonCover || '',
             // O subModuleId será atualizado depois se necessário, ou aqui se já tivermos o mapeamento
             // Como estamos processando subModules de forma síncrona acima, o mapeamento já existe
             subModuleId: lesson.subModuleId ? subModuleMapping[lesson.subModuleId] : null
@@ -510,9 +533,13 @@ export const courseService = {
         updatedAt: new Date().toISOString()
       };
       
-      // Garantia absoluta de preservação de imagens (Capa e Banner)
-      if (sourceData.coverUrl) newModuleData.coverUrl = sourceData.coverUrl;
-      if (sourceData.bannerUrl) newModuleData.bannerUrl = sourceData.bannerUrl;
+      // Clonagem fidedigna de imagens (Capa e Banner) para evitar problemas de exclusão compartilhada (Orphaned Files)
+      if (sourceData.coverUrl) {
+        newModuleData.coverUrl = await courseService.cloneStorageFile(sourceData.coverUrl);
+      }
+      if (sourceData.bannerUrl) {
+        newModuleData.bannerUrl = await courseService.cloneStorageFile(sourceData.bannerUrl);
+      }
       
       // Removemos o ID para não salvar o ID antigo dentro dos campos do novo documento
       delete newModuleData.id;
@@ -581,8 +608,10 @@ export const courseService = {
           subModuleId: oldSubId ? subMap[oldSubId] : null
         };
 
-        // Preservação explícita da capa da aula
-        if (lessonData.coverUrl) newLessonData.coverUrl = lessonData.coverUrl;
+        // Preservação explícita da capa da aula (clonagem para segurança)
+        if (lessonData.coverUrl) {
+          newLessonData.coverUrl = await courseService.cloneStorageFile(lessonData.coverUrl);
+        }
         delete newLessonData.id;
 
         operations.push({ ref: newLessonRef, data: newLessonData });
@@ -711,8 +740,10 @@ export const courseService = {
           subModuleId: subMap[lesson.subModuleId]
         };
         
-        // Preservação explícita da capa
-        if (lesson.coverUrl) newLessonData.coverUrl = lesson.coverUrl;
+        // Preservação explícita da capa (clonagem para segurança)
+        if (lesson.coverUrl) {
+          newLessonData.coverUrl = await courseService.cloneStorageFile(lesson.coverUrl);
+        }
         delete newLessonData.id;
         
         operations.push({ ref: newLessonRef, data: newLessonData });

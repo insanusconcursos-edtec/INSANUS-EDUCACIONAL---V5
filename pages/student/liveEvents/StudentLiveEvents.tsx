@@ -85,12 +85,12 @@ export const StudentLiveEvents: React.FC = () => {
       const allowedEvents = allEvents.filter(event => {
         const userHasAccess = hasAccess(event, { plans, courses, classes, simulated, isolatedProducts });
 
-        // Se o evento está encerrado, só aparece se o usuário tiver acesso (via qualquer método)
+        // Se o evento está encerrado, só aparece se o usuário tiver acesso, for um produto isolado e possuir gravações disponíveis
         if (event.status === 'ended') {
-          return userHasAccess;
+          return userHasAccess && event.isIsolatedProduct && !!(event.recordings && event.recordings.length > 0);
         }
 
-        // Para eventos futuros ou ao vivo, mostramos se o usuário tiver acesso (ou for público)
+        // Para eventos futuros ou ao vivo, mostramos se o usuário tiver acesso
         return userHasAccess;
       });
       setEvents(allowedEvents);
@@ -104,15 +104,15 @@ export const StudentLiveEvents: React.FC = () => {
   const hasAccess = (event: LiveEvent, access: { plans: string[], courses: string[], classes: string[], simulated: string[], isolatedProducts: string[] }) => {
     if (event.isPublic) return true;
     
-    const isIsolatedForUser = event.isIsolatedProduct && access.isolatedProducts.includes(event.id);
+    const isIsolatedForUser = event.isIsolatedProduct && access.isolatedProducts.includes(event.id || '');
     if (isIsolatedForUser) return true;
 
-    const { plans, onlineCourses, presentialClasses, simulated } = event.accessControl;
+    const { plans = [], onlineCourses = [], presentialClasses = [], simulated = [] } = event.accessControl || {};
     
-    // If no specific access control is set, it might be open to everyone, or closed to everyone.
-    // Let's assume if it's not isolated and has no restrictions, it's open.
+    // Se não há nenhum recurso selecionado no controle de acesso, o evento não é público
+    // e o usuário não adquiriu o produto isoladamente, então ninguém tem acesso por padrão (bloqueio de segurança)
     if (plans.length === 0 && onlineCourses.length === 0 && presentialClasses.length === 0 && simulated.length === 0) {
-      return true; 
+      return false; 
     }
 
     // Check if user has any of the required access
