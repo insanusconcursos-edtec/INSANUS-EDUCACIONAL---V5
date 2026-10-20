@@ -238,6 +238,25 @@ export const ClassIdentityForm: React.FC<ClassIdentityFormProps> = ({
           )}
         </div>
 
+        {/* Ativar Estudo Guiado */}
+        <div className="col-span-2 p-4 bg-amber-950/20 border border-amber-500/30 rounded-xl flex items-center justify-between">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-amber-400 font-bold text-sm uppercase">
+              🎯 Ativar Estudo Guiado nesta Turma
+            </div>
+            <p className="text-xs text-zinc-400">
+              Desbloqueia a inclusão de metas (aulas Panda, PDFs, questões, lei seca, flashcards IA e resumos) diretamente no cronograma de estudos da turma presencial.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onChange({ isGuidedStudyEnabled: !data.isGuidedStudyEnabled })}
+            className={`w-12 h-6 rounded-full p-1 transition-colors shrink-0 ml-4 ${data.isGuidedStudyEnabled ? 'bg-amber-500' : 'bg-zinc-700'}`}
+          >
+            <div className={`w-4 h-4 bg-white rounded-full shadow-md transition-transform ${data.isGuidedStudyEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
         {/* Capa da Turma */}
         <div className="col-span-2">
           <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Imagem de Capa (474x1000)</label>

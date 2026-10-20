@@ -21,8 +21,13 @@ import {
   List,
   ChevronDown,
   ChevronUp,
-  CheckCircle
+  CheckCircle,
+  Target
 } from 'lucide-react';
+import { GuidedStudyMeta, GuidedStudyProgress } from '../../../types/guidedStudy';
+import { guidedStudyService } from '../../../services/guidedStudyService';
+import { StudentGuidedStudyModal } from './StudentGuidedStudyModal';
+import { useAuth } from '../../../contexts/AuthContext';
 
 interface StudentClassScheduleProps {
   classId: string;
@@ -44,16 +49,29 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
   const [currentDate, setCurrentDate] = useState(new Date());
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
 
+  const { currentUser } = useAuth();
+  const [guidedMetas, setGuidedMetas] = useState<GuidedStudyMeta[]>([]);
+  const [studentProgress, setStudentProgress] = useState<Record<string, GuidedStudyProgress>>({});
+  const [selectedMetaForModal, setSelectedMetaForModal] = useState<GuidedStudyMeta | null>(null);
+
+  const reloadGuidedProgress = async () => {
+    if (currentUser?.uid) {
+      const prog = await guidedStudyService.getStudentProgress(currentUser.uid, classId);
+      setStudentProgress(prog);
+    }
+  };
+
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [eventsData, subjectsData, topicsData, teachersData, holidaysData, fetchedClassData] = await Promise.all([
+        const [eventsData, subjectsData, topicsData, teachersData, holidaysData, fetchedClassData, metasData] = await Promise.all([
           classScheduleService.getScheduleEventsByClass(classId),
           curriculumService.getSubjectsByClass(classId),
           curriculumService.getTopicsByClass(classId),
           teacherService.getTeachers(),
           holidayService.getHolidays(),
-          classService.getClassById(classId).catch(() => null)
+          classService.getClassById(classId).catch(() => null),
+          guidedStudyService.getMetasByClass(classId)
         ]);
 
         setEvents(eventsData);
@@ -62,6 +80,12 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
         setTeachers(teachersData);
         setHolidays(holidaysData);
         setClassData(fetchedClassData);
+        setGuidedMetas(metasData);
+
+        if (currentUser?.uid) {
+          const prog = await guidedStudyService.getStudentProgress(currentUser.uid, classId);
+          setStudentProgress(prog);
+        }
 
         // Se for turma de final de semana, o padrão é a visualização de finais de semana
         if (fetchedClassData?.isWeekendOnly) {
@@ -75,7 +99,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
     };
 
     loadData();
-  }, [classId]);
+  }, [classId, currentUser?.uid]);
 
   const getWeekendsOfMonth = (year: number, month: number) => {
     const weekendsList: { number: number; saturday: string; sunday: string }[] = [];
@@ -354,7 +378,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                                   <Clock className="w-3 h-3 shrink-0" />
                                   <span className="whitespace-nowrap">{event.startTime} - {event.endTime}</span>
                                 </div>
-                                <div className="font-bold text-xs text-zinc-200 truncate leading-tight" title={subject?.name}>
+                                <div className="font-bold text-xs text-zinc-200 leading-snug break-words" title={subject?.name}>
                                   {subject?.name || 'Disciplina Desconhecida'}
                                 </div>
                               </div>
@@ -428,6 +452,75 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
             );
           });
         })()}
+
+        {/* Metas do Estudo Guiado no Cronograma do Aluno */}
+        {classData?.isGuidedStudyEnabled && (
+          <div className="mt-4 pt-3 border-t border-amber-500/20 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-extrabold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Target className="w-3.5 h-3.5" /> Metas do Estudo Guiado
+              </span>
+              {guidedMetas.filter(m => m.date === dateString).length > 0 && (
+                <span className="text-[9px] font-bold text-amber-400/90 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
+                  {guidedMetas.filter(m => m.date === dateString && studentProgress[m.id!]?.completed).length}/{guidedMetas.filter(m => m.date === dateString).length} Concluídas
+                </span>
+              )}
+            </div>
+
+            {guidedMetas.filter(m => m.date === dateString).length === 0 ? (
+              <div className="p-2 text-[10px] text-zinc-500 border border-dashed border-zinc-800/80 rounded-lg text-center">
+                Sem metas programadas para este dia
+              </div>
+            ) : (
+              guidedMetas.filter(m => m.date === dateString).map(meta => {
+                const isMetaDone = !!studentProgress[meta.id!]?.completed;
+                const cardColor = meta.color || '#f59e0b';
+                return (
+                  <div
+                    key={meta.id}
+                    onClick={() => setSelectedMetaForModal(meta)}
+                    className={`
+                      p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between shadow-md group
+                      ${isMetaDone 
+                        ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-300' 
+                        : 'bg-zinc-900/90 hover:bg-zinc-800 text-white'}
+                    `}
+                    style={!isMetaDone ? { borderColor: `${cardColor}40` } : undefined}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div 
+                        className="p-1.5 rounded-lg shrink-0"
+                        style={isMetaDone ? undefined : { backgroundColor: `${cardColor}20`, color: cardColor }}
+                      >
+                        <Target className={`w-4 h-4 ${isMetaDone ? 'text-emerald-400' : ''}`} />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="block text-xs font-bold truncate transition-colors" style={!isMetaDone ? { color: 'white' } : undefined}>
+                          {meta.title}
+                        </span>
+                        <span className="block text-[10px] text-zinc-400">
+                          {meta.disciplineName ? `${meta.disciplineName} • ` : ''}{meta.duration || 30} min
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 ml-2">
+                      {isMetaDone ? (
+                        <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                          <CheckCircle className="w-3 h-3" /> Concluído
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold group-hover:underline flex items-center gap-0.5" style={{ color: cardColor }}>
+                          Estudar &rarr;
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
       </div>
     );
   };
@@ -718,6 +811,19 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
           )}
         </div>
       </div>
+
+      {/* Student Guided Study Modal */}
+      {selectedMetaForModal && (
+        <StudentGuidedStudyModal
+          isOpen={!!selectedMetaForModal}
+          onClose={() => setSelectedMetaForModal(null)}
+          meta={selectedMetaForModal}
+          classId={classId}
+          userId={currentUser?.uid || ''}
+          progress={studentProgress[selectedMetaForModal.id!]}
+          onProgressUpdated={() => reloadGuidedProgress()}
+        />
+      )}
     </div>
   );
 };

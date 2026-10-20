@@ -287,6 +287,25 @@ const PresentialClassManager: React.FC = () => {
               <span className="px-3 py-1 rounded-full bg-brand-red/10 text-brand-red text-xs font-bold border border-brand-red/20">
                 {currentClass.type}
               </span>
+              <button
+                onClick={async () => {
+                  if (!currentClass.id) return;
+                  const newStatus = !currentClass.isGuidedStudyEnabled;
+                  try {
+                    await classService.updateClass(currentClass.id, { isGuidedStudyEnabled: newStatus });
+                    setCurrentClass(prev => prev ? { ...prev, isGuidedStudyEnabled: newStatus } : null);
+                  } catch (e) {
+                    console.error('Erro ao alternar Estudo Guiado:', e);
+                  }
+                }}
+                className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border transition-all ${
+                  currentClass.isGuidedStudyEnabled 
+                    ? 'bg-amber-500/20 text-amber-400 border-amber-500/40 hover:bg-amber-500/30' 
+                    : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white'
+                }`}
+              >
+                <span>🎯 Estudo Guiado: {currentClass.isGuidedStudyEnabled ? 'Ativo' : 'Inativo'}</span>
+              </button>
             </div>
             <div className="flex flex-wrap gap-4 text-sm text-zinc-400">
               <div className="flex items-center gap-2">

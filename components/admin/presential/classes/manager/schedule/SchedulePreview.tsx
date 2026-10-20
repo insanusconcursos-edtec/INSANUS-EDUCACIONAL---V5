@@ -3,13 +3,16 @@ import { useSearchParams } from 'react-router-dom';
 import { ClassScheduleEvent, ScheduleGap, ScheduleException, ExceptionType } from '../../../../../../types/schedule';
 import { Teacher } from '../../../../../../types/teacher';
 import { Subject, Topic } from '../../../../../../types/curriculum';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertTriangle, ChevronDown, ChevronUp, LayoutGrid, List, Edit2, X, Check, CheckCircle, Loader2, BookOpen } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertTriangle, ChevronDown, ChevronUp, LayoutGrid, List, Edit2, X, Check, CheckCircle, Loader2, BookOpen, Target, Trash2 } from 'lucide-react';
 
 import { checkTeacherAvailability } from '../../../../../../utils/scheduler/ResourceValidator';
 
 import { Class } from '../../../../../../types/class';
+import { GuidedStudyMeta } from '../../../../../../types/guidedStudy';
+import { guidedStudyService } from '../../../../../../services/guidedStudyService';
 
 import { AddManualAppointmentModal } from './AddManualAppointmentModal';
+import { AddGuidedStudyMetaModal } from './AddGuidedStudyMetaModal';
 
 interface SchedulePreviewProps {
   classData: Class;
@@ -46,6 +49,27 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
   const [completionModalData, setCompletionModalData] = useState<{ shift: string, events: ClassScheduleEvent[] } | null>(null);
   const [selectedEventIds, setSelectedEventIds] = useState<string[]>([]);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+
+  // Guided Study State
+  const [guidedMetas, setGuidedMetas] = useState<GuidedStudyMeta[]>([]);
+  const [isGuidedModalOpen, setIsGuidedModalOpen] = useState(false);
+  const [selectedDateForGuided, setSelectedDateForGuided] = useState<string | null>(null);
+  const [editingGuidedMeta, setEditingGuidedMeta] = useState<GuidedStudyMeta | null>(null);
+
+  const fetchGuidedMetas = async () => {
+    if (classData?.id) {
+      try {
+        const metas = await guidedStudyService.getMetasByClass(classData.id);
+        setGuidedMetas(metas);
+      } catch (err) {
+        console.error("Erro ao carregar metas do estudo guiado:", err);
+      }
+    }
+  };
+
+  useEffect(() => {
+    fetchGuidedMetas();
+  }, [classData?.id]);
 
   const todayString = new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0];
 
@@ -462,7 +486,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                                   <Clock className="w-3 h-3" />
                                   <span>{event.startTime} - {event.endTime}</span>
                                 </div>
-                                <div className="font-bold text-xs text-zinc-200 truncate leading-tight">
+                                <div className="font-bold text-xs text-zinc-200 leading-snug break-words" title={subject?.name || 'Disciplina Desconhecida'}>
                                   {subject?.name || 'Disciplina Desconhecida'}
                                 </div>
                               </div>
@@ -574,6 +598,69 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
           );
         })}
         
+        {/* Metas do Estudo Guiado */}
+        {classData?.isGuidedStudyEnabled && (
+          <div className="mt-3 pt-2 border-t border-amber-500/20 space-y-1.5">
+            <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wider block">🎯 Estudo Guiado</span>
+            {guidedMetas.filter(m => m.date === dateString).map(meta => {
+              const cardColor = meta.color || '#f59e0b';
+              return (
+                <div
+                  key={meta.id}
+                  className="p-2 rounded-lg flex items-center justify-between text-xs group border transition-all"
+                  style={{
+                    backgroundColor: `${cardColor}18`,
+                    borderColor: `${cardColor}40`
+                  }}
+                >
+                  <div className="flex items-center gap-1.5 truncate">
+                    <Target className="w-3.5 h-3.5 shrink-0" style={{ color: cardColor }} />
+                    <span className="truncate font-bold text-[11px] text-white">{meta.title}</span>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0 opacity-80 group-hover:opacity-100">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedDateForGuided(dateString);
+                        setEditingGuidedMeta(meta);
+                        setIsGuidedModalOpen(true);
+                      }}
+                      className="text-zinc-400 hover:text-white p-0.5"
+                      title="Editar Meta"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (window.confirm('Excluir esta meta do Estudo Guiado?')) {
+                          await guidedStudyService.deleteMeta(meta.id!);
+                          fetchGuidedMetas();
+                        }
+                      }}
+                      className="text-zinc-400 hover:text-red-400 p-0.5"
+                      title="Excluir Meta"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+
+            <button
+              onClick={() => {
+                setSelectedDateForGuided(dateString);
+                setEditingGuidedMeta(null);
+                setIsGuidedModalOpen(true);
+              }}
+              className="w-full mt-1 flex items-center justify-center gap-1 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-bold uppercase rounded transition-colors"
+            >
+              + Meta (Estudo Guiado)
+            </button>
+          </div>
+        )}
+
         <button
           onClick={() => setSelectedDateForManual(dateString)}
           className={`w-full mt-2 flex items-center justify-center gap-1.5 py-2 hover:bg-zinc-700/80 hover:text-white text-[10px] font-bold uppercase tracking-wider rounded border border-dashed transition-colors ${
@@ -582,7 +669,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
               : 'bg-zinc-800/50 text-zinc-400 border-zinc-700'
           }`}
         >
-          + Adicionar Agendamento
+          + Aula Presencial
         </button>
       </div>
     );
@@ -1201,6 +1288,25 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
               onAddManualAppointment(appointment);
             }
             setSelectedDateForManual(null);
+          }}
+        />
+      )}
+
+      {/* Add Guided Study Meta Modal */}
+      {isGuidedModalOpen && selectedDateForGuided && (
+        <AddGuidedStudyMetaModal
+          isOpen={isGuidedModalOpen}
+          classId={classData.id}
+          selectedDate={selectedDateForGuided}
+          metaToEdit={editingGuidedMeta}
+          subjects={subjects}
+          onClose={() => {
+            setIsGuidedModalOpen(false);
+            setSelectedDateForGuided(null);
+            setEditingGuidedMeta(null);
+          }}
+          onSuccess={() => {
+            fetchGuidedMetas();
           }}
         />
       )}

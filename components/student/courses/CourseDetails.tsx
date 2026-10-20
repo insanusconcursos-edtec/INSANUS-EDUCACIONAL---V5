@@ -9,10 +9,13 @@ import { LiveEvent } from '../../../types/liveEvent';
 import { StudentModuleCard } from './StudentModuleCard';
 import { CoursePlayer } from './player/CoursePlayer';
 import { useAuth } from '../../../contexts/AuthContext';
-import { CheckCircle2, LayoutList, ListTree, PlayCircle, ArrowLeft, Radio, Video, Clock, Play, Calendar, PlaySquare, Lock, MapPin, ChevronDown, ChevronRight, FileText, Loader2, Layers, Folder, X, Users } from 'lucide-react';
+import { CheckCircle2, LayoutList, ListTree, PlayCircle, ArrowLeft, Radio, Video, Clock, Play, Calendar, PlaySquare, Lock, MapPin, ChevronDown, ChevronRight, FileText, Loader2, Layers, Folder, X, Users, Megaphone, Bell, CheckCircle } from 'lucide-react';
 import { StudentCourseEdital } from './edital/StudentCourseEdital';
 import { CourseReviewDashboard } from './reviews/CourseReviewDashboard';
 import { WelcomeVideoModal } from './WelcomeVideoModal';
+import { subscribeToAnnouncementsByCourse, markAnnouncementAsRead } from '../../../services/announcementService';
+import { Announcement } from '../../../types/announcement';
+import AnnouncementPopUp from '../AnnouncementPopUp';
 import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 
@@ -26,8 +29,10 @@ export function CourseDetails({ course, onBack }: CourseDetailsProps) {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   
-  // ESTADO DAS ABAS (NOVO) - MÓDULOS, EDITAL, LIVE ou PRESENTIAL
-  const [activeTab, setActiveTab] = useState<'MODULES' | 'EDITAL' | 'LIVE' | 'PRESENTIAL'>('MODULES');
+  // ESTADO DAS ABAS - MÓDULOS, EDITAL, LIVE, PRESENTIAL ou ANNOUNCEMENTS
+  const [activeTab, setActiveTab] = useState<'MODULES' | 'EDITAL' | 'LIVE' | 'PRESENTIAL' | 'ANNOUNCEMENTS'>('MODULES');
+  const [courseAnnouncements, setCourseAnnouncements] = useState<Announcement[]>([]);
+  const [activePopUpAnnouncement, setActivePopUpAnnouncement] = useState<Announcement | null>(null);
   const [focusTopicId, setFocusTopicId] = useState<string | null>(null);
 
   const [modules, setModules] = useState<CourseModule[]>([]);
@@ -269,6 +274,25 @@ export function CourseDetails({ course, onBack }: CourseDetailsProps) {
     };
     loadData();
   }, [course.id, currentUser]);
+
+  // Monitorar comunicados do curso em tempo real e disparar popups obrigatórios
+  useEffect(() => {
+    if (!course?.id) return;
+    const unsub = subscribeToAnnouncementsByCourse(course.id, (data) => {
+      setCourseAnnouncements(data);
+      if (currentUser?.uid) {
+        const popup = data.find(a => a.forcePopUp && !a.readBy?.includes(currentUser.uid));
+        if (popup) {
+          setActivePopUpAnnouncement(popup);
+        }
+      }
+    });
+    return () => unsub();
+  }, [course.id, currentUser?.uid]);
+
+  const unreadAnnouncementsCount = currentUser 
+    ? courseAnnouncements.filter(a => !a.readBy?.includes(currentUser.uid)).length 
+    : 0;
 
   // Lógica para abrir módulo via URL
   useEffect(() => {
@@ -526,6 +550,26 @@ export function CourseDetails({ course, onBack }: CourseDetailsProps) {
                   {course.linkedPresentialTabName || 'AULAS PRESENCIAIS'}
               </button>
             )}
+
+            {(!linkedCourseConfig || linkedCourseConfig.visibleTabs?.includes('ANNOUNCEMENTS')) && (
+              <button 
+                  onClick={() => {
+                      setActiveTab('ANNOUNCEMENTS');
+                      setFocusTopicId(null);
+                  }}
+                  className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0
+                      ${activeTab === 'ANNOUNCEMENTS' ? 'border-[var(--plan-theme)] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}
+                  `}
+              >
+                  <Megaphone size={16} className={`md:w-[18px] md:h-[18px] ${activeTab === 'ANNOUNCEMENTS' ? 'text-[var(--plan-theme)]' : ''}`} />
+                  Avisos
+                  {unreadAnnouncementsCount > 0 && (
+                    <span className="bg-red-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full animate-pulse">
+                      {unreadAnnouncementsCount}
+                    </span>
+                  )}
+              </button>
+            )}
           </div>
 
           {/* CONTEÚDO CONDICIONAL */}
@@ -591,6 +635,61 @@ export function CourseDetails({ course, onBack }: CourseDetailsProps) {
                           ))}
                       </div>
                   )
+              ) : activeTab === 'ANNOUNCEMENTS' ? (
+                  // VISÃO DOS AVISOS DO CURSO
+                  <div className="space-y-4 max-w-4xl animate-in fade-in duration-300">
+                    {courseAnnouncements.length === 0 ? (
+                      <div className="p-8 text-center bg-zinc-900/50 border border-zinc-800 rounded-2xl">
+                        <Megaphone className="w-10 h-10 text-zinc-600 mx-auto mb-3" />
+                        <p className="text-zinc-400 text-sm font-bold uppercase tracking-tight">Nenhum comunicado até o momento</p>
+                        <p className="text-zinc-600 text-xs mt-1 font-medium">Os avisos enviados pela coordenação deste curso aparecerão aqui.</p>
+                      </div>
+                    ) : (
+                      courseAnnouncements.map((ann) => {
+                        const isRead = currentUser ? ann.readBy?.includes(currentUser.uid) : false;
+                        return (
+                          <div key={ann.id} className="bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 rounded-2xl p-6 space-y-3 transition-all">
+                            <div className="flex items-center justify-between gap-4 flex-wrap">
+                              <div className="flex items-center gap-2">
+                                {ann.forcePopUp ? (
+                                  <span className="bg-amber-500/10 text-amber-500 text-[9px] font-black uppercase px-2 py-0.5 rounded border border-amber-500/20">
+                                    Pop-up
+                                  </span>
+                                ) : (
+                                  <span className="bg-zinc-800 text-zinc-400 text-[9px] font-black uppercase px-2 py-0.5 rounded">
+                                    Comunicado
+                                  </span>
+                                )}
+                                <span className="text-[11px] font-medium text-zinc-500">
+                                  {new Date(ann.createdAt).toLocaleDateString('pt-BR')} às {new Date(ann.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+
+                              {currentUser && (
+                                isRead ? (
+                                  <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                                    <CheckCircle size={12} /> Lido
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={() => markAnnouncementAsRead(ann.id, currentUser.uid)}
+                                    className="text-[10px] font-bold text-white bg-red-600 hover:bg-red-700 px-3 py-1 rounded-lg uppercase tracking-wider transition-colors shadow-sm"
+                                  >
+                                    Marcar como lido
+                                  </button>
+                                )
+                              )}
+                            </div>
+
+                            <h3 className="text-lg font-black text-white uppercase tracking-tight">{ann.title}</h3>
+                            <div className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap font-medium">
+                              {ann.content}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
               ) : (
                   // VISÃO DOS EVENTOS AO VIVO
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -716,6 +815,15 @@ export function CourseDetails({ course, onBack }: CourseDetailsProps) {
               </div>
            </div>
         </div>
+      )}
+
+      {/* POPUP DE COMUNICADO OBRIGATÓRIO DO CURSO */}
+      {activePopUpAnnouncement && currentUser && (
+        <AnnouncementPopUp
+          announcement={activePopUpAnnouncement}
+          userId={currentUser.uid}
+          onClose={() => setActivePopUpAnnouncement(null)}
+        />
       )}
     </div>
   );

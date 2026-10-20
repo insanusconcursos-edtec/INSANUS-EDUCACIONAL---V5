@@ -69,4 +69,5 @@ export interface Class {
     edital?: { enabled: boolean; label: string };
     live?: { enabled: boolean; label: string };
   };
+  isGuidedStudyEnabled?: boolean;
 }

@@ -7,7 +7,8 @@ import { ModuleContentManager } from './modules/ModuleContentManager';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { AdminCourseEditalManager } from './edital/AdminCourseEditalManager'; // Importando o Gerenciador de Edital
 import { AdminCourseStudentsTab } from './AdminCourseStudentsTab'; // Importando a Aba de Alunos
-import { Layout, FileText, Users, Settings, Code } from 'lucide-react';
+import { CourseAnnouncementsTab } from './CourseAnnouncementsTab'; // Importando a Aba de Avisos
+import { Layout, FileText, Users, Settings, Code, Megaphone } from 'lucide-react';
 import { AdminCourseMaintenanceTab } from './AdminCourseMaintenanceTab'; // Nova Aba de Manutenção
 import { ExportCourseStructureModal } from './modals/ExportCourseStructureModal';
 import { MigrateModuleModal } from './modals/MigrateModuleModal';
@@ -19,7 +20,7 @@ interface CourseContentManagerProps {
 }
 
 export function CourseContentManager({ course, onBack }: CourseContentManagerProps) {
-  const [activeTab, setActiveTab] = useState<'MODULES' | 'EDITAL' | 'STUDENTS' | 'MAINTENANCE'>('MODULES');
+  const [activeTab, setActiveTab] = useState<'MODULES' | 'EDITAL' | 'STUDENTS' | 'ANNOUNCEMENTS' | 'MAINTENANCE'>('MODULES');
 
   // --- ESTADOS DE MÓDULOS ---
   const [modules, setModules] = useState<CourseModule[]>([]);
@@ -156,6 +157,12 @@ export function CourseContentManager({ course, onBack }: CourseContentManagerPro
                   <Users size={14} /> Alunos
               </button>
               <button 
+                  onClick={() => setActiveTab('ANNOUNCEMENTS')}
+                  className={`px-4 py-2 rounded-md text-xs font-bold uppercase flex items-center gap-2 transition-all ${activeTab === 'ANNOUNCEMENTS' ? 'bg-red-600 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+              >
+                  <Megaphone size={14} /> Avisos
+              </button>
+              <button 
                   onClick={() => setActiveTab('MAINTENANCE')}
                   className={`px-4 py-2 rounded-md text-xs font-bold uppercase flex items-center gap-2 transition-all ${activeTab === 'MAINTENANCE' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
               >
@@ -170,6 +177,8 @@ export function CourseContentManager({ course, onBack }: CourseContentManagerPro
               <AdminCourseEditalManager courseId={course.id} />
           ) : activeTab === 'STUDENTS' ? (
               <AdminCourseStudentsTab courseId={course.id} />
+          ) : activeTab === 'ANNOUNCEMENTS' ? (
+              <CourseAnnouncementsTab courseId={course.id} />
           ) : activeTab === 'MAINTENANCE' ? (
               <AdminCourseMaintenanceTab course={course} />
           ) : (
