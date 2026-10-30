@@ -43,6 +43,11 @@ const PlanCard: React.FC<PlanCardProps> = ({ plan, onEdit, onDelete, onDuplicate
 
         {/* Badges */}
         <div className="absolute top-4 right-4 flex flex-col items-end gap-1.5 pointer-events-none">
+            {plan.isBlocked && (
+                 <span className="bg-amber-500/90 backdrop-blur-md text-[8px] font-black text-black px-2 py-1 rounded uppercase tracking-tighter flex items-center gap-1 shadow-lg">
+                    🔒 BLOQUEADO {plan.unlockDate ? `(${plan.unlockDate.split('-').reverse().join('/')})` : ''}
+                 </span>
+            )}
             <span className="bg-brand-black/90 backdrop-blur-md text-[8px] font-black text-zinc-300 px-2 py-1 rounded border border-zinc-700 uppercase tracking-tighter">
                 {plan.category}
             </span>

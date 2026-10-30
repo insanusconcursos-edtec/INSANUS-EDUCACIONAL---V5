@@ -123,6 +123,11 @@ export interface SimulatedClass {
   // Metadata
   createdAt?: any;
   updatedAt?: any;
+  published?: boolean;
+  draftWhitelist?: string[];
+  excludeFromFreePass?: boolean;
+  isBlocked?: boolean;
+  unlockDate?: string | null;
 }
 
 // === HELPERS ===

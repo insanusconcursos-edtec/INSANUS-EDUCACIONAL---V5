@@ -27,7 +27,12 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
     linkedMentors: [] as string[],
     linkedCourses: [] as { courseId: string; tabName: string; visibleTabs: string[] }[],
     isGenerationBlocked: false,
-    isChatDisabled: false
+    isChatDisabled: false,
+    published: true,
+    draftWhitelist: [] as string[],
+    excludeFromFreePass: false,
+    isBlocked: false,
+    unlockDate: ''
   });
   
   // Estado para lidar com upload
@@ -63,7 +68,12 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
         linkedMentors: planToEdit.linkedMentors || [],
         linkedCourses: planToEdit.linkedCourses || [],
         isGenerationBlocked: planToEdit.isGenerationBlocked || false,
-        isChatDisabled: planToEdit.isChatDisabled || false
+        isChatDisabled: planToEdit.isChatDisabled || false,
+        published: planToEdit.published !== false,
+        draftWhitelist: planToEdit.draftWhitelist || [],
+        excludeFromFreePass: !!planToEdit.excludeFromFreePass,
+        isBlocked: !!planToEdit.isBlocked,
+        unlockDate: planToEdit.unlockDate || ''
       });
       setPreviewUrl(planToEdit.imageUrl);
       setSelectedFile(null);
@@ -79,7 +89,12 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
         linkedMentors: [],
         linkedCourses: [],
         isGenerationBlocked: false,
-        isChatDisabled: false
+        isChatDisabled: false,
+        published: true,
+        draftWhitelist: [],
+        excludeFromFreePass: false,
+        isBlocked: false,
+        unlockDate: ''
       });
       setPreviewUrl('');
       setSelectedFile(null);
@@ -535,6 +550,71 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
                   />
                   <div className="w-11 h-6 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-red"></div>
               </label>
+          </div>
+
+          {/* SEGURANÇA E FREE PASS */}
+          <div className="bg-[#1a1d24] p-4 rounded-xl border border-zinc-800 space-y-4">
+            <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Segurança, Rascunho e Passe Livre (Free Pass)</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Status de Publicação</label>
+                <select
+                  value={formData.isBlocked ? 'blocked' : (formData.published !== false ? 'published' : 'draft')}
+                  onChange={e => {
+                    const val = e.target.value;
+                    if (val === 'blocked') {
+                      setFormData(prev => ({...prev, published: true, isBlocked: true}));
+                    } else if (val === 'published') {
+                      setFormData(prev => ({...prev, published: true, isBlocked: false}));
+                    } else {
+                      setFormData(prev => ({...prev, published: false, isBlocked: false}));
+                    }
+                  }}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-xs text-white focus:border-brand-red outline-none uppercase font-bold cursor-pointer"
+                >
+                  <option value="published">PUBLICADO (Visível para alunos)</option>
+                  <option value="draft">RASCUNHO (Oculto / Teste)</option>
+                  <option value="blocked">BLOQUEADO (Em produção - Exibe cadeado)</option>
+                </select>
+              </div>
+
+              {formData.isBlocked && (
+                <div className="col-span-full mt-2">
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Data de Liberação / Desbloqueio (Opcional)</label>
+                  <input
+                    type="date"
+                    value={formData.unlockDate || ''}
+                    onChange={e => setFormData(prev => ({...prev, unlockDate: e.target.value}))}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-xs text-white focus:border-brand-red outline-none"
+                  />
+                  <p className="text-[9px] text-zinc-500 mt-1">Data exibida junto ao card bloqueado para informar os alunos quando será liberado.</p>
+                </div>
+              )}
+
+              <div className="flex items-center pt-5">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={!!formData.excludeFromFreePass}
+                    onChange={e => setFormData(prev => ({...prev, excludeFromFreePass: e.target.checked}))}
+                    className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-brand-red focus:ring-brand-red"
+                  />
+                  <span className="text-[10px] font-bold text-white uppercase tracking-wider">Excluir do Free Pass (Passe Livre)</span>
+                </label>
+              </div>
+
+              <div className="col-span-full">
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Lista Branca de E-mails para Rascunho (Whitelist)</label>
+                <input
+                  type="text"
+                  value={Array.isArray(formData.draftWhitelist) ? formData.draftWhitelist.join(', ') : ''}
+                  onChange={e => setFormData(prev => ({...prev, draftWhitelist: e.target.value.split(',').map(s => s.trim()).filter(Boolean)}))}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-xs text-white focus:border-brand-red outline-none font-medium"
+                  placeholder="email1@teste.com, email2@teste.com"
+                />
+                <p className="text-[9px] text-zinc-500 mt-1">E-mails separados por vírgula que poderão visualizar este plano mesmo estando em modo Rascunho.</p>
+              </div>
+            </div>
           </div>
 
           <div className="pt-4">

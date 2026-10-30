@@ -25,6 +25,9 @@ export interface PresentialEvent {
   status: 'ACTIVE' | 'FINISHED' | 'CANCELLED';
   createdAt: Timestamp | Date;
   updatedAt: Timestamp | Date;
+  published?: boolean;
+  draftWhitelist?: string[];
+  excludeFromFreePass?: boolean;
 }
 
 export interface PresentialEventRegistration {

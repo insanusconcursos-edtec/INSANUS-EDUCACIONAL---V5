@@ -57,6 +57,13 @@ export interface OnlineCourse {
   linkedPresentialId?: string;
   linkedPresentialTabName?: string;
   linkedPresentialModules?: string[] | 'all';
+
+  // --- SEGURANÇA E FREE PASS ---
+  published?: boolean;
+  draftWhitelist?: string[];
+  excludeFromFreePass?: boolean;
+  isBlocked?: boolean;
+  unlockDate?: string | null;
 }
 
 // --- NOVO: Interface do Módulo ---
@@ -156,6 +163,13 @@ export interface CourseFormData {
   linkedPresentialId?: string;
   linkedPresentialTabName?: string;
   linkedPresentialModules?: string[] | 'all';
+
+  // Segurança e Free Pass
+  published?: boolean;
+  draftWhitelist?: string[];
+  excludeFromFreePass?: boolean;
+  isBlocked?: boolean;
+  unlockDate?: string | null;
 }
 
 // --- NOVO: Tipos de Conteúdo ---

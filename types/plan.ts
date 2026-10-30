@@ -58,4 +58,9 @@ export interface Plan {
   lastModifiedAt?: any;
   lastSyncedAt?: any;
   themeColor?: string;
+  published?: boolean;
+  draftWhitelist?: string[];
+  excludeFromFreePass?: boolean;
+  isBlocked?: boolean;
+  unlockDate?: string | null;
 }

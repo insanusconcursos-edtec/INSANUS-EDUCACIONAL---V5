@@ -83,4 +83,9 @@ export interface LiveEvent {
   recordings?: LiveEventRecording[]; // Para produtos isolados
   createdAt?: Timestamp | any;
   updatedAt?: Timestamp | any;
+  published?: boolean;
+  draftWhitelist?: string[];
+  excludeFromFreePass?: boolean;
+  isBlocked?: boolean;
+  unlockDate?: string | null;
 }

@@ -45,17 +45,24 @@ export const LiveEventCard: React.FC<LiveEventCardProps> = ({ event, onEdit, onD
             <Video size={48} />
           </div>
         )}
-        <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-sm px-2 py-1 rounded text-xs font-bold text-white">
-          {event.status === 'live' ? (
-            <span className="text-red-500 flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
-              AO VIVO
+        <div className="absolute top-2 right-2 flex flex-col items-end gap-1">
+          {event.isBlocked && (
+            <span className="bg-amber-500/90 backdrop-blur-md text-[8px] font-black text-black px-2 py-1 rounded uppercase tracking-tighter flex items-center gap-1 shadow-lg">
+              🔒 BLOQUEADO {event.unlockDate ? `(${event.unlockDate.split('-').reverse().join('/')})` : ''}
             </span>
-          ) : event.status === 'scheduled' ? (
-            <span className="text-blue-400">AGENDADO</span>
-          ) : (
-            <span className="text-gray-400">ENCERRADO</span>
           )}
+          <div className="bg-black/70 backdrop-blur-sm px-2 py-1 rounded text-xs font-bold text-white">
+            {event.status === 'live' ? (
+              <span className="text-red-500 flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                AO VIVO
+              </span>
+            ) : event.status === 'scheduled' ? (
+              <span className="text-blue-400">AGENDADO</span>
+            ) : (
+              <span className="text-gray-400">ENCERRADO</span>
+            )}
+          </div>
         </div>
       </div>
 

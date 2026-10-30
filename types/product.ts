@@ -67,6 +67,7 @@ export interface Product {
   affiliate_enabled?: boolean; // Novo: Habilita afiliação no nível do produto
   active?: boolean; // Novo: Habilita inativação do produto
   liveEventIds?: string[]; // IDs dos eventos vinculados diretamente
+  isFreePass?: boolean; // Se o produto garante acesso Free Pass (Passe Livre)
   createdAt?: any;
   updatedAt?: any;
 }

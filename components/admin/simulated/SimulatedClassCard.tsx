@@ -40,7 +40,12 @@ const SimulatedClassCard: React.FC<SimulatedClassCardProps> = ({ data, onManage,
         </div>
 
         {/* Organ Badge */}
-        <div className="absolute top-3 left-3">
+        <div className="absolute top-3 left-3 flex flex-col gap-1">
+             {data.isBlocked && (
+                  <span className="bg-amber-500/90 backdrop-blur-md text-[8px] font-black text-black px-2 py-1 rounded uppercase tracking-tighter flex items-center gap-1 shadow-lg">
+                     🔒 BLOQUEADO {data.unlockDate ? `(${data.unlockDate.split('-').reverse().join('/')})` : ''}
+                  </span>
+             )}
              <span className="bg-brand-red text-[8px] font-black text-white px-2 py-1 rounded uppercase tracking-tighter shadow-lg shadow-brand-red/20 border border-red-500">
                 {data.organization}
              </span>

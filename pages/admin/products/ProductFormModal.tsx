@@ -43,6 +43,7 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
   const [coverUrl, setCoverUrl] = useState(product?.coverUrl || '');
   const [checkoutCoverUrl, setCheckoutCoverUrl] = useState(product?.checkoutCoverUrl || '');
   const [active, setActive] = useState<boolean>(product?.active !== false);
+  const [isFreePass, setIsFreePass] = useState<boolean>(product?.isFreePass || false);
   const [isUploading, setIsUploading] = useState(false);
   const [isUploadingCheckout, setIsUploadingCheckout] = useState(false);
   const [searchTerms] = useState({ plans: '', courses: '', classes: '', simulated: '', liveEvents: '', presentialEvents: '' });
@@ -146,6 +147,7 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
       coverUrl,
       checkoutCoverUrl,
       active,
+      isFreePass,
       linkedResources: {
         plans: linkedPlans,
         onlineCourses: linkedCourses,
@@ -407,6 +409,21 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
                     <option value="true">ATIVO (Liberado)</option>
                     <option value="false">INATIVO (Bloqueado)</option>
                   </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
+                    Passe Livre (Free Pass)
+                  </label>
+                  <label className="flex items-center gap-3 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 cursor-pointer hover:border-zinc-700 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={isFreePass}
+                      onChange={(e) => setIsFreePass(e.target.checked)}
+                      className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-red-600 focus:ring-red-500"
+                    />
+                    <span className="text-xs font-bold text-white">Garante Acesso Total (Free Pass) a todos os recursos</span>
+                  </label>
                 </div>
               </div>
             </div>

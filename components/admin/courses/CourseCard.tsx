@@ -31,6 +31,13 @@ export const CourseCard: React.FC<CourseCardProps> = ({ course, onEdit, onManage
 
         {/* Título Sobreposto */}
         <div className="absolute bottom-0 left-0 right-0 p-4">
+          {course.isBlocked && (
+            <div className="mb-2">
+              <span className="bg-amber-500/90 backdrop-blur-md text-[8px] font-black text-black px-2 py-1 rounded uppercase tracking-tighter inline-flex items-center gap-1 shadow-lg">
+                🔒 BLOQUEADO {course.unlockDate ? `(${course.unlockDate.split('-').reverse().join('/')})` : ''}
+              </span>
+            </div>
+          )}
           <div className="flex items-center gap-2 mb-1">
             <span className="text-[10px] font-bold text-red-500 uppercase tracking-wider block">
               {course.organization || 'Geral'}

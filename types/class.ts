@@ -70,4 +70,9 @@ export interface Class {
     live?: { enabled: boolean; label: string };
   };
   isGuidedStudyEnabled?: boolean;
+  published?: boolean;
+  draftWhitelist?: string[];
+  excludeFromFreePass?: boolean;
+  isBlocked?: boolean;
+  unlockDate?: string | null;
 }

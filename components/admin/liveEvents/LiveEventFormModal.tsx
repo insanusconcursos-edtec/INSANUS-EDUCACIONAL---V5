@@ -20,6 +20,11 @@ export const LiveEventFormModal: React.FC<LiveEventFormModalProps> = ({ isOpen, 
   const [startTime, setStartTime] = useState('');
   const [timezoneLocation, setTimezoneLocation] = useState('Brasília/DF');
   const [isIsolatedProduct, setIsIsolatedProduct] = useState(false);
+  const [published, setPublished] = useState(true);
+  const [draftWhitelist, setDraftWhitelist] = useState<string[]>([]);
+  const [excludeFromFreePass, setExcludeFromFreePass] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [unlockDate, setUnlockDate] = useState('');
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [thumbnailPreview, setThumbnailPreview] = useState<string>('');
   
@@ -92,6 +97,11 @@ export const LiveEventFormModal: React.FC<LiveEventFormModalProps> = ({ isOpen, 
         setStartTime(initialData.startTime);
         setTimezoneLocation(initialData.timezoneLocation || 'Brasília/DF');
         setIsIsolatedProduct(initialData.isIsolatedProduct);
+        setPublished(initialData.published !== false);
+        setDraftWhitelist(initialData.draftWhitelist || []);
+        setExcludeFromFreePass(!!initialData.excludeFromFreePass);
+        setIsBlocked(!!initialData.isBlocked);
+        setUnlockDate(initialData.unlockDate || '');
         setAccessControl(initialData.accessControl);
         setThumbnailPreview(initialData.thumbnailUrl || '');
       } else {
@@ -124,6 +134,11 @@ export const LiveEventFormModal: React.FC<LiveEventFormModalProps> = ({ isOpen, 
     setStartTime('');
     setTimezoneLocation('Brasília/DF');
     setIsIsolatedProduct(false);
+    setPublished(true);
+    setDraftWhitelist([]);
+    setExcludeFromFreePass(false);
+    setIsBlocked(false);
+    setUnlockDate('');
     setThumbnailFile(null);
     setThumbnailPreview('');
     setAccessControl({
@@ -165,6 +180,11 @@ export const LiveEventFormModal: React.FC<LiveEventFormModalProps> = ({ isOpen, 
         startTime,
         timezoneLocation,
         isIsolatedProduct,
+        published,
+        draftWhitelist,
+        excludeFromFreePass,
+        isBlocked,
+        unlockDate,
         accessControl,
         status: initialData?.status || 'scheduled',
         thumbnailUrl: initialData?.thumbnailUrl || ''
@@ -521,6 +541,74 @@ export const LiveEventFormModal: React.FC<LiveEventFormModalProps> = ({ isOpen, 
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+            </div>
+
+            {/* SEGURANÇA E FREE PASS */}
+            <div className="bg-[#1a1d24] p-4 rounded-xl border border-zinc-800 space-y-4">
+              <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Segurança, Rascunho e Passe Livre (Free Pass)</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Status de Publicação</label>
+                  <select
+                    value={isBlocked ? 'blocked' : (published !== false ? 'published' : 'draft')}
+                    onChange={e => {
+                      const val = e.target.value;
+                      if (val === 'blocked') {
+                        setPublished(true);
+                        setIsBlocked(true);
+                      } else if (val === 'published') {
+                        setPublished(true);
+                        setIsBlocked(false);
+                      } else {
+                        setPublished(false);
+                        setIsBlocked(false);
+                      }
+                    }}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-xs text-white focus:border-brand-red outline-none uppercase font-bold cursor-pointer"
+                  >
+                    <option value="published">PUBLICADO (Visível para alunos)</option>
+                    <option value="draft">RASCUNHO (Oculto / Teste)</option>
+                    <option value="blocked">BLOQUEADO (Em produção - Exibe cadeado)</option>
+                  </select>
+                </div>
+
+                {isBlocked && (
+                  <div className="col-span-full mt-2">
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Data de Liberação / Desbloqueio (Opcional)</label>
+                    <input
+                      type="date"
+                      value={unlockDate}
+                      onChange={e => setUnlockDate(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-xs text-white focus:border-brand-red outline-none"
+                    />
+                    <p className="text-[9px] text-zinc-500 mt-1">Data exibida junto ao card bloqueado para informar os alunos quando será liberado.</p>
+                  </div>
+                )}
+
+                <div className="flex items-center pt-5">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!excludeFromFreePass}
+                      onChange={e => setExcludeFromFreePass(e.target.checked)}
+                      className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-brand-red focus:ring-brand-red"
+                    />
+                    <span className="text-[10px] font-bold text-white uppercase tracking-wider">Excluir do Free Pass (Passe Livre)</span>
+                  </label>
+                </div>
+
+                <div className="col-span-full">
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Lista Branca de E-mails para Rascunho (Whitelist)</label>
+                  <input
+                    type="text"
+                    value={Array.isArray(draftWhitelist) ? draftWhitelist.join(', ') : ''}
+                    onChange={e => setDraftWhitelist(e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-xs text-white focus:border-brand-red outline-none font-medium"
+                    placeholder="email1@teste.com, email2@teste.com"
+                  />
+                  <p className="text-[9px] text-zinc-500 mt-1">E-mails separados por vírgula que poderão visualizar este evento mesmo estando em modo Rascunho.</p>
                 </div>
               </div>
             </div>
