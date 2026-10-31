@@ -1,6 +1,7 @@
 
 import { doc, getDoc, updateDoc, writeBatch, collection, query, where, getDocs, Timestamp, increment, orderBy, limit, setDoc, documentId, serverTimestamp } from 'firebase/firestore';
 import { db } from './firebase';
+import { checkUserHasFreePass, canAccessResource } from '@/utils/freePassUtils';
 
 export const cleanObject = (obj: Record<string, any> | any[] | null | undefined): any => {
   if (obj === null || typeof obj !== 'object') return obj;
@@ -317,12 +318,42 @@ export const getStudentPlans = async (uid: string): Promise<StudentPlan[]> => {
   const studentData = userSnap.data() as Student;
   const activeAccesses = studentData.access?.filter(a => a.type === 'plan' && a.isActive) || [];
 
-  if (activeAccesses.length === 0) return [];
+  const hasFreePass = await checkUserHasFreePass({ uid, role: studentData.role, email: studentData.email, access: studentData.access }, studentData);
+
+  let plansToFetch: { targetId?: string; accessId?: string; expiryDate?: any; isScholarship?: boolean }[] = [];
+
+  if (hasFreePass) {
+    const plansSnap = await getDocs(collection(db, 'plans'));
+    const freePassAccess = studentData.access?.find(a => (a.isFreePass || a.type === 'free_pass') && a.isActive);
+
+    plansToFetch = plansSnap.docs
+      .map(docSnap => {
+        const pData = docSnap.data();
+        const accessCheck = canAccessResource(pData, studentData.email, studentData.role, true, false);
+        if (!accessCheck.allowed) return null;
+        return {
+          targetId: docSnap.id,
+          accessId: freePassAccess?.id || 'freepass',
+          expiryDate: freePassAccess?.diaFim || freePassAccess?.endDate,
+          isScholarship: false
+        };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+  } else {
+    plansToFetch = activeAccesses.map(a => ({
+      targetId: a.targetId,
+      accessId: a.id,
+      expiryDate: a.diaFim || a.endDate,
+      isScholarship: a.isScholarship || false
+    }));
+  }
+
+  if (plansToFetch.length === 0) return [];
 
   // Fetch details for each plan
-  const planPromises = activeAccesses.map(async (access) => {
+  const planPromises = plansToFetch.map(async (access) => {
     try {
-      const planRef = doc(db, 'plans', access.targetId);
+      const planRef = doc(db, 'plans', access.targetId!);
       const planSnap = await getDoc(planRef);
       
       if (planSnap.exists()) {
@@ -330,8 +361,8 @@ export const getStudentPlans = async (uid: string): Promise<StudentPlan[]> => {
         return {
           ...planData,
           id: planSnap.id,
-          accessId: access.id,
-          expiryDate: access.diaFim || access.endDate,
+          accessId: access.accessId,
+          expiryDate: access.expiryDate,
           isScholarship: access.isScholarship || false
         } as StudentPlan;
       }
@@ -343,7 +374,8 @@ export const getStudentPlans = async (uid: string): Promise<StudentPlan[]> => {
   });
 
   const results = await Promise.all(planPromises);
-  return results.filter((p): p is StudentPlan => p !== null);
+  const uniquePlans = Array.from(new Map(results.filter((p): p is StudentPlan => p !== null).map(p => [p.id, p])).values());
+  return uniquePlans;
 };
 
 /**

@@ -5,6 +5,7 @@ import { classService } from '../../../services/classService';
 import { classMetadataService, MetadataItem } from '../../../services/classMetadataService';
 import { Class } from '../../../types/class';
 import { StudentPresentialCard } from './StudentPresentialCard';
+import { checkUserHasFreePass, canAccessResource } from '@/utils/freePassUtils';
 
 export function StudentPresentialTab() {
   const { userData } = useAuth();
@@ -24,7 +25,7 @@ export function StudentPresentialTab() {
   // 1. Carregar e Filtrar Dados
   useEffect(() => {
     const loadData = async () => {
-        if (!userData || !userData.access) {
+        if (!userData) {
             setLoading(false);
             return;
         }
@@ -37,24 +38,32 @@ export function StudentPresentialTab() {
                 classMetadataService.getSubcategories()
             ]);
 
-            // LÓGICA CRUCIAL: Filtrar apenas turmas que o usuário tem acesso
-            // O user.access contém itens { type: 'presential_class', targetId: '...', isActive: true }
-            const myAccess = userData.access
+            // LÓGICA CRUCIAL: Filtrar apenas turmas que o usuário tem acesso ou via Free Pass
+            const myAccess = (userData.access || [])
                 .filter((a: any) => a.type === 'presential_class' && a.isActive);
-            
             const myAccessIds = myAccess.map((a: any) => a.targetId);
 
+            const hasFreePass = await checkUserHasFreePass({ uid: userData.uid, role: userData.role, email: userData.email, access: userData.access }, userData);
+            const freePassAccess = (userData.access || []).find((a: any) => (a.isFreePass || a.type === 'free_pass') && a.isActive);
+
             const allowedClasses = allClasses
-                .filter(cls => myAccessIds.includes(cls.id))
+                .filter(cls => {
+                    const hasDirect = myAccessIds.includes(cls.id);
+                    const accessCheck = canAccessResource(cls, userData.email, userData.role, hasFreePass, hasDirect);
+                    return accessCheck.visible;
+                })
                 .map(cls => {
-                    // Descobre o índice original no array de acessos do aluno para espelhar a ordem de cadastro
-                    const accessIndex = userData.access.findIndex((a: any) => 
+                    const accessIndex = (userData.access || []).findIndex((a: any) => 
                         a.targetId === cls.id && a.type === 'presential_class' && a.isActive
                     );
-                    const access = userData.access[accessIndex];
+                    const access = accessIndex !== -1 ? userData.access[accessIndex] : freePassAccess;
+                    const hasDirect = myAccessIds.includes(cls.id);
+                    const accessCheck = canAccessResource(cls, userData.email, userData.role, hasFreePass, hasDirect);
                     
                     return { 
                         ...cls, 
+                        isBlocked: accessCheck.isBlocked || (cls as any).isBlocked || (cls as any).status === 'blocked',
+                        unlockDate: accessCheck.unlockDate || (cls as any).unlockDate,
                         grantedAt: access?.createdAt || access?.grantedAt,
                         orderIndex: access?.orderIndex || 0,
                         accessIndex: accessIndex !== -1 ? accessIndex : 999

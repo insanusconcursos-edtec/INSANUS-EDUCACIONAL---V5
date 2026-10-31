@@ -14,6 +14,8 @@ export default function ProductsManager() {
   const [registrationsCounts, setRegistrationsCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [activeTab, setActiveTab] = useState<'active' | 'inactive'>('active');
+  const [selectedTypeTab, setSelectedTypeTab] = useState<string>('ALL');
   const [isFormView, setIsFormView] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [productToDelete, setProductToDelete] = useState<any | null>(null);
@@ -113,13 +115,19 @@ export default function ProductsManager() {
     }
   };
 
-  const filteredProducts = products.filter(product =>
-    product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    product.gatewayId.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const activeProductsCount = products.filter(p => p.active !== false).length;
+  const inactiveProductsCount = products.filter(p => p.active === false).length;
 
-  const generalProducts = filteredProducts.filter(p => p.type !== 'EVENTO_PRESENCIAL');
-  const presentialEventProducts = filteredProducts.filter(p => p.type === 'EVENTO_PRESENCIAL');
+  const currentTabProducts = products.filter(product => {
+    const matchesTab = activeTab === 'active' ? (product.active !== false) : (product.active === false);
+    const matchesType = selectedTypeTab === 'ALL' || product.type === selectedTypeTab;
+    const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          product.gatewayId.toLowerCase().includes(searchTerm.toLowerCase());
+    return matchesTab && matchesType && matchesSearch;
+  });
+
+  const generalProducts = currentTabProducts.filter(p => p.type !== 'EVENTO_PRESENCIAL');
+  const presentialEventProducts = currentTabProducts.filter(p => p.type === 'EVENTO_PRESENCIAL');
 
   if (isFormView) {
     return (
@@ -184,6 +192,73 @@ export default function ProductsManager() {
             </div>
           </div>
         )}
+
+        {/* Tabs Ativos / Inativos */}
+        <div className="flex items-center gap-3 mb-6">
+          <button
+            onClick={() => setActiveTab('active')}
+            className={`px-5 py-3 rounded-xl font-black text-xs uppercase tracking-wider transition flex items-center gap-2.5 ${
+              activeTab === 'active'
+                ? 'bg-red-600 text-white shadow-lg shadow-red-600/20'
+                : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800'
+            }`}
+          >
+            <span>Produtos Ativos</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${activeTab === 'active' ? 'bg-red-700 text-white' : 'bg-zinc-800 text-zinc-400'}`}>
+              {activeProductsCount}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab('inactive')}
+            className={`px-5 py-3 rounded-xl font-black text-xs uppercase tracking-wider transition flex items-center gap-2.5 ${
+              activeTab === 'inactive'
+                ? 'bg-red-600 text-white shadow-lg shadow-red-600/20'
+                : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800'
+            }`}
+          >
+            <span>Produtos Inativos</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${activeTab === 'inactive' ? 'bg-red-700 text-white' : 'bg-zinc-800 text-zinc-400'}`}>
+              {inactiveProductsCount}
+            </span>
+          </button>
+        </div>
+
+        {/* Sub-abas de Tipos de Produtos */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-6 no-scrollbar">
+          {[
+            { id: 'ALL', label: 'Todos' },
+            { id: 'COMBO', label: 'Combo' },
+            { id: 'PLANO', label: 'Plano' },
+            { id: 'TURMA_ONLINE', label: 'Turma Online' },
+            { id: 'CURSO_ISOLADO', label: 'Curso Isolado' },
+            { id: 'SIMULADO', label: 'Simulado' },
+            { id: 'EVENTO', label: 'Evento ao Vivo' },
+            { id: 'EVENTO_PRESENCIAL', label: 'Evento Presencial' },
+          ].map((tab) => {
+            const count = products.filter(p => {
+              const matchesTab = activeTab === 'active' ? (p.active !== false) : (p.active === false);
+              const matchesType = tab.id === 'ALL' || p.type === tab.id;
+              return matchesTab && matchesType;
+            }).length;
+
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setSelectedTypeTab(tab.id)}
+                className={`px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-wider transition shrink-0 flex items-center gap-2 ${
+                  selectedTypeTab === tab.id
+                    ? 'bg-red-600 text-white shadow-md shadow-red-600/20'
+                    : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800/80'
+                }`}
+              >
+                <span>{tab.label}</span>
+                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${selectedTypeTab === tab.id ? 'bg-red-700 text-white' : 'bg-zinc-950 text-zinc-400'}`}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
 
       <div className="bg-zinc-900 rounded-xl border border-zinc-800 overflow-hidden mb-8">
         <div className="p-4 border-b border-zinc-800 flex items-center justify-between">

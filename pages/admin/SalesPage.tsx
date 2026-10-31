@@ -10,6 +10,7 @@ const SalesPage: React.FC = () => {
     const [products, setProducts] = useState<TictoProduct[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    const [selectedTypeTab, setSelectedTypeTab] = useState<string>('ALL');
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [selectedProduct, setSelectedProduct] = useState<TictoProduct | null>(null);
     const { currentUser, userRole } = useAuth();
@@ -68,9 +69,11 @@ const SalesPage: React.FC = () => {
         setTimeout(() => setCopiedId(null), 2000);
     };
 
-    const filteredProducts = products.filter(p => 
-        p.name.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const filteredProducts = products.filter(p => {
+        const matchesType = selectedTypeTab === 'ALL' || p.type === selectedTypeTab;
+        const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
+        return matchesType && matchesSearch;
+    });
 
     return (
         <div className="flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500 min-h-screen">
@@ -93,6 +96,38 @@ const SalesPage: React.FC = () => {
                         />
                     </div>
                 </div>
+            </div>
+
+            {/* Sub-abas de Tipos de Produtos (Afiliados) */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-2 px-2 no-scrollbar">
+                {[
+                    { id: 'ALL', label: 'Todos' },
+                    { id: 'COMBO', label: 'Combo' },
+                    { id: 'PLANO', label: 'Plano' },
+                    { id: 'TURMA_ONLINE', label: 'Turma Online' },
+                    { id: 'CURSO_ISOLADO', label: 'Curso Isolado' },
+                    { id: 'SIMULADO', label: 'Simulado' },
+                    { id: 'EVENTO', label: 'Evento ao Vivo' },
+                    { id: 'EVENTO_PRESENCIAL', label: 'Evento Presencial' },
+                ].map((tab) => {
+                    const count = products.filter(p => tab.id === 'ALL' || p.type === tab.id).length;
+                    return (
+                        <button
+                            key={tab.id}
+                            onClick={() => setSelectedTypeTab(tab.id)}
+                            className={`px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-wider transition shrink-0 flex items-center gap-2 ${
+                                selectedTypeTab === tab.id
+                                    ? 'bg-red-600 text-white shadow-md shadow-red-600/20'
+                                    : 'bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800/80'
+                            }`}
+                        >
+                            <span>{tab.label}</span>
+                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${selectedTypeTab === tab.id ? 'bg-red-700 text-white' : 'bg-zinc-950 text-zinc-400'}`}>
+                                {count}
+                            </span>
+                        </button>
+                    );
+                })}
             </div>
 
             {/* Netflix Grid */}

@@ -5,6 +5,7 @@ import { Filter, Search, ChevronRight } from 'lucide-react';
 import { db } from '../../../services/firebase';
 import { useAuth } from '../../../contexts/AuthContext';
 import { SimulatedClass } from '../../../services/simulatedService';
+import { checkUserHasFreePass, canAccessResource } from '@/utils/freePassUtils';
 
 interface StudentSimulatedListProps {
   onSelectClass: (cls: SimulatedClass) => void;
@@ -53,6 +54,8 @@ export const StudentSimulatedList: React.FC<StudentSimulatedListProps> = ({ onSe
                 setCategoryMap(catMap);
 
                 // 3. Filtra por permissão (Lógica Robusta Adaptada ao Schema do Projeto)
+                const hasFreePass = await checkUserHasFreePass({ uid: userData?.uid, role: userData?.role, email: userData?.email, access: userData?.access }, userData);
+
                 const allowed = allData
                     .map(turma => {
                         // Descobre o índice original no array de acessos do aluno para espelhar a ordem de cadastro
@@ -62,13 +65,17 @@ export const StudentSimulatedList: React.FC<StudentSimulatedListProps> = ({ onSe
                             a.isActive
                         );
                         const access = accessIndex !== undefined && accessIndex !== -1 ? userData.access[accessIndex] : null;
+                        const hasDirect = !!access;
+                        const accessCheck = canAccessResource(turma, userData?.email, userData?.role, hasFreePass, hasDirect);
 
                         return { 
                             ...turma, 
+                            isBlocked: accessCheck.isBlocked || (turma as any).isBlocked || (turma as any).status === 'blocked',
+                            unlockDate: accessCheck.unlockDate || (turma as any).unlockDate,
                             grantedAt: access?.createdAt || access?.grantedAt,
                             orderIndex: access?.orderIndex || 0,
                             accessIndex: accessIndex !== undefined && accessIndex !== -1 ? accessIndex : 999,
-                            hasAccess: !!access || (turma as any).public === true
+                            hasAccess: accessCheck.visible || (turma as any).public === true
                         };
                     })
                     .filter(t => t.hasAccess)

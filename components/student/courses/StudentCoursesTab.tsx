@@ -12,6 +12,7 @@ import { StudentCourseCard } from './StudentCourseCard';
 import { CourseDetails } from './CourseDetails';
 import CheckoutModal from '../checkout/CheckoutModal';
 import { useStudyContext } from '../../../contexts/StudyContext';
+import { checkUserHasFreePass, canAccessResource } from '@/utils/freePassUtils';
 
 export function StudentCoursesTab() {
   const { courseId } = useParams<{ courseId: string }>();
@@ -48,7 +49,7 @@ export function StudentCoursesTab() {
   // 1. Carregar e Filtrar Dados
   useEffect(() => {
     const loadData = async () => {
-        if (!userData || !userData.access) {
+        if (!userData) {
             setLoading(false);
             return;
         }
@@ -61,18 +62,27 @@ export function StudentCoursesTab() {
                 getProducts()
             ]);
 
-            // LÓGICA CRUCIAL: Filtrar apenas cursos que o usuário tem acesso
+            // LÓGICA CRUCIAL: Filtrar apenas cursos que o usuário tem acesso ou via Free Pass
             const myAccessIds = (userData.access || [])
                 .filter((a: any) => a.type === 'course' && a.isActive)
                 .map((a: any) => a.targetId);
 
+            const hasFreePass = await checkUserHasFreePass({ uid: userData.uid, role: userData.role, email: userData.email, access: userData.access }, userData);
+            const freePassAccess = (userData.access || []).find((a: any) => (a.isFreePass || a.type === 'free_pass') && a.isActive);
+
             const allowedCourses = allCourses
-                .filter(course => myAccessIds.includes(course.id))
+                .filter(course => {
+                    const hasDirect = myAccessIds.includes(course.id);
+                    const accessCheck = canAccessResource(course, userData.email, userData.role, hasFreePass, hasDirect);
+                    return accessCheck.visible;
+                })
                 .map(course => {
-                    const accessIndex = userData.access.findIndex((a: any) => 
+                    const accessIndex = (userData.access || []).findIndex((a: any) => 
                         a.targetId === course.id && a.type === 'course' && a.isActive
                     );
-                    const access = userData.access[accessIndex];
+                    const access = accessIndex !== -1 ? userData.access[accessIndex] : freePassAccess;
+                    const hasDirect = myAccessIds.includes(course.id);
+                    const accessCheck = canAccessResource(course, userData.email, userData.role, hasFreePass, hasDirect);
                     
                     // Fallback logic for dates
                     const startDate = access?.diaInicio || access?.startDate || access?.grantedAt || access?.createdAt || access?.starts_at || access?.startsAt;
@@ -81,6 +91,8 @@ export function StudentCoursesTab() {
 
                     return { 
                         ...course, 
+                        isBlocked: accessCheck.isBlocked || course.isBlocked || course.status === 'blocked',
+                        unlockDate: accessCheck.unlockDate || course.unlockDate,
                         grantedAt,
                         startDate,
                         endDate,
@@ -92,8 +104,7 @@ export function StudentCoursesTab() {
                 .sort((a, b) => a.accessIndex - b.accessIndex);
 
             // Filtrar produtos que o usuário ainda NÃO tem e que dão acesso a cursos
-            const unownedProducts = allProducts.filter(product => {
-                // Se algum curso do produto não está nos acessos do usuário
+            const unownedProducts = hasFreePass ? [] : allProducts.filter(product => {
                 const productCourseIds = product.linkedResources.onlineCourses || [];
                 return productCourseIds.length > 0 && productCourseIds.some(cid => !myAccessIds.includes(cid));
             });
