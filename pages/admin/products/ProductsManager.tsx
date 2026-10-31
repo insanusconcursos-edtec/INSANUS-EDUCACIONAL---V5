@@ -270,7 +270,15 @@ export default function ProductsManager() {
                         {product.type}
                       </span>
                     </td>
-                    <td className="px-6 py-4 font-bold">{product.accessDays}</td>
+                    <td className="px-6 py-4 font-bold">
+                      {(() => {
+                        const defaultOffer = product.offers?.find(o => o.isDefault) || product.offers?.[0];
+                        if (defaultOffer?.accessType === 'indeterminate' || defaultOffer?.accessDays === null) {
+                          return <span className="text-emerald-400">Indeterminado</span>;
+                        }
+                        return `${defaultOffer?.accessDays || product.accessDays || 365} dias`;
+                      })()}
+                    </td>
                     {isAdmin && (
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">

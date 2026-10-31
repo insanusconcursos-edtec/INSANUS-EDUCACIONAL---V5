@@ -206,7 +206,13 @@ const SalesPage: React.FC = () => {
                                     <div className="flex flex-wrap gap-4">
                                         <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-900 rounded-full border border-zinc-800">
                                             <Info size={14} className="text-zinc-500" />
-                                            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{selectedProduct.accessDays} Dias de Acesso</span>
+                                            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
+                                                {(() => {
+                                                    const def = selectedProduct.offers?.find(o => o.isDefault) || selectedProduct.offers?.[0];
+                                                    if (def?.accessType === 'indeterminate' || def?.accessDays === null) return 'Acesso Indeterminado';
+                                                    return `${def?.accessDays || selectedProduct.accessDays || 365} Dias de Acesso`;
+                                                })()}
+                                            </span>
                                         </div>
                                         <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 rounded-full border border-emerald-500/20">
                                             <DollarSign size={14} className="text-emerald-500" />

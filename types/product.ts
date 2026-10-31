@@ -40,6 +40,10 @@ export interface ProductOffer {
   lotQuantityLimit?: number; // Quantidade total de vagas no lote
   lotFictitiousSoldAmount?: number; // Quantidade fictícia de vagas vendidas
   lotDateDeadline?: string; // Data limite para virada de lote
+
+  // Prazo de acesso por oferta
+  accessDays?: number | null;
+  accessType?: 'days' | 'indeterminate';
 }
 
 export interface ProductSplit {
@@ -58,7 +62,7 @@ export interface Product {
   price?: number; // Tornou-se opcional em favor das Offers
   gatewayId: string;
   type: ProductType;
-  accessDays: number;
+  accessDays?: number | null;
   coverUrl?: string;
   checkoutCoverUrl?: string;
   linkedResources: LinkedResources;

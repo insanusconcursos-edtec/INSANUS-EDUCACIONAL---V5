@@ -35,7 +35,25 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
 
   // Form State
   const [name, setName] = useState(product?.name || '');
-  const [offers, setOffers] = useState<ProductOffer[]>(product?.offers || []);
+  const [offers, setOffers] = useState<ProductOffer[]>(
+    product?.offers && product.offers.length > 0
+      ? product.offers.map(o => ({
+          ...o,
+          accessType: o.accessType || (o.accessDays === null ? 'indeterminate' : 'days'),
+          accessDays: o.accessDays !== undefined ? o.accessDays : (product?.accessDays || 365)
+        }))
+      : [{
+          id: Math.random().toString(36).substr(2, 9),
+          name: 'Oferta Padrão',
+          price: product?.price || 0,
+          originalPrice: 0,
+          enrollmentFee: 0,
+          isDefault: true,
+          isActive: true,
+          accessType: product?.accessDays === null ? 'indeterminate' : 'days',
+          accessDays: product?.accessDays || 365
+        }]
+  );
   const [coproduction, setCoproduction] = useState<ProductSplit[]>(product?.coproduction || []);
   const [gatewayId, setGatewayId] = useState(product?.gatewayId || '');
   const [type, setType] = useState<ProductType>(product?.type || 'COMBO');
@@ -111,7 +129,7 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    if (!name || !type || !accessDays) {
+    if (!name || !type) {
       setError('Preencha todos os campos obrigatórios.');
       setLoading(false);
       return;
@@ -137,13 +155,14 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
       return;
     }
 
+    const defaultOffer = offers.find(o => o.isDefault) || offers[0];
     const productData = {
       name,
       offers,
       coproduction,
       gatewayId,
       type,
-      accessDays,
+      accessDays: defaultOffer?.accessDays || 365,
       coverUrl,
       checkoutCoverUrl,
       active,
@@ -188,7 +207,9 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
       isAffiliationEnabled: false,
       affiliateCommission: 0,
       pixDiscount: 0,
-      boletoDiscount: 0
+      boletoDiscount: 0,
+      accessType: 'days',
+      accessDays: 365
     };
     setOffers([...offers, newOffer]);
   };
@@ -338,63 +359,44 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
                   </select>
                 </div>
 
-                {type !== 'EVENTO_PRESENCIAL' ? (
-                  <div>
-                    <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
-                      Acesso (Dias) *
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={accessDays || ''}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value);
-                        setAccessDays(isNaN(val) ? 0 : val);
-                      }}
-                      className="w-full bg-zinc-950 border border-zinc-800 text-white rounded-xl px-4 py-3 focus:outline-none focus:border-red-500 transition-colors"
-                      required
-                    />
-                  </div>
-                ) : (
-                  linkedPresentialEvents.length > 0 && (
-                    <div className="md:col-span-2 p-6 bg-zinc-950/50 border border-zinc-800 rounded-2xl space-y-6">
-                      <div className="flex items-center gap-2 text-red-500 mb-2">
-                        <MapPin size={18} />
-                        <h3 className="text-sm font-black uppercase tracking-widest">Informações do Evento Presencial</h3>
-                      </div>
-                      
-                      {linkedPresentialEvents.map(eventId => {
-                        const event = availablePresentialEvents.find(e => e.id === eventId);
-                        if (!event) return null;
-                        return (
-                          <div key={eventId} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                            <div className="space-y-1">
-                              <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Ingressos</span>
-                              <p className="text-sm font-bold text-white">{event.totalTickets} cadeiras</p>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Data</span>
-                              <p className="text-sm font-bold text-white">
-                                {event.date ? formatInTimeZone(typeof event.date === 'object' && 'seconds' in event.date ? new Date(event.date.seconds * 1000) : new Date(event.date), 'UTC', 'dd/MM/yyyy') : 'A definir'}
-                              </p>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Local</span>
-                              <p className="text-sm font-bold text-white">
-                                {event.locationType === 'POLO_RI' ? 'Polo INSANUS CONCURSOS (Rio Branco/AC)' : 
-                                 event.locationType === 'POLO_PV' ? 'Polo GABARITO CONCURSOS (Porto Velho/RO)' : 
-                                 event.customLocation || 'Não definido'}
-                              </p>
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Início</span>
-                              <p className="text-sm font-bold text-white">{event.startTime}</p>
-                            </div>
-                          </div>
-                        );
-                      })}
+                {type === 'EVENTO_PRESENCIAL' && linkedPresentialEvents.length > 0 && (
+                  <div className="md:col-span-2 p-6 bg-zinc-950/50 border border-zinc-800 rounded-2xl space-y-6">
+                    <div className="flex items-center gap-2 text-red-500 mb-2">
+                      <MapPin size={18} />
+                      <h3 className="text-sm font-black uppercase tracking-widest">Informações do Evento Presencial</h3>
                     </div>
-                  )
+                    
+                    {linkedPresentialEvents.map(eventId => {
+                      const event = availablePresentialEvents.find(e => e.id === eventId);
+                      if (!event) return null;
+                      return (
+                        <div key={eventId} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Ingressos</span>
+                            <p className="text-sm font-bold text-white">{event.totalTickets} cadeiras</p>
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Data</span>
+                            <p className="text-sm font-bold text-white">
+                              {event.date ? formatInTimeZone(typeof event.date === 'object' && 'seconds' in event.date ? new Date(event.date.seconds * 1000) : new Date(event.date), 'UTC', 'dd/MM/yyyy') : 'A definir'}
+                            </p>
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Local</span>
+                            <p className="text-sm font-bold text-white">
+                              {event.locationType === 'POLO_RI' ? 'Polo INSANUS CONCURSOS (Rio Branco/AC)' : 
+                               event.locationType === 'POLO_PV' ? 'Polo GABARITO CONCURSOS (Porto Velho/RO)' : 
+                               event.customLocation || 'Não definido'}
+                            </p>
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Início</span>
+                            <p className="text-sm font-bold text-white">{event.startTime}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
 
                 <div>
@@ -465,6 +467,57 @@ export default function ProductFormModal({ product, onClose, onSave }: ProductFo
                           placeholder="Ex: Preço Promocional"
                           className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-all font-bold"
                         />
+                      </div>
+
+                      {/* Prazo de Acesso por Oferta */}
+                      <div>
+                        <label className="block text-[9px] font-black text-zinc-600 uppercase tracking-[0.2em] mb-2">Prazo de Acesso</label>
+                        <div className="grid grid-cols-2 gap-2 mb-2">
+                          <button
+                            type="button"
+                            onClick={() => updateOffer(offer.id, { accessType: 'days', accessDays: offer.accessDays || 365 })}
+                            className={`py-2 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-all ${
+                              (offer.accessType !== 'indeterminate') 
+                                ? 'bg-red-600/10 text-red-500 border-red-500/40' 
+                                : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+                            }`}
+                          >
+                            Dias Específicos
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateOffer(offer.id, { accessType: 'indeterminate', accessDays: null })}
+                            className={`py-2 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-all ${
+                              (offer.accessType === 'indeterminate') 
+                                ? 'bg-emerald-600/10 text-emerald-500 border-emerald-500/40' 
+                                : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+                            }`}
+                          >
+                            Indeterminado (Vitalício)
+                          </button>
+                        </div>
+                        {offer.accessType !== 'indeterminate' ? (
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 font-bold text-[10px]">DIAS</span>
+                            <input
+                              type="number"
+                              min="1"
+                              value={offer.accessDays !== null && offer.accessDays !== undefined ? offer.accessDays : 365}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                updateOffer(offer.id, { accessDays: isNaN(val) ? 365 : val });
+                              }}
+                              className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl pl-14 pr-4 py-3 text-sm focus:outline-none focus:border-red-500 transition-all font-mono font-bold"
+                              placeholder="365"
+                            />
+                          </div>
+                        ) : (
+                          <div className="p-3 bg-emerald-500/5 border border-emerald-500/20 rounded-xl text-center">
+                            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wide">
+                              Acesso vitalício / sem limite de tempo
+                            </span>
+                          </div>
+                        )}
                       </div>
 
                       <div className="grid grid-cols-3 gap-3">

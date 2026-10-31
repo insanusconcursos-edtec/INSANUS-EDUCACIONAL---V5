@@ -92,10 +92,31 @@ export const provisionPurchase = async (customerData: CustomerData, targetId: st
         .limit(1)
         .get();
       
-      const setProductData = (data: any, id: string) => {
+      const parseAccessDays = (productData: any, matchingOffer?: any) => {
+        if (matchingOffer) {
+          if (matchingOffer.accessType === 'indeterminate' || matchingOffer.accessDays === null) {
+            return -1;
+          }
+          if (matchingOffer.accessDays !== undefined && matchingOffer.accessDays !== null) {
+            return Number(matchingOffer.accessDays);
+          }
+        }
+        const defaultOffer = (productData.offers || []).find((o: any) => o.isDefault) || (productData.offers || [])[0];
+        if (defaultOffer) {
+          if (defaultOffer.accessType === 'indeterminate' || defaultOffer.accessDays === null) {
+            return -1;
+          }
+          if (defaultOffer.accessDays !== undefined && defaultOffer.accessDays !== null) {
+            return Number(defaultOffer.accessDays);
+          }
+        }
+        return Number(productData.accessDays || productData.validity || 365);
+      };
+
+      const setProductData = (data: any, id: string, matchingOffer?: any) => {
         productDocId = id;
-        productName = data.name;
-        accessDays = data.accessDays || 365;
+        productName = matchingOffer?.name || data.name;
+        accessDays = parseAccessDays(data, matchingOffer);
         linkedResources = data.linkedResources || linkedResources;
         productType = data.type || 'DIGITAL';
       };
@@ -111,7 +132,7 @@ export const provisionPurchase = async (customerData: CustomerData, targetId: st
           const productData = tictoProductSnap.data();
           productDocId = tictoProductSnap.id;
           productName = productData?.name || productData?.title || 'Produto';
-          accessDays = productData?.accessDays || productData?.validity || 365;
+          accessDays = parseAccessDays(productData);
           productType = productData?.type || 'DIGITAL';
           
           if (productData?.linkedResources) {
@@ -132,8 +153,8 @@ export const provisionPurchase = async (customerData: CustomerData, targetId: st
             
             if (matchingOffer) {
               productDocId = doc.id;
-              productName = matchingOffer.title || data.name || 'Produto via Oferta';
-              accessDays = matchingOffer.accessDays || data.accessDays || data.validity || 365;
+              productName = matchingOffer.name || matchingOffer.title || data.name || 'Produto via Oferta';
+              accessDays = parseAccessDays(data, matchingOffer);
               linkedResources = data.linkedResources || { onlineCourses: [doc.id] };
               productType = data.type || 'DIGITAL';
               foundByOffer = true;
@@ -232,7 +253,11 @@ export const provisionPurchase = async (customerData: CustomerData, targetId: st
 
     // Calcular data de expiração
     const expirationDate = new Date();
-    expirationDate.setDate(expirationDate.getDate() + accessDays);
+    if (accessDays === -1 || accessDays === null || accessDays === undefined) {
+      expirationDate.setFullYear(expirationDate.getFullYear() + 100); // 100 years for indeterminate / lifetime
+    } else {
+      expirationDate.setDate(expirationDate.getDate() + accessDays);
+    }
 
     // Preparar array de acessos
     const accessesToGrant: UserAccess[] = [];
