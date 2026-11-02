@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CourseModule } from '../../../../types/course';
+import { CourseModule, CourseModuleGroup, CourseSection } from '../../../../types/course';
 import { courseService } from '../../../../services/courseService';
 
 interface CourseModuleModalProps {
@@ -7,11 +7,26 @@ interface CourseModuleModalProps {
   onClose: () => void;
   onSave: (data: Partial<CourseModule>) => Promise<void>;
   initialData?: CourseModule | null;
+  moduleGroups?: CourseModuleGroup[];
+  defaultGroupId?: string | null;
+  sections?: CourseSection[];
+  defaultSectionId?: string | null;
 }
 
-export function CourseModuleModal({ isOpen, onClose, onSave, initialData }: CourseModuleModalProps) {
+export function CourseModuleModal({ 
+  isOpen, 
+  onClose, 
+  onSave, 
+  initialData, 
+  moduleGroups = [], 
+  defaultGroupId = null,
+  sections = [],
+  defaultSectionId = null
+}: CourseModuleModalProps) {
   const [title, setTitle] = useState('');
   const [coverUrl, setCoverUrl] = useState('');
+  const [sectionId, setSectionId] = useState<string | null>(null);
+  const [groupId, setGroupId] = useState<string | null>(null);
   const [isLocked, setIsLocked] = useState(false);
   const [releaseDate, setReleaseDate] = useState('');
   
@@ -26,6 +41,8 @@ export function CourseModuleModal({ isOpen, onClose, onSave, initialData }: Cour
         setTitle(initialData.title);
         setCoverUrl(initialData.coverUrl);
         setPreviewUrl(initialData.coverUrl);
+        setSectionId(initialData.sectionId || null);
+        setGroupId(initialData.groupId || null);
         setIsLocked(initialData.isLocked);
         setReleaseDate(initialData.releaseDate || '');
       } else {
@@ -34,11 +51,13 @@ export function CourseModuleModal({ isOpen, onClose, onSave, initialData }: Cour
         setCoverUrl('');
         setPreviewUrl('');
         setSelectedFile(null);
+        setSectionId(defaultSectionId || null);
+        setGroupId(defaultGroupId || null);
         setIsLocked(false);
         setReleaseDate('');
       }
     }
-  }, [isOpen, initialData]);
+  }, [isOpen, initialData, defaultGroupId, defaultSectionId]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -74,6 +93,8 @@ export function CourseModuleModal({ isOpen, onClose, onSave, initialData }: Cour
       await onSave({
         title,
         coverUrl: finalCoverUrl,
+        sectionId: sectionId || null,
+        groupId: groupId || null,
         isLocked,
         releaseDate: finalReleaseDate
       });
@@ -111,6 +132,54 @@ export function CourseModuleModal({ isOpen, onClose, onSave, initialData }: Cour
               required
             />
           </div>
+
+          {/* Sessão / Linha Temática */}
+          {sections && sections.length > 0 && (
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">
+                Sessão / Linha Temática (Opcional)
+              </label>
+              <select
+                value={sectionId || ''}
+                onChange={e => setSectionId(e.target.value ? e.target.value : null)}
+                className="w-full bg-black border border-gray-800 rounded p-3 text-white focus:border-amber-500 outline-none text-xs"
+              >
+                <option value="">Sessão Principal (Padrão)</option>
+                {sections.map(s => (
+                  <option key={s.id} value={s.id}>
+                    📑 {s.title}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-zinc-500 mt-1">
+                Define em qual linha horizontal temática este módulo será posicionado (se não estiver dentro de um bloco).
+              </p>
+            </div>
+          )}
+
+          {/* Vinculação a Bloco / Grupo (se houver grupos) */}
+          {moduleGroups && moduleGroups.length > 0 && (
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">
+                Bloco / Grupo de Disciplinas (Opcional)
+              </label>
+              <select
+                value={groupId || ''}
+                onChange={e => setGroupId(e.target.value ? e.target.value : null)}
+                className="w-full bg-black border border-gray-800 rounded p-3 text-white focus:border-purple-500 outline-none text-xs"
+              >
+                <option value="">Nenhum (Exibir fora de blocos / Na linha da sessão)</option>
+                {moduleGroups.map(g => (
+                  <option key={g.id} value={g.id}>
+                    📁 {g.title}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-zinc-500 mt-1">
+                Ao selecionar um bloco, este módulo ficará contido dentro da capa do respectivo bloco.
+              </p>
+            </div>
+          )}
 
           {/* Capa */}
           <div>

@@ -66,10 +66,36 @@ export interface OnlineCourse {
   unlockDate?: string | null;
 }
 
+// --- NOVO: Interface da Sessão / Linha Temática (Organizador de Linhas) ---
+export interface CourseSection {
+  id: string;
+  courseId: string;
+  title: string; // Ex: "Disciplinas Gerais", "TAF", "Mentoria", etc.
+  order: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// --- NOVO: Interface do Grupo de Módulos (Bloco de Disciplinas - Estilo Netflix) ---
+export interface CourseModuleGroup {
+  id: string;
+  courseId: string;
+  sectionId?: string | null; // Vincula à Sessão/Linha Temática (opcional)
+  title: string;
+  coverUrl: string; // Proporção 474x1000 estilo Netflix
+  order: number;
+  isLocked?: boolean;
+  releaseDate?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // --- NOVO: Interface do Módulo ---
 export interface CourseModule {
   id: string;
   courseId: string;
+  sectionId?: string | null; // Vincula à Sessão/Linha Temática (opcional)
+  groupId?: string | null; // Vincula ao Grupo/Bloco de Módulos (opcional)
   title: string;
   coverUrl: string; // Proporção 474x1000
   order: number;

@@ -80,7 +80,7 @@ const LinkedCourseTabContent: React.FC<{ courseId: string; onBack: () => void }>
     );
   }
 
-  return <CourseDetails course={course} onBack={onBack} />;
+  return <CourseDetails course={course} onBack={onBack} isInsidePlan={true} />;
 };
 
 const StudentDashboard: React.FC = () => {

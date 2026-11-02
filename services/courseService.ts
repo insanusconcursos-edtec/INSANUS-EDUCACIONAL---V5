@@ -23,11 +23,13 @@ import {
   arrayRemove
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject, getBlob } from 'firebase/storage';
-import { OnlineCourse, CourseFormData, CourseModule, CourseSubModule, CourseLesson, CourseContent, CourseStructureModule, CourseStructureFolder } from '../types/course';
+import { OnlineCourse, CourseFormData, CourseSection, CourseModule, CourseModuleGroup, CourseSubModule, CourseLesson, CourseContent, CourseStructureModule, CourseStructureFolder } from '../types/course';
 import { CourseEditalStructure } from '../types/courseEdital';
 
 const COLLECTION_NAME = 'online_courses';
+const SECTIONS_COLLECTION = 'course_sections';
 const MODULES_COLLECTION = 'course_modules';
+const MODULE_GROUPS_COLLECTION = 'course_module_groups';
 const SUBMODULES_COLLECTION = 'course_submodules';
 const GROUPS_COLLECTION = 'course_groups';
 const LESSONS_COLLECTION = 'course_lessons';
@@ -266,6 +268,22 @@ export const courseService = {
       const deleteModulesPromises = modulesSnap.docs.map(d => courseService.deleteModule(d.id));
       await Promise.all(deleteModulesPromises);
 
+      // 1.1 Deletar blocos/grupos de módulos do curso
+      const groupsQuery = query(collection(db, MODULE_GROUPS_COLLECTION), where('courseId', '==', id));
+      const groupsSnap = await getDocs(groupsQuery);
+      const deleteGroupsPromises = groupsSnap.docs.map(async (d) => {
+        const groupData = d.data() as CourseModuleGroup;
+        if (groupData.coverUrl) await courseService.safeDeleteStorageFile(groupData.coverUrl);
+        await deleteDoc(d.ref);
+      });
+      await Promise.all(deleteGroupsPromises);
+
+      // 1.2 Deletar sessões do curso
+      const sectionsQuery = query(collection(db, SECTIONS_COLLECTION), where('courseId', '==', id));
+      const sectionsSnap = await getDocs(sectionsQuery);
+      const deleteSectionsPromises = sectionsSnap.docs.map(d => deleteDoc(d.ref));
+      await Promise.all(deleteSectionsPromises);
+
       // 2. Deletar ativos do curso (capas, banners)
       const courseSnap = await getDoc(doc(db, COLLECTION_NAME, id));
       if (courseSnap.exists()) {
@@ -320,9 +338,45 @@ export const courseService = {
       operations.push({ ref: newCourseRef, data: newCourseData });
 
       // Mapeamentos para manter integridade referencial
+      const sectionMapping: Record<string, string> = {};
+      const moduleGroupMapping: Record<string, string> = {};
       const moduleMapping: Record<string, string> = {};
       const subModuleMapping: Record<string, string> = {};
       const lessonMapping: Record<string, string> = {};
+
+      // 1.0 Sessões do Curso
+      const sections = await courseService.getCourseSections(originalCourse.id);
+      sections.forEach(sec => {
+        const newSecRef = doc(collection(db, SECTIONS_COLLECTION));
+        sectionMapping[sec.id] = newSecRef.id;
+        const newSecData = {
+          ...sec,
+          courseId: newCourseRef.id,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        delete (newSecData as any).id;
+        operations.push({ ref: newSecRef, data: newSecData });
+      });
+
+      // 1.1 Grupos/Blocos de Módulos
+      const moduleGroups = await courseService.getModuleGroups(originalCourse.id);
+      await Promise.all(moduleGroups.map(async (group) => {
+        const newGroupRef = doc(collection(db, MODULE_GROUPS_COLLECTION));
+        moduleGroupMapping[group.id] = newGroupRef.id;
+
+        const clonedCover = await courseService.cloneStorageFile(group.coverUrl);
+        const newGroupData: any = {
+          ...group,
+          courseId: newCourseRef.id,
+          sectionId: group.sectionId ? (sectionMapping[group.sectionId] || null) : null,
+          coverUrl: clonedCover || '',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        delete newGroupData.id;
+        operations.push({ ref: newGroupRef, data: newGroupData });
+      }));
 
       // 2. Módulos
       const modules = await courseService.getModules(originalCourse.id);
@@ -335,12 +389,14 @@ export const courseService = {
         
         const [clonedModCover, clonedModBanner] = await Promise.all([
           courseService.cloneStorageFile(mod.coverUrl),
-          courseService.cloneStorageFile(mod.bannerUrl)
+          courseService.cloneStorageFile((mod as any).bannerUrl)
         ]);
 
         const newModData: any = {
           ...mod,
           courseId: newCourseRef.id,
+          sectionId: mod.sectionId ? (sectionMapping[mod.sectionId] || null) : null,
+          groupId: mod.groupId ? (moduleGroupMapping[mod.groupId] || null) : null,
           coverUrl: clonedModCover || '',
           bannerUrl: clonedModBanner || ''
         };
@@ -798,6 +854,220 @@ export const courseService = {
       return downloadURL;
     } catch (error) {
       console.error("Erro ao fazer upload da capa:", error);
+      throw error;
+    }
+  },
+
+  // --- SESSÕES / LINHAS TEMÁTICAS ---
+
+  createCourseSection: async (data: Omit<CourseSection, 'id'>): Promise<string> => {
+    try {
+      const q = query(
+        collection(db, SECTIONS_COLLECTION),
+        where('courseId', '==', data.courseId)
+      );
+      const snapshot = await getDocs(q);
+      const existingOrders = snapshot.docs.map(d => Number(d.data().order) || 0);
+      const lastOrder = existingOrders.length > 0 ? Math.max(...existingOrders) : 0;
+
+      const docRef = await addDoc(collection(db, SECTIONS_COLLECTION), sanitizeData({
+        ...data,
+        order: lastOrder + 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }));
+      return docRef.id;
+    } catch (error) {
+      console.error("Erro ao criar sessão do curso:", error);
+      throw error;
+    }
+  },
+
+  getCourseSections: async (courseId: string): Promise<CourseSection[]> => {
+    try {
+      const q = query(
+        collection(db, SECTIONS_COLLECTION),
+        where('courseId', '==', courseId)
+      );
+      const snapshot = await getDocs(q);
+      const list = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as CourseSection));
+      return list.sort((a, b) => (a.order || 0) - (b.order || 0));
+    } catch (error) {
+      console.error("Erro ao buscar sessões do curso:", error);
+      throw error;
+    }
+  },
+
+  updateCourseSection: async (id: string, data: Partial<CourseSection>) => {
+    try {
+      const docRef = doc(db, SECTIONS_COLLECTION, id);
+      await updateDoc(docRef, sanitizeData({
+        ...data,
+        updatedAt: new Date().toISOString()
+      }));
+    } catch (error) {
+      console.error("Erro ao atualizar sessão do curso:", error);
+      throw error;
+    }
+  },
+
+  deleteCourseSection: async (sectionId: string) => {
+    try {
+      // 1. Desvincular módulos desta sessão (voltam para a sessão padrão/raiz)
+      const modulesQuery = query(collection(db, MODULES_COLLECTION), where('sectionId', '==', sectionId));
+      const modulesSnap = await getDocs(modulesQuery);
+      const unlinkModules = modulesSnap.docs.map(d => updateDoc(d.ref, { sectionId: null }));
+      await Promise.all(unlinkModules);
+
+      // 2. Desvincular blocos desta sessão (voltam para a sessão padrão/raiz)
+      const groupsQuery = query(collection(db, MODULE_GROUPS_COLLECTION), where('sectionId', '==', sectionId));
+      const groupsSnap = await getDocs(groupsQuery);
+      const unlinkGroups = groupsSnap.docs.map(d => updateDoc(d.ref, { sectionId: null }));
+      await Promise.all(unlinkGroups);
+
+      // 3. Deletar documento da sessão
+      await deleteDoc(doc(db, SECTIONS_COLLECTION, sectionId));
+    } catch (error) {
+      console.error("Erro ao excluir sessão do curso:", error);
+      throw error;
+    }
+  },
+
+  reorderCourseSections: async (sections: CourseSection[]) => {
+    try {
+      const batch = writeBatch(db);
+      sections.forEach((sec, index) => {
+        const docRef = doc(db, SECTIONS_COLLECTION, sec.id);
+        batch.update(docRef, { order: index + 1 });
+      });
+      await batch.commit();
+    } catch (error) {
+      console.error("Erro ao reordenar sessões:", error);
+      throw error;
+    }
+  },
+
+  reorderUnifiedItems: async (items: { id: string; isGroup: boolean }[]) => {
+    try {
+      const batch = writeBatch(db);
+      items.forEach((item, index) => {
+        const coll = item.isGroup ? MODULE_GROUPS_COLLECTION : MODULES_COLLECTION;
+        const docRef = doc(db, coll, item.id);
+        batch.update(docRef, { order: index + 1 });
+      });
+      await batch.commit();
+    } catch (error) {
+      console.error("Erro ao reordenar itens da sessão:", error);
+      throw error;
+    }
+  },
+
+  // --- GRUPOS / BLOCOS DE MÓDULOS (Estilo Netflix) ---
+
+  createModuleGroup: async (data: Omit<CourseModuleGroup, 'id'>): Promise<string> => {
+    try {
+      // Query apenas por courseId para NÃO exigir índice composto no Firestore
+      const q = query(
+        collection(db, MODULE_GROUPS_COLLECTION),
+        where('courseId', '==', data.courseId)
+      );
+      const snapshot = await getDocs(q);
+      const existingOrders = snapshot.docs.map(d => Number(d.data().order) || 0);
+      const lastOrder = existingOrders.length > 0 ? Math.max(...existingOrders) : 0;
+
+      const docRef = await addDoc(collection(db, MODULE_GROUPS_COLLECTION), sanitizeData({
+        ...data,
+        order: lastOrder + 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }));
+      return docRef.id;
+    } catch (error) {
+      console.error("Erro ao criar bloco de módulos:", error);
+      throw error;
+    }
+  },
+
+  getModuleGroups: async (courseId: string): Promise<CourseModuleGroup[]> => {
+    try {
+      // Query apenas por courseId e ordenação em memória para NÃO exigir índice composto no Firestore
+      const q = query(
+        collection(db, MODULE_GROUPS_COLLECTION),
+        where('courseId', '==', courseId)
+      );
+      const snapshot = await getDocs(q);
+      const list = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as CourseModuleGroup));
+      return list.sort((a, b) => (a.order || 0) - (b.order || 0));
+    } catch (error) {
+      console.error("Erro ao buscar blocos de módulos:", error);
+      throw error;
+    }
+  },
+
+  getModuleGroup: async (id: string): Promise<CourseModuleGroup | null> => {
+    try {
+      const docRef = doc(db, MODULE_GROUPS_COLLECTION, id);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) return { id: docSnap.id, ...docSnap.data() } as CourseModuleGroup;
+      return null;
+    } catch (error) {
+      console.error("Erro ao buscar bloco de módulos:", error);
+      return null;
+    }
+  },
+
+  updateModuleGroup: async (id: string, data: Partial<CourseModuleGroup>) => {
+    try {
+      const docRef = doc(db, MODULE_GROUPS_COLLECTION, id);
+      await updateDoc(docRef, sanitizeData({
+        ...data,
+        updatedAt: new Date().toISOString()
+      }));
+    } catch (error) {
+      console.error("Erro ao atualizar bloco de módulos:", error);
+      throw error;
+    }
+  },
+
+  deleteModuleGroup: async (id: string) => {
+    try {
+      // 1. Desvincular módulos que pertencem a esse grupo (retornam para a raiz)
+      const modulesQuery = query(collection(db, MODULES_COLLECTION), where('groupId', '==', id));
+      const modulesSnap = await getDocs(modulesQuery);
+      const unlinkPromises = modulesSnap.docs.map(d => updateDoc(d.ref, { groupId: null }));
+      await Promise.all(unlinkPromises);
+
+      // 2. Apagar capa do storage se existir
+      const groupSnap = await getDoc(doc(db, MODULE_GROUPS_COLLECTION, id));
+      if (groupSnap.exists()) {
+        const groupData = groupSnap.data() as CourseModuleGroup;
+        if (groupData.coverUrl) await courseService.safeDeleteStorageFile(groupData.coverUrl);
+      }
+
+      // 3. Excluir documento do grupo
+      await deleteDoc(doc(db, MODULE_GROUPS_COLLECTION, id));
+    } catch (error) {
+      console.error("Erro ao excluir bloco de módulos:", error);
+      throw error;
+    }
+  },
+
+  reorderModuleGroups: async (groups: CourseModuleGroup[]) => {
+    try {
+      const batch = writeBatch(db);
+      groups.forEach((group, index) => {
+        const docRef = doc(db, MODULE_GROUPS_COLLECTION, group.id);
+        batch.update(docRef, { order: index + 1 });
+      });
+      await batch.commit();
+    } catch (error) {
+      console.error("Erro ao reordenar blocos de módulos:", error);
       throw error;
     }
   },
