@@ -41,9 +41,17 @@ const SimulatedClassCard: React.FC<SimulatedClassCardProps> = ({ data, onManage,
 
         {/* Organ Badge */}
         <div className="absolute top-3 left-3 flex flex-col gap-1">
-             {data.isBlocked && (
+             {data.isBlocked ? (
                   <span className="bg-amber-500/90 backdrop-blur-md text-[8px] font-black text-black px-2 py-1 rounded uppercase tracking-tighter flex items-center gap-1 shadow-lg">
                      🔒 BLOQUEADO {data.unlockDate ? `(${data.unlockDate.split('-').reverse().join('/')})` : ''}
+                  </span>
+             ) : data.published === false || (data as any).status === 'draft' ? (
+                  <span className="bg-yellow-500/90 backdrop-blur-md text-[8px] font-black text-black px-2 py-1 rounded uppercase tracking-tighter flex items-center gap-1 shadow-lg">
+                     ⚠️ RASCUNHO (OCULTO)
+                  </span>
+             ) : (
+                  <span className="bg-emerald-600/90 backdrop-blur-md text-[8px] font-black text-white px-2 py-1 rounded uppercase tracking-tighter flex items-center gap-1 shadow-lg">
+                     ✓ PUBLICADO
                   </span>
              )}
              <span className="bg-brand-red text-[8px] font-black text-white px-2 py-1 rounded uppercase tracking-tighter shadow-lg shadow-brand-red/20 border border-red-500">

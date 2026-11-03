@@ -16,6 +16,10 @@ interface ClassFormModalProps {
 
 const INITIAL_DATA: Partial<Class> = {
   name: '',
+  published: true,
+  isBlocked: false,
+  excludeFromFreePass: false,
+  draftWhitelist: [],
   type: 'PRE_EDITAL',
   modality: 'REGULAR',
   hasRecordings: false,
@@ -59,7 +63,10 @@ export const ClassFormModal: React.FC<ClassFormModalProps> = ({ isOpen, onClose,
   React.useEffect(() => {
     if (isOpen) {
       if (classToEdit) {
-        setFormData(classToEdit);
+        setFormData({
+          ...classToEdit,
+          published: classToEdit.published !== false
+        });
         // Calculate break count if needed, though it's not stored directly in Class interface as a count, 
         // but derived from logic. For now, we default to 1 if hasBreak is true.
         if (classToEdit.hasBreak) {

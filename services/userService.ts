@@ -374,21 +374,18 @@ export const searchStudentsGlobal = async (searchTerm: string): Promise<Student[
   const searchLower = term.toLowerCase();
   const searchDigits = term.replace(/\D/g, '');
 
+  const isEmail = term.includes('@');
+  const isCpfOnly = /^[\d.\-]+$/.test(term) && searchDigits.length >= 3;
+
   const promises: Promise<any>[] = [];
 
-  // 1. Search by name prefix
-  if (searchUpper.length > 0) {
+  if (isEmail) {
+    // 1. Specific Email Search (Exact match + prefix match)
     promises.push(getDocs(query(
       collection(db, 'users'),
-      orderBy('name'),
-      startAt(searchUpper),
-      endAt(searchUpper + '\uf8ff'),
-      limit(50)
+      where('email', '==', searchLower),
+      limit(20)
     )));
-  }
-
-  // 2. Search by email prefix
-  if (searchLower.length >= 2) {
     promises.push(getDocs(query(
       collection(db, 'users'),
       orderBy('email'),
@@ -396,10 +393,8 @@ export const searchStudentsGlobal = async (searchTerm: string): Promise<Student[
       endAt(searchLower + '\uf8ff'),
       limit(50)
     )));
-  }
-
-  // 3. Search by CPF prefix
-  if (searchDigits.length >= 2) {
+  } else if (isCpfOnly) {
+    // 2. Specific CPF Search (Digits only prefix)
     promises.push(getDocs(query(
       collection(db, 'users'),
       orderBy('cpf'),
@@ -407,6 +402,41 @@ export const searchStudentsGlobal = async (searchTerm: string): Promise<Student[
       endAt(searchDigits + '\uf8ff'),
       limit(50)
     )));
+  } else {
+    // 3. Name or partial search
+    // Search uppercase name
+    if (searchUpper.length > 0) {
+      promises.push(getDocs(query(
+        collection(db, 'users'),
+        orderBy('name'),
+        startAt(searchUpper),
+        endAt(searchUpper + '\uf8ff'),
+        limit(50)
+      )));
+    }
+
+    // Capitalized name (e.g. "Vanessa")
+    const searchCapitalized = term.charAt(0).toUpperCase() + term.slice(1).toLowerCase();
+    if (searchCapitalized !== searchUpper) {
+      promises.push(getDocs(query(
+        collection(db, 'users'),
+        orderBy('name'),
+        startAt(searchCapitalized),
+        endAt(searchCapitalized + '\uf8ff'),
+        limit(50)
+      )));
+    }
+
+    // Email prefix
+    if (searchLower.length >= 2) {
+      promises.push(getDocs(query(
+        collection(db, 'users'),
+        orderBy('email'),
+        startAt(searchLower),
+        endAt(searchLower + '\uf8ff'),
+        limit(50)
+      )));
+    }
   }
 
   const snapshots = await Promise.all(promises);
@@ -416,10 +446,24 @@ export const searchStudentsGlobal = async (searchTerm: string): Promise<Student[
     snapshot.docs.forEach((docSnap: any) => {
       const data = docSnap.data();
       if (!data.role || data.role.toLowerCase() === 'student') {
-        studentMap.set(docSnap.id, toPlainObject({
+        const student = toPlainObject({
           ...data,
           uid: docSnap.id
-        }) as Student);
+        }) as Student;
+
+        // In-memory verification: strictly ensure that the student matches what was typed
+        const name = (student.name || '').toLowerCase();
+        const email = (student.email || '').toLowerCase();
+        const cleanCpf = (student.cpf || '').replace(/\D/g, '');
+
+        const matches = 
+          name.includes(searchLower) ||
+          email.includes(searchLower) ||
+          (searchDigits.length >= 3 && cleanCpf.includes(searchDigits));
+
+        if (matches) {
+          studentMap.set(docSnap.id, student);
+        }
       }
     });
   });

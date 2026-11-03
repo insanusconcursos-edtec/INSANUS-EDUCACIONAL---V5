@@ -67,10 +67,16 @@ export async function checkUserHasFreePass(currentUser: any, userData?: any): Pr
 
 /**
  * Validates whether a user can access a specific resource based on:
- * 1. Published / Draft status + Draft Whitelist
- * 2. Blocked status (visible with padlock)
- * 3. Exclude from Free Pass setting
- * 4. Regular access vs Free Pass
+/**
+ * Validates whether a user can access a specific resource based on:
+ * 1. Admin bypass (always has full access)
+ * 2. RASCUNHO (Draft) status:
+ *    - Se estiver em RASCUNHO, fica totalmente OCULTO, inclusive para quem possui acesso liberado!
+ *    - Só aparece para o Administrador ou para quem estiver na WhiteList da turma.
+ * 3. PUBLICADO:
+ *    - Volta a aparecer normalmente para os alunos que possuem acesso liberado (direto ou via Free Pass).
+ * 4. BLOQUEADO:
+ *    - Exibe com cadeado e data de liberação para os alunos com acesso.
  */
 export function canAccessResource(
   resource: SecurityResource,
@@ -79,7 +85,7 @@ export function canAccessResource(
   hasFreePass?: boolean,
   hasDirectAccess?: boolean
 ): { allowed: boolean; visible: boolean; isBlocked?: boolean; unlockDate?: string; reason?: string } {
-  // Admins always have access
+  // 1. Administrador tem acesso irrestrito
   if (userRole === 'admin' || userEmail?.includes('admin')) {
     return { allowed: true, visible: true };
   }
@@ -89,29 +95,34 @@ export function canAccessResource(
   const whitelist = resource.draftWhitelist || [];
   const isWhitelisted = userEmail ? whitelist.map(e => e.toLowerCase().trim()).includes(userEmail.toLowerCase().trim()) : false;
 
-  // 1. Draft check: draft resources are not visible to non-whitelisted users
+  // 2. REGRA DO RASCUNHO (DRAFT / MANUTENÇÃO):
+  // Se o recurso estiver em RASCUNHO, ele fica TOTALMENTE OCULTO para os alunos,
+  // mesmo que o aluno tenha acesso liberado no seu cadastro!
+  // Apenas o Administrador e usuários adicionados na WhiteList da respectiva turma podem visualizar.
   if (!isPublished && !isWhitelisted) {
     return { allowed: false, visible: false, reason: 'Este recurso está em modo rascunho.' };
   }
 
-  // 2. Check access
+  // 3. Checagem de Acesso (Recurso PUBLICADO ou usuário na WhiteList):
   let hasAccess = false;
-  if (hasDirectAccess) {
+
+  if (hasDirectAccess || isWhitelisted) {
+    // Aluno possui acesso/matrícula direta liberada no seu cadastro
     hasAccess = true;
   } else if (hasFreePass) {
-    if (resource.excludeFromFreePass) {
-      hasAccess = false;
-    } else {
+    // Aluno possui Free Pass (e o recurso não está marcado como 'excludeFromFreePass')
+    if (!resource.excludeFromFreePass) {
       hasAccess = true;
     }
   }
 
-  if (!hasAccess && !isWhitelisted) {
+  // Se não tem acesso direto nem via Free Pass, fica invisível
+  if (!hasAccess) {
     return { allowed: false, visible: false, reason: 'Você não possui acesso a este recurso.' };
   }
 
-  // 3. Blocked check: student has access, but resource is blocked.
-  // Visible with padlock/grayscale.
+  // 4. Checagem de Bloqueio (Cadeado / Liberação Programada):
+  // O aluno possui acesso, mas o recurso está com cadeado e data de liberação futura.
   if (isBlocked) {
     return {
       allowed: false,

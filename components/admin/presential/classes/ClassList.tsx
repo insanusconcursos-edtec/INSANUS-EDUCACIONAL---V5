@@ -40,6 +40,16 @@ const getHierarchyBadge = (cls: Class) => {
   return null;
 };
 
+const getPublicationBadge = (cls: Class) => {
+  if (cls.isBlocked || (cls as any).status === 'blocked') {
+    return <span className="px-2 py-1 rounded bg-amber-500/20 text-amber-300 text-[10px] font-bold uppercase border border-amber-500/30">🔒 Bloqueado</span>;
+  }
+  if (cls.published === false || (cls as any).status === 'draft') {
+    return <span className="px-2 py-1 rounded bg-yellow-500/20 text-yellow-300 text-[10px] font-bold uppercase border border-yellow-500/40">⚠️ Rascunho</span>;
+  }
+  return <span className="px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold uppercase border border-emerald-500/30">✓ Publicado</span>;
+};
+
 interface ClassCardProps {
   cls: Class;
   onEdit: (cls: Class) => void;
@@ -65,7 +75,8 @@ const ClassCard: React.FC<ClassCardProps> = ({ cls, onEdit, onDelete }) => {
             <span className="text-xs uppercase font-bold">Sem Capa</span>
           </div>
         )}
-        <div className="absolute top-3 right-3 flex flex-col gap-2 items-end">
+        <div className="absolute top-3 right-3 flex flex-col gap-1.5 items-end">
+          {getPublicationBadge(cls)}
           {getStatusBadge(cls.status)}
           {getTypeBadge(cls.type)}
           {getHierarchyBadge(cls)}

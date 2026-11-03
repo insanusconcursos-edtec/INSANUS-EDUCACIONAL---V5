@@ -365,14 +365,21 @@ const StudentManager: React.FC = () => {
   // === FILTERING ===
 
   const filteredStudents = students.filter(student => {
-    // 1. Text Search (if isSearching is active, server filtered, but double check with fallback)
+    // 1. Text Search: strictly enforce that displayed students match what was typed
     let matchesSearch = true;
-    if (!isSearching && searchTerm.trim().length > 0) {
-      const searchLower = searchTerm.toLowerCase();
+    if (searchTerm.trim().length > 0) {
+      const searchLower = searchTerm.trim().toLowerCase();
+      const searchDigits = searchTerm.replace(/\D/g, '');
+      const name = (student.name || '').toLowerCase();
+      const email = (student.email || '').toLowerCase();
+      const cleanCpf = (student.cpf || '').replace(/\D/g, '');
+
       matchesSearch = 
-          (student.name || '').toLowerCase().includes(searchLower) || 
-          (student.email || '').toLowerCase().includes(searchLower) ||
-          (student.cpf || '').includes(searchTerm);
+        name.includes(searchLower) || 
+        email.includes(searchLower) ||
+        (searchDigits.length >= 3 && cleanCpf.includes(searchDigits));
+
+      if (!matchesSearch) return false;
     }
 
     // 2. Status Filter
