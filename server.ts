@@ -789,7 +789,7 @@ async function setupVite(app: any) {
   // Rota de Redefinição Manual de Senha do Aluno (Admin)
   app.post('/api/admin/students/update-password', async (req, res) => {
     try {
-      const { authAdmin } = getAdminConfig();
+      const { authAdmin, dbAdmin } = getAdminConfig();
       const { uid, novaSenha } = req.body;
 
       if (!uid || !novaSenha) {
@@ -805,6 +805,12 @@ async function setupVite(app: any) {
         await authAdmin.updateUser(uid, {
           password: novaSenha
         });
+        // Limpar sessões ativas antigas para permitir reconexão limpa
+        try {
+          await dbAdmin.collection('users').doc(uid).update({ activeSessionIds: [] });
+        } catch (sessErr) {
+          console.warn("Falha ao limpar activeSessionIds:", sessErr);
+        }
       } catch (authError: any) {
         console.error("Erro ao atualizar senha no Auth do Firebase:", authError);
         return res.status(400).json({ success: false, error: authError.message || "Erro no sistema de autenticação." });

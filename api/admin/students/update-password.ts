@@ -25,12 +25,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ success: false, error: "A senha deve ter no mínimo 6 caracteres." });
     }
 
-    const { authAdmin } = getAdminConfig();
+    const { authAdmin, dbAdmin } = getAdminConfig();
 
     try {
       await authAdmin.updateUser(uid, {
         password: String(novaSenha)
       });
+      // Limpar sessões ativas antigas para permitir reconexão limpa e sem bloqueios
+      try {
+        await dbAdmin.collection('users').doc(uid).update({
+          activeSessionIds: []
+        });
+      } catch (sessionErr) {
+        console.warn("[UPDATE_PASSWORD] Falha ao limpar activeSessionIds:", sessionErr);
+      }
     } catch (authError: any) {
       console.error("[UPDATE_PASSWORD] Erro no Firebase Auth:", authError);
       return res.status(400).json({

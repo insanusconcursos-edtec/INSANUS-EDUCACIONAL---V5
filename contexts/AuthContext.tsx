@@ -78,6 +78,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }
 
+  const sessionRegisteredRef = React.useRef<boolean>(false);
+
   const refreshUserData = async () => {
     if (!currentUser) return;
     try {
@@ -99,6 +101,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (unsubSnapshot) unsubSnapshot();
+      sessionRegisteredRef.current = false;
 
       setCurrentUser(user);
       
@@ -205,6 +208,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 
                 const roleLower = (data.role || '').toLowerCase();
 
+                // Garantir registro imediato do sessionId atual no Firestore pelo client para evitar corrida de rede
+                if (roleLower === 'student' && !data.isException) {
+                  const currentSessions: string[] = Array.isArray(data.activeSessionIds) ? [...data.activeSessionIds] : [];
+                  if (!currentSessions.includes(localSessionId.current)) {
+                    if (currentSessions.length >= 2) {
+                      currentSessions.shift();
+                    }
+                    currentSessions.push(localSessionId.current);
+                    try {
+                      const { updateDoc } = await import('firebase/firestore');
+                      await updateDoc(userDocRef, { activeSessionIds: currentSessions });
+                      sessionRegisteredRef.current = true;
+                    } catch (e) {
+                      console.warn("Client session registration update failed, backend handles it", e);
+                    }
+                  } else {
+                    sessionRegisteredRef.current = true;
+                  }
+                }
+
                 // Listen for changes to currentSessionId or blocked status
                 unsubSnapshot = onSnapshot(userDocRef, (docSnap) => {
                   if (docSnap.exists()) {
@@ -239,9 +262,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
                     // Check simultaneous access (only for students)
                     const snapRole = (snapData.role || '').toLowerCase();
-                    if (snapRole === 'student' && snapData.activeSessionIds && !snapData.activeSessionIds.includes(localSessionId.current) && !snapData.isException) {
-                      alert("Sua conta foi acessada em outro dispositivo. Você foi desconectado.");
-                      signOut(auth);
+                    if (snapRole === 'student' && !snapData.isException) {
+                      const activeSessions = snapData.activeSessionIds;
+                      if (Array.isArray(activeSessions)) {
+                        if (activeSessions.includes(localSessionId.current)) {
+                          sessionRegisteredRef.current = true;
+                        } else if (sessionRegisteredRef.current && activeSessions.length > 0) {
+                          // Este dispositivo já havia sido registrado e confirmado com sucesso,
+                          // mas outro dispositivo acabou de logar e tomou seu slot.
+                          alert("Sua conta foi acessada em outro dispositivo. Você foi desconectado.");
+                          signOut(auth);
+                          return;
+                        }
+                      }
                     }
                   }
                 });

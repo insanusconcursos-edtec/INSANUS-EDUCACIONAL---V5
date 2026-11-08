@@ -19,6 +19,7 @@ import {
   blockStudent,
   unblockStudent,
   setExceptionStatus,
+  clearActiveSessions,
   Student, 
   CreateStudentData,
   getStudentById 
@@ -242,7 +243,12 @@ const StudentManager: React.FC = () => {
     setIsResetting(true);
     try {
         await updateStudentPasswordAdmin(studentToReset.uid, newPassword);
-        toast.success("Senha alterada com sucesso!");
+        try {
+            await clearActiveSessions(studentToReset.uid);
+        } catch (clearErr) {
+            console.warn("Falha ao limpar sessões ativas:", clearErr);
+        }
+        toast.success("Senha alterada e conexões anteriores limpas com sucesso!");
         setResetPasswordModalOpen(false);
         setStudentToReset(null);
     } catch (error: unknown) {
