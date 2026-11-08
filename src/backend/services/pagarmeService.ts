@@ -173,6 +173,12 @@ export const createPagarmeOrder = async (orderData: any, initialCoproducers: any
     options: { liable: true, charge_remainder_fee: true, charge_processing_fee: true }
   });
 
+  // Sanitização robusta de telefone (DDD e número)
+  const rawUserPhone = (orderData.metadata?.userPhone || '').replace(/\D/g, '');
+  const cleanUserPhone = rawUserPhone.startsWith('55') && rawUserPhone.length > 11 ? rawUserPhone.slice(2) : rawUserPhone;
+  const phoneAreaCode = cleanUserPhone.length >= 10 ? cleanUserPhone.slice(0, 2) : '11';
+  const phoneNumber = cleanUserPhone.length >= 10 ? cleanUserPhone.slice(2) : (cleanUserPhone || '999999999');
+
   // 3. MONTAGEM DO PAYLOAD V5 (RESET TOTAL)
   const payload: any = {
     antifraud_enabled: true,
@@ -190,8 +196,8 @@ export const createPagarmeOrder = async (orderData: any, initialCoproducers: any
       phones: {
         mobile_phone: {
           country_code: '55',
-          area_code: orderData.metadata?.userPhone?.substring(1, 3) || '11',
-          number: orderData.metadata?.userPhone?.replace(/\D/g, '').substring(2) || '999999999'
+          area_code: phoneAreaCode,
+          number: phoneNumber
         }
       }
     },

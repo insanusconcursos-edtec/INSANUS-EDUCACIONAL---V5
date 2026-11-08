@@ -1155,9 +1155,8 @@ export default function StandaloneCheckout() {
                                 value={billingAddress.street}
                                 onChange={handleBillingChange}
                                 placeholder="Nome da Rua"
-                                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3.5 text-white font-semibold focus:outline-none focus:ring-2 focus:ring-red-600/20 transition-all placeholder:text-zinc-700 disabled:opacity-50"
+                                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3.5 text-white font-semibold focus:outline-none focus:ring-2 focus:ring-red-600/20 transition-all placeholder:text-zinc-700"
                                 required
-                                readOnly={!!billingAddress.street && fetchingCep === false && billingAddress.zipCode.length === 9}
                               />
                             </div>
                             <div className="space-y-1.5">
@@ -1182,9 +1181,8 @@ export default function StandaloneCheckout() {
                                 value={billingAddress.neighborhood}
                                 onChange={handleBillingChange}
                                 placeholder="Bairro"
-                                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3.5 text-white font-semibold focus:outline-none focus:ring-2 focus:ring-red-600/20 transition-all placeholder:text-zinc-700 disabled:opacity-50"
+                                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3.5 text-white font-semibold focus:outline-none focus:ring-2 focus:ring-red-600/20 transition-all placeholder:text-zinc-700"
                                 required
-                                readOnly={!!billingAddress.neighborhood && fetchingCep === false && billingAddress.zipCode.length === 9}
                               />
                             </div>
                             <div className="grid grid-cols-3 gap-2">
@@ -1196,9 +1194,8 @@ export default function StandaloneCheckout() {
                                   value={billingAddress.city}
                                   onChange={handleBillingChange}
                                   placeholder="Cidade"
-                                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3.5 text-white font-semibold focus:outline-none focus:ring-2 focus:ring-red-600/20 transition-all placeholder:text-zinc-700 disabled:opacity-50"
+                                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3.5 text-white font-semibold focus:outline-none focus:ring-2 focus:ring-red-600/20 transition-all placeholder:text-zinc-700"
                                   required
-                                  readOnly={!!billingAddress.city && fetchingCep === false && billingAddress.zipCode.length === 9}
                                 />
                               </div>
                               <div className="space-y-1.5">
@@ -1210,9 +1207,8 @@ export default function StandaloneCheckout() {
                                   onChange={handleBillingChange}
                                   placeholder="SP"
                                   maxLength={2}
-                                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2 py-3.5 text-white font-semibold focus:outline-none focus:ring-2 focus:ring-red-600/20 transition-all text-center uppercase disabled:opacity-50"
+                                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2 py-3.5 text-white font-semibold focus:outline-none focus:ring-2 focus:ring-red-600/20 transition-all text-center uppercase"
                                   required
-                                  readOnly={!!billingAddress.state && fetchingCep === false && billingAddress.zipCode.length === 9}
                                 />
                               </div>
                             </div>

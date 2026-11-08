@@ -21,7 +21,7 @@ interface CheckoutModalProps {
 }
 
 export default function CheckoutModal({ product, offerId, onClose, onSuccess }: CheckoutModalProps) {
-  const { currentUser } = useAuth();
+  const { currentUser, userData } = useAuth();
   const [loading, setLoading] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'credit_card' | 'pix'>('credit_card');
   const [pixData, setPixData] = useState<{ qr_code: string; qr_code_url: string } | null>(null);
@@ -30,6 +30,39 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
   const [timeLeft, setTimeLeft] = useState(1800); // 30 minutes in seconds
   const [installments, setInstallments] = useState(1);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+
+  const maskCpf = (value: string) => {
+    return value
+      .replace(/\D/g, '')
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d{1,2})/, '$1-$2')
+      .replace(/(-\d{2})\d+?$/, '$1');
+  };
+
+  const maskPhone = (value: string) => {
+    return value
+      .replace(/\D/g, '')
+      .replace(/(\d{2})(\d)/, '($1) $2')
+      .replace(/(\d{5})(\d)/, '$1-$2')
+      .replace(/(-\d{4})\d+?$/, '$1');
+  };
+
+  const initialCpf = (userData?.cpf || (currentUser as any)?.cpf || '').toString();
+  const initialPhone = (userData?.phone || (currentUser as any)?.phone || '').toString();
+
+  const [buyerCpf, setBuyerCpf] = useState(maskCpf(initialCpf));
+  const [buyerPhone, setBuyerPhone] = useState(maskPhone(initialPhone));
+
+  useEffect(() => {
+    if (userData?.cpf && !buyerCpf) {
+      setBuyerCpf(maskCpf(userData.cpf));
+    }
+    if (userData?.phone && !buyerPhone) {
+      setBuyerPhone(maskPhone(userData.phone));
+    }
+  }, [userData]);
+
   const [cardData, setCardData] = useState({
     number: '',
     holderName: '',
@@ -169,6 +202,12 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
   const handlePayment = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    const cleanCpf = buyerCpf.replace(/\D/g, '');
+    if (!cleanCpf || cleanCpf.length !== 11) {
+      toast.error('Por favor, informe um CPF válido com 11 dígitos.');
+      return;
+    }
+
     if (paymentMethod === 'credit_card' && (!cardData.number || !cardData.holderName || !cardData.expiryMonth || !cardData.expiryYear || !cardData.cvv)) {
       toast.error('Por favor, preencha todos os campos do cartão.');
       return;
@@ -181,6 +220,7 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
 
     setLoading(true);
     try {
+      const cleanPhone = buyerPhone.replace(/\D/g, '');
       const paymentData = {
         transaction_amount: totalToPay,
         description: `Compra de ${product.name}${currentOffer ? ` - ${currentOffer.name}` : ''}`,
@@ -195,16 +235,16 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
           billingAddress: billingAddress,
         }),
         payer: {
-          name: currentUser?.displayName || cardData.holderName || (currentUser as any)?.name || 'Estudante',
-          email: currentUser?.email || 'aluno@exemplo.com',
-          document: currentUser?.cpf || '00000000000',
+          name: currentUser?.displayName || userData?.name || cardData.holderName || (currentUser as any)?.name || 'Estudante',
+          email: currentUser?.email || userData?.email || 'aluno@exemplo.com',
+          document: cleanCpf,
         },
         metadata: {
           courseId: product.id!,
           offerId: currentOffer?.id || 'default',
-          userName: currentUser?.displayName || cardData.holderName || (currentUser as any)?.name || 'Estudante',
-          userPhone: (currentUser as any)?.phone || '11999999999',
-          userCpf: currentUser?.cpf || '',
+          userName: currentUser?.displayName || userData?.name || cardData.holderName || (currentUser as any)?.name || 'Estudante',
+          userPhone: cleanPhone || '11999999999',
+          userCpf: cleanCpf,
         },
       };
 
@@ -399,6 +439,31 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
                       </div>
 
                       <form onSubmit={handlePayment} className="space-y-4">
+                        <div className="grid grid-cols-2 gap-3 pb-3 border-b border-zinc-800/80">
+                          <div>
+                            <label className="text-[10px] font-black text-zinc-500 uppercase mb-1 block tracking-widest">Seu CPF</label>
+                            <input
+                              type="text"
+                              value={buyerCpf}
+                              onChange={(e) => setBuyerCpf(maskCpf(e.target.value))}
+                              placeholder="000.000.000-00"
+                              className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-white text-xs focus:outline-none focus:border-red-600 transition-colors"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-black text-zinc-500 uppercase mb-1 block tracking-widest">WhatsApp</label>
+                            <input
+                              type="text"
+                              value={buyerPhone}
+                              onChange={(e) => setBuyerPhone(maskPhone(e.target.value))}
+                              placeholder="(00) 00000-0000"
+                              className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-white text-xs focus:outline-none focus:border-red-600 transition-colors"
+                              required
+                            />
+                          </div>
+                        </div>
+
                         {paymentMethod === 'credit_card' ? (
                           <div className="space-y-4">
                             <div>
@@ -578,9 +643,8 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
                                     value={billingAddress.street}
                                     onChange={handleBillingChange}
                                     placeholder="Nome da Rua"
-                                    className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-red-600 transition-colors disabled:opacity-50"
+                                    className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-red-600 transition-colors"
                                     required
-                                    readOnly={!!billingAddress.street && fetchingCep === false && billingAddress.zipCode.length === 9}
                                   />
                                 </div>
                                 <div>
@@ -588,6 +652,7 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
                                   <input
                                     type="text"
                                     name="complement"
+                                    value={billingAddress.complement}
                                     onChange={handleBillingChange}
                                     placeholder="Apto/Bl"
                                     className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-red-600 transition-colors"
@@ -604,9 +669,8 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
                                     value={billingAddress.neighborhood}
                                     onChange={handleBillingChange}
                                     placeholder="Bairro"
-                                    className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-red-600 transition-colors disabled:opacity-50"
+                                    className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-red-600 transition-colors"
                                     required
-                                    readOnly={!!billingAddress.neighborhood && fetchingCep === false && billingAddress.zipCode.length === 9}
                                   />
                                 </div>
                                 <div className="grid grid-cols-3 gap-2">
@@ -618,9 +682,8 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
                                       value={billingAddress.city}
                                       onChange={handleBillingChange}
                                       placeholder="Cidade"
-                                      className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-red-600 transition-colors disabled:opacity-50"
+                                      className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-red-600 transition-colors"
                                       required
-                                      readOnly={!!billingAddress.city && fetchingCep === false && billingAddress.zipCode.length === 9}
                                     />
                                   </div>
                                   <div>
@@ -632,9 +695,8 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
                                       onChange={handleBillingChange}
                                       placeholder="SP"
                                       maxLength={2}
-                                      className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-2 py-3 text-white text-sm focus:outline-none focus:border-red-600 transition-colors text-center uppercase disabled:opacity-50"
+                                      className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl px-2 py-3 text-white text-sm focus:outline-none focus:border-red-600 transition-colors text-center uppercase"
                                       required
-                                      readOnly={!!billingAddress.state && fetchingCep === false && billingAddress.zipCode.length === 9}
                                     />
                                   </div>
                                 </div>
