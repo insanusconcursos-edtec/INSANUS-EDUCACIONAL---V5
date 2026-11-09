@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { createPagarmePayment } from '../../../services/paymentService';
 import { TictoProduct } from '../../../types/product';
 import { useAuth } from '../../../contexts/AuthContext';
+import { isValidCPF } from '../../../utils/cpfValidation';
 import toast from 'react-hot-toast';
 
 const INSTALLMENT_MULTIPLIERS: Record<number, number> = {
@@ -203,34 +204,68 @@ export default function CheckoutModal({ product, offerId, onClose, onSuccess }: 
     e.preventDefault();
     
     const cleanCpf = buyerCpf.replace(/\D/g, '');
-    if (!cleanCpf || cleanCpf.length !== 11) {
+    if (!cleanCpf || !isValidCPF(cleanCpf)) {
       toast.error('Por favor, informe um CPF válido com 11 dígitos.');
       return;
     }
 
-    if (paymentMethod === 'credit_card' && (!cardData.number || !cardData.holderName || !cardData.expiryMonth || !cardData.expiryYear || !cardData.cvv)) {
-      toast.error('Por favor, preencha todos os campos do cartão.');
-      return;
-    }
-
-    if (paymentMethod === 'credit_card' && (!billingAddress.zipCode || !billingAddress.street || !billingAddress.number || !billingAddress.city || !billingAddress.state)) {
-      toast.error('Por favor, preencha o endereço de cobrança completo.');
-      return;
+    if (paymentMethod === 'credit_card') {
+      const cleanCard = (cardData.number || '').replace(/\D/g, '');
+      if (!cleanCard || cleanCard.length < 13 || cleanCard.length > 19) {
+        toast.error('Número de cartão inválido (digite entre 13 e 19 dígitos).');
+        return;
+      }
+      if (!cardData.holderName.trim() || cardData.holderName.trim().length < 3) {
+        toast.error('Informe o nome impresso no cartão.');
+        return;
+      }
+      const expMonthNum = parseInt((cardData.expiryMonth || '').trim(), 10);
+      if (isNaN(expMonthNum) || expMonthNum < 1 || expMonthNum > 12) {
+        toast.error('Mês de validade inválido (01 a 12).');
+        return;
+      }
+      const rawYear = (cardData.expiryYear || '').trim();
+      const expYearNum = parseInt(rawYear.length === 2 ? `20${rawYear}` : rawYear, 10);
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth() + 1;
+      if (isNaN(expYearNum) || expYearNum < currentYear || (expYearNum === currentYear && expMonthNum < currentMonth)) {
+        toast.error('Cartão expirado ou ano de validade inválido.');
+        return;
+      }
+      const cleanCVV = (cardData.cvv || '').replace(/\D/g, '');
+      if (cleanCVV.length < 3 || cleanCVV.length > 4) {
+        toast.error('CVV do cartão inválido (3 ou 4 dígitos).');
+        return;
+      }
+      const cleanZip = (billingAddress.zipCode || '').replace(/\D/g, '');
+      if (cleanZip.length !== 8) {
+        toast.error('CEP de cobrança inválido (8 dígitos).');
+        return;
+      }
+      if (!billingAddress.street.trim() || !billingAddress.number.trim() || !billingAddress.city.trim() || !billingAddress.state.trim()) {
+        toast.error('Por favor, preencha o endereço de cobrança completo.');
+        return;
+      }
     }
 
     setLoading(true);
     try {
       const cleanPhone = buyerPhone.replace(/\D/g, '');
+      const formattedMonth = (cardData.expiryMonth || '').trim().padStart(2, '0');
+      const rawYear = (cardData.expiryYear || '').trim();
+      const formattedYear = rawYear.length === 2 ? `20${rawYear}` : rawYear;
+
       const paymentData = {
         transaction_amount: totalToPay,
         description: `Compra de ${product.name}${currentOffer ? ` - ${currentOffer.name}` : ''}`,
         payment_method: paymentMethod,
         ...(paymentMethod === 'credit_card' && {
-          card_number: cardData.number.replace(/\s/g, ''),
-          card_holder_name: cardData.holderName,
-          card_expiration_month: cardData.expiryMonth,
-          card_expiration_year: cardData.expiryYear.length === 2 ? `20${cardData.expiryYear}` : cardData.expiryYear,
-          card_cvv: cardData.cvv,
+          card_number: (cardData.number || '').replace(/\D/g, ''),
+          card_holder_name: cardData.holderName.trim(),
+          card_expiration_month: formattedMonth,
+          card_expiration_year: formattedYear,
+          card_cvv: (cardData.cvv || '').replace(/\D/g, ''),
           installments: installments,
           billingAddress: billingAddress,
         }),

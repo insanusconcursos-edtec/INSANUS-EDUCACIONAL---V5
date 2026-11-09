@@ -11,6 +11,7 @@ import { createPagarmePayment } from '../../services/paymentService';
 import { formatInTimeZone } from 'date-fns-tz';
 import { Loader2, ShieldCheck, CreditCard, QrCode, Lock, Copy, Check, CheckCircle2, ArrowRight, ChevronDown, X, Timer, Users2, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { isValidCPF } from '../../utils/cpfValidation';
 
 const INSTALLMENT_MULTIPLIERS: Record<number, number> = {
   1: 1.00000, 2: 1.04018, 3: 1.06027, 4: 1.08036,
@@ -139,19 +140,24 @@ export default function StandaloneCheckout() {
     if (buyerData.email !== buyerData.emailConfirm) errors.emailConfirm = 'Os e-mails não coincidem';
     
     const cleanCpf = (buyerData.cpf || "").replace(/\D/g, '');
-    if (cleanCpf.length !== 11) errors.cpf = 'CPF inválido (11 dígitos)';
+    if (!cleanCpf || !isValidCPF(cleanCpf)) {
+      errors.cpf = 'CPF inválido (verifique os 11 dígitos)';
+    }
     
     const cleanPhone = buyerData.phone.replace(/\D/g, '');
-    if (cleanPhone.length < 10) errors.phone = 'WhatsApp inválido';
+    if (cleanPhone.length < 10) errors.phone = 'WhatsApp inválido (DDD + número)';
     
     // Validar amigos
     friends.forEach((f, i) => {
       if (!f.name.trim()) errors[`friend_name_${i}`] = 'Nome é obrigatório';
       if (!f.email.trim()) errors[`friend_email_${i}`] = 'E-mail é obrigatório';
       if (f.email !== f.confirmEmail) errors[`friend_confirm_email_${i}`] = 'E-mails não conferem';
-      if (f.cpf.replace(/\D/g, '').length !== 11) errors[`friend_cpf_${i}`] = 'CPF inválido';
-      const cleanPhone = f.phone.replace(/\D/g, '');
-      if (cleanPhone.length < 10) errors[`friend_phone_${i}`] = 'WhatsApp inválido';
+      const cleanFriendCpf = (f.cpf || '').replace(/\D/g, '');
+      if (!cleanFriendCpf || !isValidCPF(cleanFriendCpf)) {
+        errors[`friend_cpf_${i}`] = 'CPF do amigo inválido';
+      }
+      const cleanFriendPhone = f.phone.replace(/\D/g, '');
+      if (cleanFriendPhone.length < 10) errors[`friend_phone_${i}`] = 'WhatsApp inválido';
     });
 
     setFormErrors(errors);
@@ -394,17 +400,47 @@ export default function StandaloneCheckout() {
   const handlePayment = async () => {
     if (!product || !offer) return;
 
-    if (!buyerData.cpf || !buyerData.name || !buyerData.email) {
-      toast.error('Por favor, preencha seus dados pessoais (Nome, E-mail e CPF) corretamente.');
+    const cleanCpf = (buyerData.cpf || "").replace(/\D/g, '');
+    if (!buyerData.name.trim() || !buyerData.email.trim() || !isValidCPF(cleanCpf)) {
+      toast.error('Por favor, preencha seus dados pessoais (Nome, E-mail e CPF válido) corretamente.');
       return;
     }
 
     if (paymentMethod === 'credit_card') {
-      if (!cardNumber || !cardHolder || !cardMonth || !cardYear || !cardCVV) {
-        toast.error('Por favor, preencha todos os campos do cartão.');
+      const cleanCard = (cardNumber || '').replace(/\D/g, '');
+      if (!cleanCard || cleanCard.length < 13 || cleanCard.length > 19) {
+        toast.error('Número de cartão inválido (digite entre 13 e 19 dígitos).');
         return;
       }
-      if (!billingAddress.zipCode || !billingAddress.street || !billingAddress.number || !billingAddress.city || !billingAddress.state) {
+      if (!cardHolder.trim() || cardHolder.trim().length < 3) {
+        toast.error('Informe o nome impresso no cartão.');
+        return;
+      }
+      const expMonthNum = parseInt((cardMonth || '').trim(), 10);
+      if (isNaN(expMonthNum) || expMonthNum < 1 || expMonthNum > 12) {
+        toast.error('Mês de validade inválido (01 a 12).');
+        return;
+      }
+      const rawYear = (cardYear || '').trim();
+      const expYearNum = parseInt(rawYear.length === 2 ? `20${rawYear}` : rawYear, 10);
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth() + 1;
+      if (isNaN(expYearNum) || expYearNum < currentYear || (expYearNum === currentYear && expMonthNum < currentMonth)) {
+        toast.error('Cartão expirado ou ano de validade inválido.');
+        return;
+      }
+      const cleanCVV = (cardCVV || '').replace(/\D/g, '');
+      if (cleanCVV.length < 3 || cleanCVV.length > 4) {
+        toast.error('CVV do cartão inválido (3 ou 4 dígitos).');
+        return;
+      }
+      const cleanZip = (billingAddress.zipCode || '').replace(/\D/g, '');
+      if (cleanZip.length !== 8) {
+        toast.error('CEP de cobrança inválido (8 dígitos).');
+        return;
+      }
+      if (!billingAddress.street.trim() || !billingAddress.number.trim() || !billingAddress.city.trim() || !billingAddress.state.trim()) {
         toast.error('Por favor, preencha o endereço de cobrança completo.');
         return;
       }
@@ -413,6 +449,10 @@ export default function StandaloneCheckout() {
     setIsProcessing(true);
     setErrorMessage(null);
     try {
+      const formattedMonth = (cardMonth || '').trim().padStart(2, '0');
+      const rawYear = (cardYear || '').trim();
+      const formattedYear = rawYear.length === 2 ? `20${rawYear}` : rawYear;
+
       const paymentData = {
         transaction_amount: Number(totalToPay),
         description: `Compra de ${product.name} - ${offer.name} (${1 + friends.length} pessoas)`,
@@ -420,18 +460,18 @@ export default function StandaloneCheckout() {
         affiliateId: refId || null,
         // Card data if credit_card
         ...(paymentMethod === 'credit_card' && {
-          card_number: cardNumber.replace(/\s/g, ''),
-          card_holder_name: cardHolder,
-          card_expiration_month: cardMonth,
-          card_expiration_year: cardYear.length === 2 ? `20${cardYear}` : cardYear,
-          card_cvv: cardCVV,
+          card_number: (cardNumber || '').replace(/\D/g, ''),
+          card_holder_name: cardHolder.trim(),
+          card_expiration_month: formattedMonth,
+          card_expiration_year: formattedYear,
+          card_cvv: (cardCVV || '').replace(/\D/g, ''),
           installments: installments,
           billingAddress: billingAddress,
         }),
         payer: {
-          email: buyerData.email,
-          document: (buyerData.cpf || "").replace(/\D/g, ''),
-          name: buyerData.name
+          email: buyerData.email.trim(),
+          document: cleanCpf,
+          name: buyerData.name.trim()
         },
         metadata: {
           courseId: product.id!,

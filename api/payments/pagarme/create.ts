@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createPagarmeOrder } from '../../../src/backend/services/pagarmeService.js';
+import { createPagarmeOrder, formatPagarmeErrorMessage } from '../../../src/backend/services/pagarmeService.js';
 import { getAdminConfig } from '../../../src/backend/services/firebaseAdmin.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -76,9 +76,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (error: any) {
     console.error("❌ Erro Crítico Pagarme Route:", error.response?.data || error.message);
     const statusCode = error.response?.status || 400;
+    const friendlyMessage = formatPagarmeErrorMessage(error.response?.data) || error.message || "Erro ao processar pagamento na Pagar.me";
     return res.status(statusCode).json({
       success: false,
-      message: error.response?.data?.message || error.message || "Erro ao processar pagamento na Pagar.me"
+      message: friendlyMessage
     });
   }
 }

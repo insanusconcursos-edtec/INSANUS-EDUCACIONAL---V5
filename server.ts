@@ -8,7 +8,7 @@ import { fetchPandaVideoTranscription } from './src/backend/services/pandaVideoS
 import { generateStudyMaterial, generateAIFlashcards, generateAIMindMap } from './src/backend/services/geminiService.js';
 import { getAdminConfig } from './src/backend/services/firebaseAdmin.js';
 import { provisionExternalPurchase, revokePurchase } from './src/backend/services/provisioningService.js';
-import { createPagarmeOrder, handlePagarmeWebhook, getPagarmeOrderStatus, requestPagarmeTransfer, getPagarmeRecipientBalance, getPagarmeRecipients, MASTER_RECIPIENT_ID } from './src/backend/services/pagarmeService.js';
+import { createPagarmeOrder, handlePagarmeWebhook, getPagarmeOrderStatus, requestPagarmeTransfer, getPagarmeRecipientBalance, getPagarmeRecipients, MASTER_RECIPIENT_ID, formatPagarmeErrorMessage } from './src/backend/services/pagarmeService.js';
 import { initOrderNotificationListener } from './src/backend/services/orderNotificationService.js';
 import { initStudyReminderCron } from './src/backend/services/studyReminderService.js';
 import { addWatermarkToPdf } from './src/backend/services/pdfWatermarkService.js';
@@ -1413,10 +1413,11 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 
       return res.status(200).json({ success: true, payment: response });
     } catch (error: any) {
-      console.error("❌ Erro Crítico Pagarme Route:", error.message);
+      console.error("❌ Erro Crítico Pagarme Route:", error.response?.data || error.message);
+      const friendlyMessage = formatPagarmeErrorMessage(error.response?.data) || error.message || "Erro ao processar pagamento na Pagar.me";
       return res.status(400).json({ 
         success: false, 
-        message: error.message || "Erro ao processar pagamento na Pagar.me"
+        message: friendlyMessage
       });
     }
   });

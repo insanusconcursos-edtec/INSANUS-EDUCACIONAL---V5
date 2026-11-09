@@ -48,6 +48,67 @@ const calculatePagarmeFees = (amountCents: number, method: string, installments:
 };
 
 /**
+ * Tradutor e Formatador de Erros Pagar.me V5
+ * Converte erros técnicos em inglês (ex: "The request is invalid.") em instruções claras e amigáveis em português.
+ */
+export const formatPagarmeErrorMessage = (errorData: any): string => {
+  if (!errorData) return 'Erro ao processar pagamento na Pagar.me';
+
+  if (errorData.errors && typeof errorData.errors === 'object') {
+    const errorMessages: string[] = [];
+
+    for (const [key, val] of Object.entries(errorData.errors)) {
+      const messages = Array.isArray(val) ? val : [val];
+      for (const msg of messages) {
+        const text = String(msg).toLowerCase();
+        const field = key.toLowerCase();
+
+        if (field.includes('card.number') || text.includes('card number') || text.includes('cartão')) {
+          errorMessages.push('Número do cartão inválido. Verifique os números digitados.');
+        } else if (field.includes('exp_month') || text.includes('expiration month') || text.includes('mês')) {
+          errorMessages.push('Mês de validade do cartão inválido (informe entre 01 e 12).');
+        } else if (field.includes('exp_year') || text.includes('expiration year') || text.includes('ano') || text.includes('expired')) {
+          errorMessages.push('Ano de validade do cartão vencido ou inválido.');
+        } else if (field.includes('cvv') || text.includes('cvv') || text.includes('security code')) {
+          errorMessages.push('Código de segurança (CVV) do cartão inválido.');
+        } else if (field.includes('holder_name') || text.includes('holder')) {
+          errorMessages.push('Nome impresso no cartão inválido ou incompleto.');
+        } else if (field.includes('zip_code') || text.includes('zip_code') || text.includes('cep')) {
+          errorMessages.push('CEP do endereço de cobrança inválido (deve conter 8 dígitos).');
+        } else if (field.includes('billing_address') || text.includes('billing_address') || text.includes('address')) {
+          errorMessages.push('Endereço de cobrança incompleto. Preencha rua, número, bairro e cidade.');
+        } else if (field.includes('document') || text.includes('cpf') || text.includes('document')) {
+          errorMessages.push('CPF do titular inválido. Por favor, confira o CPF informado.');
+        } else if (field.includes('phone') || text.includes('phone') || text.includes('telefone')) {
+          errorMessages.push('Telefone / WhatsApp inválido (informe DDD + número).');
+        } else if (field.includes('email') || text.includes('email') || text.includes('e-mail')) {
+          errorMessages.push('E-mail informado é inválido.');
+        } else if (field.includes('installments') || text.includes('installments') || text.includes('parcelas')) {
+          errorMessages.push('Número de parcelas selecionado é inválido.');
+        } else if (field.includes('amount') || text.includes('amount') || text.includes('valor')) {
+          errorMessages.push('Valor da transação inválido.');
+        } else {
+          errorMessages.push(String(msg));
+        }
+      }
+    }
+
+    if (errorMessages.length > 0) {
+      return Array.from(new Set(errorMessages)).join(' ');
+    }
+  }
+
+  if (errorData.message) {
+    if (errorData.message === 'The request is invalid.') {
+      return 'Dados de pagamento ou cartão inválidos. Por favor, revise o número do cartão, a data de validade, o código CVV e o endereço de cobrança.';
+    }
+    return errorData.message;
+  }
+
+  return 'Erro ao processar pagamento na Pagar.me';
+};
+
+/**
  * CRIAÇÃO DE PEDIDO (ORDER) - API V5
  * Foco total em reconstruir o Split de PIX e Cartão.
  */
@@ -327,7 +388,10 @@ export const createPagarmeOrder = async (orderData: any, initialCoproducers: any
       timestamp: new Date().toISOString()
     });
 
-    throw new Error(errorData.message || 'Erro ao processar pagamento na Pagar.me');
+    const friendlyMessage = formatPagarmeErrorMessage(errorData);
+    const err = new Error(friendlyMessage);
+    (err as any).response = error.response;
+    throw err;
   }
 };
 
