@@ -97,11 +97,27 @@ const AdminDashboard: React.FC = () => {
   const fetchBalance = async () => {
     setLoadingBalance(true);
     try {
-      const response = await fetch('/api/payments/pagarme/balance/master');
-      if (!response.ok) throw new Error('Falha ao buscar saldo');
-      const data = await response.json();
-      
-      if (data.success && data.balance) {
+      // 1. Tenta a rota /api/payments/pagarme/balance?recipientId=master (mesmo endpoint que funciona para coprodutores e afiliados na Vercel)
+      let response = await fetch('/api/payments/pagarme/balance?recipientId=master');
+      let data = response.ok ? await response.json() : null;
+
+      // 2. Fallback: rota /api/payments/pagarme/balance/master
+      if (!data || !data.success || !data.balance) {
+        response = await fetch('/api/payments/pagarme/balance/master');
+        if (response.ok) {
+          data = await response.json();
+        }
+      }
+
+      // 3. Fallback adicional com o ID de recebedor mestre da Insanus
+      if (!data || !data.success || !data.balance) {
+        response = await fetch('/api/payments/pagarme/balance?recipientId=re_cmouicmz204gz0l9tyr4jkmut');
+        if (response.ok) {
+          data = await response.json();
+        }
+      }
+
+      if (data && data.success && data.balance) {
         setBalance(data.balance);
       }
     } catch (err) {

@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import axios from 'axios';
 
 const PAGARME_BASE_URL = 'https://api.pagar.me/core/v5';
+const DEFAULT_MASTER_RECIPIENT_ID = 're_cmouicmz204gz0l9tyr4jkmut';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,9 +18,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const recipientId = (req.query.recipientId as string || '').trim();
-    if (!recipientId) {
-      return res.status(400).json({ success: false, error: 'recipientId é obrigatório' });
+    const rawRecipientId = (req.query.recipientId as string || '').replace(/['"]/g, '').trim();
+    
+    // Suporte a Master Recipient: se omitido ou for 'master'/'default', busca a carteira da empresa
+    const isMaster = !rawRecipientId || rawRecipientId.toLowerCase() === 'master' || rawRecipientId.toLowerCase() === 'default';
+    
+    let recipientId = rawRecipientId;
+    if (isMaster) {
+      const envMaster = (process.env.PAGARME_MASTER_RECIPIENT_ID || '').replace(/['"]/g, '').trim();
+      recipientId = (envMaster && envMaster.startsWith('re_')) ? envMaster : DEFAULT_MASTER_RECIPIENT_ID;
     }
 
     const secretKey = (process.env.PAGARME_SECRET_KEY || '').trim();
@@ -36,7 +43,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
 
     const url = `${PAGARME_BASE_URL}/recipients/${recipientId}/balance`;
-    console.log(`[RECIPIENT_BALANCE] Consultando saldo de recebedor: ${recipientId}`);
+    console.log(`[BALANCE] Consultando saldo de recebedor: ${recipientId} (isMaster: ${isMaster})`);
 
     const response = await axios.get(url, { headers, timeout: 10000 });
     const data = response.data;
@@ -51,7 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         available,
         waiting_funds,
         transferred,
-        recipient_name: data.recipient?.name || ''
+        recipient_name: data.recipient?.name || (isMaster ? 'INSANUS EDUCACIONAL' : '')
       }
     });
   } catch (error: any) {

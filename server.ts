@@ -1567,9 +1567,10 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   // Rota de consulta de saldo Pagar.me
   app.get('/api/payments/pagarme/balance', async (req, res) => {
     try {
-      const recipientId = req.query.recipientId as string;
-      if (!recipientId) {
-        return res.status(400).json({ success: false, error: 'recipientId é obrigatório' });
+      let recipientId = (req.query.recipientId as string || '').replace(/['"]/g, '').trim();
+      if (!recipientId || recipientId.toLowerCase() === 'master' || recipientId.toLowerCase() === 'default') {
+        const envMaster = (process.env.PAGARME_MASTER_RECIPIENT_ID || '').replace(/['"]/g, '').trim();
+        recipientId = (envMaster && envMaster.startsWith('re_')) ? envMaster : MASTER_RECIPIENT_ID;
       }
       
       // Consultando saldo real na Pagar.me

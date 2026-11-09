@@ -25,7 +25,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(500).json({ success: false, error: 'PAGARME_SECRET_KEY não encontrada no ambiente da Vercel.' });
     }
 
-    const currentMasterId = (process.env.PAGARME_MASTER_RECIPIENT_ID || DEFAULT_MASTER_RECIPIENT_ID).trim();
+    const envMaster = (process.env.PAGARME_MASTER_RECIPIENT_ID || '').replace(/['"]/g, '').trim();
+    const currentMasterId = (envMaster && envMaster.startsWith('re_')) ? envMaster : DEFAULT_MASTER_RECIPIENT_ID;
+
     const auth = Buffer.from(`${secretKey}:`).toString('base64');
     const headers = {
       'Authorization': `Basic ${auth}`,
@@ -49,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         available,
         waiting_funds,
         transferred,
-        recipient_name: data.recipient?.name || ''
+        recipient_name: data.recipient?.name || 'INSANUS EDUCACIONAL'
       }
     });
   } catch (error: any) {
