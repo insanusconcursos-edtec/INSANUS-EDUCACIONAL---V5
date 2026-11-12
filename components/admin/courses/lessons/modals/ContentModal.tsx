@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { toast } from 'react-hot-toast';
-import { X, Save, Loader2, Upload, Search, Folder, ChevronLeft, PlayCircle, FileText, FileQuestion, Layers } from 'lucide-react';
+import { X, Save, Loader2, Upload, Search, Folder, ChevronLeft, PlayCircle, FileText, FileQuestion, Layers, Network, FileJson, CheckCircle2, AlertCircle } from 'lucide-react';
 import { CourseContent, ContentType } from '../../../../../types/course';
+import { InteractiveMapData } from '../../../../../types/interactiveMap';
 import { courseService } from '../../../../../services/courseService';
 import { RichTextEditor } from '../../../../ui/RichTextEditor';
 import { pandaService } from '../../../../../services/pandaService';
@@ -42,6 +43,22 @@ export function ContentModal({ isOpen, onClose, onSave, initialData, lessonId, c
   const [existingCommentedAnswerKeyUrl, setExistingCommentedAnswerKeyUrl] = useState('');
   const [existingCommentedAnswerKeyName, setExistingCommentedAnswerKeyName] = useState('');
   const commentedAnswerKeyInputRef = useRef<HTMLInputElement>(null);
+
+  // Estado para MAPA / REVISÃO (INTERACTIVE_MAP)
+  const [jsonFile, setJsonFile] = useState<File | null>(null);
+  const [jsonRawText, setJsonRawText] = useState('');
+  const [isManualJson, setIsManualJson] = useState(false);
+  const [parsedMapData, setParsedMapData] = useState<InteractiveMapData | null>(null);
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  const [jsonSummary, setJsonSummary] = useState<{
+    disciplina: string;
+    assunto: string;
+    nodeCount: number;
+    matrixCount: number;
+    questionCount: number;
+    flashcardCount: number;
+  } | null>(null);
+  const jsonFileInputRef = useRef<HTMLInputElement>(null);
   
   // Panda Media Picker
   const [showPandaPicker, setShowPandaPicker] = useState(false);
@@ -159,6 +176,78 @@ export function ContentModal({ isOpen, onClose, onSave, initialData, lessonId, c
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const countNodes = (node: any): number => {
+    if (!node) return 0;
+    let count = 1;
+    if (Array.isArray(node.children)) {
+      node.children.forEach((c: any) => { count += countNodes(c); });
+    }
+    return count;
+  };
+
+  const validateAndParseJson = (text: string) => {
+    if (!text || !text.trim()) {
+      setParsedMapData(null);
+      setJsonError(null);
+      setJsonSummary(null);
+      return false;
+    }
+
+    try {
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('O conteúdo deve ser um objeto JSON válido.');
+      }
+      if (!parsed.meta || typeof parsed.meta !== 'object') {
+        throw new Error("O arquivo JSON deve conter a chave obrigatória 'meta' (objeto).");
+      }
+      if (!parsed.mindmap || typeof parsed.mindmap !== 'object') {
+        throw new Error("O arquivo JSON deve conter a chave obrigatória 'mindmap' (objeto).");
+      }
+      if (!parsed.mindmap.id || !parsed.mindmap.title) {
+        throw new Error("A chave 'mindmap' deve conter pelo menos 'id' e 'title'.");
+      }
+
+      setParsedMapData(parsed);
+      setJsonError(null);
+
+      const summary = {
+        disciplina: parsed.meta.disciplina || 'Geral',
+        assunto: parsed.meta.assunto || parsed.meta.titulo || parsed.mindmap.title,
+        nodeCount: countNodes(parsed.mindmap),
+        matrixCount: Array.isArray(parsed.matrices) ? parsed.matrices.length : 0,
+        questionCount: Array.isArray(parsed.questoes) ? parsed.questoes.length : 0,
+        flashcardCount: Array.isArray(parsed.flashcards) ? parsed.flashcards.length : 0,
+      };
+      setJsonSummary(summary);
+
+      // Auto-preenche título se estiver vazio
+      if (!title.trim() && (parsed.meta.titulo || parsed.meta.assunto || parsed.mindmap.title)) {
+        setTitle(parsed.meta.titulo || parsed.meta.assunto || parsed.mindmap.title);
+      }
+
+      return true;
+    } catch (err: any) {
+      setParsedMapData(null);
+      setJsonSummary(null);
+      setJsonError(err.message || 'Erro ao validar o arquivo JSON.');
+      return false;
+    }
+  };
+
+  const handleJsonFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setJsonFile(file);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      setJsonRawText(content);
+      validateAndParseJson(content);
+    };
+    reader.readAsText(file);
+  };
+
   useEffect(() => {
     if (isOpen) {
       if (initialData) {
@@ -176,6 +265,21 @@ export function ContentModal({ isOpen, onClose, onSave, initialData, lessonId, c
         setExistingCommentedAnswerKeyUrl(initialData.commentedAnswerKeyUrl || '');
         setExistingCommentedAnswerKeyName(initialData.commentedAnswerKeyName || '');
         setCommentedAnswerKeyFile(null);
+
+        // Se for MAPA / REVISÃO existente
+        const existingMap = initialData.interactiveMapJson || initialData.interactiveMapData;
+        if (initialData.type === 'interactive_map' && existingMap) {
+          const raw = typeof existingMap === 'string' ? existingMap : JSON.stringify(existingMap, null, 2);
+          setJsonRawText(raw);
+          validateAndParseJson(raw);
+        } else {
+          setJsonFile(null);
+          setJsonRawText('');
+          setIsManualJson(false);
+          setParsedMapData(null);
+          setJsonError(null);
+          setJsonSummary(null);
+        }
       } else {
         // Reset
         setType('video');
@@ -193,6 +297,12 @@ export function ContentModal({ isOpen, onClose, onSave, initialData, lessonId, c
         setExistingCommentedAnswerKeyUrl('');
         setExistingCommentedAnswerKeyName('');
         setCommentedAnswerKeyFile(null);
+        setJsonFile(null);
+        setJsonRawText('');
+        setIsManualJson(false);
+        setParsedMapData(null);
+        setJsonError(null);
+        setJsonSummary(null);
       }
     }
   }, [isOpen, initialData]);
@@ -234,6 +344,16 @@ export function ContentModal({ isOpen, onClose, onSave, initialData, lessonId, c
       }
       else if (type === 'embed') {
         data.embedCode = embedCode;
+      }
+      else if (type === 'interactive_map') {
+        if (!parsedMapData) {
+          toast.error("O arquivo JSON deve conter as chaves obrigatórias 'meta' e 'mindmap' (com 'id' e 'title').");
+          setLoading(false);
+          return;
+        }
+        const jsonStr = JSON.stringify(parsedMapData);
+        data.interactiveMapJson = jsonStr;
+        data.interactiveMapData = jsonStr;
       }
       else if (type === 'pdf') {
         let finalPdfUrl = existingPdfUrl;
@@ -307,15 +427,15 @@ export function ContentModal({ isOpen, onClose, onSave, initialData, lessonId, c
           
           {/* Seleção de Tipo (Apenas na criação) */}
           {!initialData && (
-            <div className="grid grid-cols-5 gap-2">
-                {(['video', 'pdf', 'link', 'text', 'embed'] as ContentType[]).map((t) => (
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                {(['video', 'pdf', 'link', 'text', 'embed', 'interactive_map'] as ContentType[]).map((t) => (
                     <button
                         key={t}
                         type="button"
                         onClick={() => setType(t)}
-                        className={`py-2 px-1 rounded text-[10px] font-bold uppercase transition-colors border ${type === t ? 'bg-red-600 border-red-600 text-white' : 'bg-black border-gray-800 text-gray-400 hover:border-gray-600'}`}
+                        className={`py-2 px-1 rounded text-[10px] font-bold uppercase transition-colors border ${type === t ? 'bg-red-600 border-red-600 text-white shadow-md' : 'bg-black border-gray-800 text-gray-400 hover:border-gray-600'}`}
                     >
-                        {t}
+                        {t === 'interactive_map' ? 'MAPA / REVISÃO' : t}
                     </button>
                 ))}
             </div>
@@ -575,6 +695,124 @@ export function ContentModal({ isOpen, onClose, onSave, initialData, lessonId, c
             </div>
           )}
 
+          {/* MAPA / REVISÃO (INTERACTIVE_MAP) */}
+          {type === 'interactive_map' && (
+            <div className="space-y-4 bg-black/30 p-5 rounded-xl border border-gray-800">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-purple-400">
+                  <Network size={18} />
+                  <span className="text-xs font-black uppercase tracking-wider">Arquivo Estruturado do Mapa (.JSON)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsManualJson(!isManualJson)}
+                  className="text-[11px] font-bold text-purple-400 hover:text-purple-300 underline transition-colors"
+                >
+                  {isManualJson ? 'Carregar via Arquivo' : 'Ou colar JSON manualmente'}
+                </button>
+              </div>
+
+              {!isManualJson ? (
+                <div className="border-2 border-dashed border-gray-700 hover:border-purple-600/50 rounded-xl p-6 flex flex-col items-center justify-center bg-black/40 transition-colors">
+                  <input
+                    type="file"
+                    ref={jsonFileInputRef}
+                    accept=".json,application/json"
+                    onChange={handleJsonFileSelect}
+                    className="hidden"
+                  />
+                  <FileJson className="w-10 h-10 text-purple-400/60 mb-2" />
+                  <button
+                    type="button"
+                    onClick={() => jsonFileInputRef.current?.click()}
+                    className="px-4 py-2 bg-purple-950/60 hover:bg-purple-900/60 text-purple-200 border border-purple-800/60 rounded-lg text-xs font-bold uppercase mb-2 flex items-center gap-2 transition-all shadow-md active:scale-95"
+                  >
+                    <Upload size={14} /> Selecionar Arquivo .JSON
+                  </button>
+                  {jsonFile ? (
+                    <span className="text-emerald-400 text-xs font-bold flex items-center gap-1">
+                      <CheckCircle2 size={12} /> {jsonFile.name}
+                    </span>
+                  ) : parsedMapData ? (
+                    <span className="text-purple-300 text-xs font-bold flex items-center gap-1">
+                      <CheckCircle2 size={12} /> Mapa estruturado carregado
+                    </span>
+                  ) : (
+                    <span className="text-gray-500 text-xs">
+                      Selecione o arquivo .json contendo meta, mindmap, quadros e questões
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase">
+                    Cole o código JSON completo:
+                  </label>
+                  <textarea
+                    value={jsonRawText}
+                    onChange={(e) => {
+                      setJsonRawText(e.target.value);
+                      validateAndParseJson(e.target.value);
+                    }}
+                    className="w-full h-44 bg-black border border-gray-800 rounded-xl p-3 text-purple-200 focus:border-purple-600 outline-none font-mono text-xs custom-scrollbar"
+                    placeholder='{ "meta": { "disciplina": "Direito..." }, "mindmap": { "id": "raiz", "title": "..." } }'
+                  />
+                </div>
+              )}
+
+              {/* Mensagem de Erro de Validação Estrita */}
+              {jsonError && (
+                <div className="p-3.5 rounded-xl bg-red-950/40 border border-red-800/60 text-red-300 text-xs flex items-start gap-2.5 animate-in fade-in">
+                  <AlertCircle size={16} className="text-red-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block font-black text-red-200 uppercase text-[10px] tracking-wider mb-0.5">
+                      JSON Inválido (Bloqueado para Salvar)
+                    </strong>
+                    <p className="leading-relaxed">{jsonError}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Resumo do Conteúdo Encontrado */}
+              {jsonSummary && (
+                <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-800/40 space-y-3 animate-in fade-in">
+                  <div className="flex items-center gap-2 text-emerald-400">
+                    <CheckCircle2 size={16} />
+                    <span className="text-[11px] font-black uppercase tracking-wider">
+                      Resumo da Estrutura Carregada
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+                    <div className="p-2.5 rounded-lg bg-black/40 border border-emerald-900/40">
+                      <span className="text-[10px] text-gray-400 block font-bold uppercase">Disciplina</span>
+                      <strong className="text-emerald-300 font-black truncate block">{jsonSummary.disciplina}</strong>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-black/40 border border-emerald-900/40">
+                      <span className="text-[10px] text-gray-400 block font-bold uppercase">Assunto / Tema</span>
+                      <strong className="text-emerald-300 font-black truncate block">{jsonSummary.assunto}</strong>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-black/40 border border-emerald-900/40">
+                      <span className="text-[10px] text-gray-400 block font-bold uppercase">Nós do Mapa</span>
+                      <strong className="text-emerald-300 font-black block">{jsonSummary.nodeCount} nós</strong>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-black/40 border border-emerald-900/40">
+                      <span className="text-[10px] text-gray-400 block font-bold uppercase">Quadros & Lousa</span>
+                      <strong className="text-emerald-300 font-black block">{jsonSummary.matrixCount} quadros</strong>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-black/40 border border-emerald-900/40">
+                      <span className="text-[10px] text-gray-400 block font-bold uppercase">Questões</span>
+                      <strong className="text-emerald-300 font-black block">{jsonSummary.questionCount} questões</strong>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-black/40 border border-emerald-900/40">
+                      <span className="text-[10px] text-gray-400 block font-bold uppercase">Flashcards</span>
+                      <strong className="text-emerald-300 font-black block">{jsonSummary.flashcardCount} cards</strong>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
         </form>
 
         <div className="p-6 border-t border-gray-800 flex justify-end gap-3 shrink-0 bg-zinc-900/30">
@@ -588,7 +826,7 @@ export function ContentModal({ isOpen, onClose, onSave, initialData, lessonId, c
             <button 
                 type="button" 
                 onClick={handleSubmit} 
-                disabled={loading} 
+                disabled={loading || (type === 'interactive_map' && (!parsedMapData || !!jsonError))} 
                 className="px-6 py-2 bg-red-600 hover:bg-red-500 text-white font-bold uppercase text-xs rounded disabled:opacity-50 flex items-center gap-2"
             >
                 {loading ? (

@@ -6,6 +6,7 @@ import { courseService } from '../../../../services/courseService';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { openWatermarkedPdf } from '../../../../utils/pdfSecurityService';
 import { AlternativeYouTubePlayer } from '../../../shared/AlternativeYouTubePlayer';
+import { InteractiveLessonPlayer } from './InteractiveLessonPlayer';
 
 interface CoursePlayerContentProps {
   lesson: CourseLesson;
@@ -91,6 +92,15 @@ export function CoursePlayerContent({ lesson }: CoursePlayerContentProps) {
                                 <iframe src={item.videoUrl} className="w-full h-full" frameBorder="0" allowFullScreen />
                             )}
                         </div>
+                    </div>
+                );
+            }
+
+            // --- BLOCO DE MAPA / REVISÃO (FULL WIDTH ATÉ A SIDEBAR) ---
+            if (item.type === 'interactive_map') {
+                return (
+                    <div key={item.id} className="w-full h-[calc(100vh-176px)] lg:h-[calc(100vh-112px)] min-h-[560px] md:min-h-[640px] flex flex-col">
+                        <InteractiveLessonPlayer content={item} lessonId={lesson.id} />
                     </div>
                 );
             }
@@ -234,6 +244,7 @@ export function CoursePlayerContent({ lesson }: CoursePlayerContentProps) {
                     {item.type === 'embed' && (
                         <div className="w-full overflow-hidden rounded-xl border border-gray-800 mb-4" dangerouslySetInnerHTML={{ __html: item.embedCode || '' }} />
                     )}
+
                 </div>
             );
         })}

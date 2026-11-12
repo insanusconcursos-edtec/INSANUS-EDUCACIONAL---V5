@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, PlayCircle, Folder, CheckSquare, Square, Loader2, Save, FileText } from 'lucide-react';
+import { X, PlayCircle, Folder, CheckSquare, Square, Loader2, Save, FileText, Cpu } from 'lucide-react';
 import { courseService } from '../../../../services/courseService';
 import { CourseLesson, CourseStructureModule, CourseStructureFolder } from '../../../../types/course';
 import { LinkedLesson } from '../../../../types/courseEdital';
@@ -28,8 +28,14 @@ const LessonRow: React.FC<LessonRowProps> = ({ lesson, isSelected, onClick }) =>
           ? <CheckSquare size={16} className="text-blue-500 shrink-0" /> 
           : <Square size={16} className="text-zinc-600 shrink-0" />
       }
-      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 border ${lesson.type === 'pdf' ? 'border-yellow-600/30 bg-yellow-600/10 text-yellow-500' : 'border-red-600/30 bg-red-600/10 text-red-500'}`}>
-          {lesson.type === 'pdf' ? <FileText size={10} /> : <PlayCircle size={10} />}
+      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 border ${
+        lesson.type === 'system_json'
+          ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400'
+          : lesson.type === 'pdf' 
+            ? 'border-yellow-600/30 bg-yellow-600/10 text-yellow-500' 
+            : 'border-red-600/30 bg-red-600/10 text-red-500'
+      }`}>
+          {lesson.type === 'system_json' ? <Cpu size={11} /> : lesson.type === 'pdf' ? <FileText size={10} /> : <PlayCircle size={10} />}
       </div>
       <span className={`text-xs font-medium uppercase ${isSelected ? 'text-white' : 'text-zinc-400'}`}>
           {lesson.title}

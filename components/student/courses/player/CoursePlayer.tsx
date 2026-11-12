@@ -85,7 +85,7 @@ export function CoursePlayer({ course, module, onBack }: CoursePlayerProps) {
   };
 
   return (
-    <div className="fixed top-[64px] left-0 right-0 bottom-0 bg-black z-50 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden animate-in fade-in custom-scrollbar" style={{ WebkitOverflowScrolling: 'touch' }}>
+    <div className="fixed top-[128px] lg:top-16 left-0 right-0 bottom-0 bg-black z-40 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden animate-in fade-in custom-scrollbar" style={{ WebkitOverflowScrolling: 'touch' }}>
       
       {/* ÁREA DE CONTEÚDO (Esquerda) */}
       <div className="w-full lg:flex-1 flex flex-col bg-black order-1 lg:order-1 relative lg:border-r border-gray-900 h-auto lg:h-full lg:min-h-0">

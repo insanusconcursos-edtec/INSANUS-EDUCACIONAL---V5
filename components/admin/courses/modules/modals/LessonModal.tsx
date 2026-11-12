@@ -4,10 +4,10 @@ import { courseService } from '../../../../../services/courseService';
 interface LessonModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (title: string, coverUrl: string, type: 'video' | 'pdf', groupId?: string | null, isProduction?: boolean) => Promise<void>;
+  onSave: (title: string, coverUrl: string, type: 'video' | 'pdf' | 'system_json', groupId?: string | null, isProduction?: boolean) => Promise<void>;
   initialTitle?: string;
   initialCover?: string;
-  initialType?: 'video' | 'pdf';
+  initialType?: 'video' | 'pdf' | 'system_json';
   initialGroupId?: string | null;
   initialIsProduction?: boolean;
   groups?: CourseGroup[];
@@ -26,7 +26,7 @@ export function LessonModal({
 }: LessonModalProps) {
   const [title, setTitle] = useState('');
   const [coverUrl, setCoverUrl] = useState('');
-  const [type, setType] = useState<'video' | 'pdf'>('video');
+  const [type, setType] = useState<'video' | 'pdf' | 'system_json'>('video');
   const [groupId, setGroupId] = useState<string | null>(null);
   const [isProduction, setIsProduction] = useState(false);
   
@@ -135,25 +135,55 @@ export function LessonModal({
             </select>
           </div>
 
-          {/* --- SELETOR DE TIPO DE AULA (NOVO) --- */}
+          {/* --- SELETOR DE TIPO DE AULA (VÍDEO / PDF / SYSTEM JSON) --- */}
           <div>
             <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Identificação Visual (Tipo)</label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-2 sm:gap-2.5">
                 <button
                     type="button"
                     onClick={() => setType('video')}
-                    className={`p-3 rounded border flex items-center justify-center gap-2 transition-all ${type === 'video' ? 'bg-red-600/20 border-red-600 text-white' : 'bg-black border-gray-800 text-gray-500 hover:border-gray-600'}`}
+                    className={`p-2.5 sm:p-3 rounded-lg border flex flex-col sm:flex-row items-center justify-center gap-1.5 sm:gap-2 transition-all ${
+                      type === 'video' 
+                        ? 'bg-red-600/20 border-red-600 text-white shadow-lg shadow-red-950/40' 
+                        : 'bg-black border-gray-800 text-gray-500 hover:border-gray-600'
+                    }`}
                 >
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" /></svg>
-                    <span className="text-xs font-bold uppercase">Vídeo Aula</span>
+                    <svg className={`w-4 h-4 shrink-0 ${type === 'video' ? 'text-red-500' : 'text-gray-500'}`} fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
+                    </svg>
+                    <span className="text-[10px] sm:text-xs font-bold uppercase tracking-tight">Vídeo Aula</span>
                 </button>
+
                 <button
                     type="button"
                     onClick={() => setType('pdf')}
-                    className={`p-3 rounded border flex items-center justify-center gap-2 transition-all ${type === 'pdf' ? 'bg-yellow-600/20 border-yellow-600 text-white' : 'bg-black border-gray-800 text-gray-500 hover:border-gray-600'}`}
+                    className={`p-2.5 sm:p-3 rounded-lg border flex flex-col sm:flex-row items-center justify-center gap-1.5 sm:gap-2 transition-all ${
+                      type === 'pdf' 
+                        ? 'bg-yellow-600/20 border-yellow-600 text-white shadow-lg shadow-yellow-950/40' 
+                        : 'bg-black border-gray-800 text-gray-500 hover:border-gray-600'
+                    }`}
                 >
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" /></svg>
-                    <span className="text-xs font-bold uppercase">Material PDF</span>
+                    <svg className={`w-4 h-4 shrink-0 ${type === 'pdf' ? 'text-yellow-500' : 'text-gray-500'}`} fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                    </svg>
+                    <span className="text-[10px] sm:text-xs font-bold uppercase tracking-tight">Material PDF</span>
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => setType('system_json')}
+                    className={`p-2.5 sm:p-3 rounded-lg border flex flex-col sm:flex-row items-center justify-center gap-1.5 sm:gap-2 transition-all ${
+                      type === 'system_json' 
+                        ? 'bg-cyan-600/20 border-cyan-500 text-white shadow-lg shadow-cyan-950/40' 
+                        : 'bg-black border-gray-800 text-gray-500 hover:border-gray-600'
+                    }`}
+                >
+                    <svg className={`w-4 h-4 shrink-0 ${type === 'system_json' ? 'text-cyan-400' : 'text-gray-500'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="4" y="4" width="16" height="16" rx="2" />
+                      <rect x="9" y="9" width="6" height="6" />
+                      <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
+                    </svg>
+                    <span className="text-[10px] sm:text-xs font-bold uppercase tracking-tight">System JSON</span>
                 </button>
             </div>
           </div>

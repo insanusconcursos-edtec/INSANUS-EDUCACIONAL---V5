@@ -1,4 +1,6 @@
 
+import { InteractiveMapData } from './interactiveMap';
+
 // Definição dos Status Possíveis
 export type ContestStatus = 
   | 'SEM_PREVISAO' 
@@ -139,7 +141,7 @@ export interface CourseLesson {
   order: number;
   
   // --- NOVO CAMPO: Tipo de Aula ---
-  type: 'video' | 'pdf'; // Identificador visual
+  type: 'video' | 'pdf' | 'system_json'; // Identificador visual
 
   // Contadores (já existentes)
   videoCount?: number;
@@ -199,7 +201,7 @@ export interface CourseFormData {
 }
 
 // --- NOVO: Tipos de Conteúdo ---
-export type ContentType = 'video' | 'pdf' | 'link' | 'text' | 'embed';
+export type ContentType = 'video' | 'pdf' | 'link' | 'text' | 'embed' | 'interactive_map';
 
 export interface CourseContent {
   id: string;
@@ -227,6 +229,10 @@ export interface CourseContent {
   // Gabarito Comentado (Para PDF do tipo QUESTÕES)
   commentedAnswerKeyUrl?: string | null;
   commentedAnswerKeyName?: string | null;
+
+  // Mapa / Revisão Interativo
+  interactiveMapData?: InteractiveMapData | string | null;
+  interactiveMapJson?: string | null;
 }
 
 // --- NOVO: Interface de Matrícula (Enrollment) ---

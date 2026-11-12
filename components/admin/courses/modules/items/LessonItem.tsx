@@ -15,6 +15,13 @@ const ArrowDown = () => <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24"
 // NOVOS ÍCONES PARA INDICADORES
 const VideoSmallIcon = () => <svg className="w-3 h-3 text-red-500" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" /></svg>;
 const PdfSmallIcon = () => <svg className="w-3 h-3 text-yellow-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" /></svg>;
+const SystemSmallIcon = () => (
+  <svg className="w-3.5 h-3.5 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="4" y="4" width="16" height="16" rx="2" />
+    <rect x="9" y="9" width="6" height="6" />
+    <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
+  </svg>
+);
 const LockIcon = () => <svg className="w-3 h-3 text-red-500" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>;
 
 interface LessonItemProps {
@@ -59,9 +66,15 @@ export const LessonItem: React.FC<LessonItemProps> = ({
       </div>
 
       {/* Capa ou Ícone */}
-      <div className="w-16 h-10 bg-black rounded overflow-hidden flex items-center justify-center shrink-0 border border-gray-800 relative">
+      <div className={`w-16 h-10 rounded overflow-hidden flex items-center justify-center shrink-0 border relative ${
+        lesson.type === 'system_json' ? 'bg-cyan-950/30 border-cyan-500/40' : 'bg-black border-gray-800'
+      }`}>
         {lesson.coverUrl ? (
             <img src={lesson.coverUrl} alt="" className="w-full h-full object-cover" />
+        ) : lesson.type === 'system_json' ? (
+            <SystemSmallIcon />
+        ) : lesson.type === 'pdf' ? (
+            <PdfSmallIcon />
         ) : (
             <div className="text-gray-600"><PlayIcon /></div>
         )}
@@ -70,6 +83,11 @@ export const LessonItem: React.FC<LessonItemProps> = ({
       <div className="flex-1 min-w-0 flex flex-col justify-center">
         <h4 className="text-sm font-medium text-gray-200 truncate group-hover:text-white leading-tight flex items-center gap-2">
             {lesson.title}
+            {lesson.type === 'system_json' && (
+                <span className="text-[8px] bg-cyan-500/10 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-500/30 font-black uppercase flex items-center gap-1 shrink-0">
+                    <SystemSmallIcon /> SYSTEM JSON
+                </span>
+            )}
             {lesson.isProduction && (
                 <span className="text-[8px] bg-red-500/10 text-red-500 px-1 py-0.5 rounded border border-red-500/20 font-black uppercase flex items-center gap-1 shrink-0">
                     <LockIcon /> EM PRODUÇÃO

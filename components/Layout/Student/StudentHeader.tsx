@@ -193,11 +193,11 @@ const StudentHeader: React.FC = () => {
         </div>
 
         {/* LINHA INFERIOR: MENU SELECT DE ABAS (Largura estendida para evitar cortes) */}
-        <div className="w-full px-4 py-3 bg-zinc-950/90 border-b border-zinc-900/30">
+        <div className="w-full h-16 px-4 flex items-center bg-zinc-950/90 border-b border-zinc-900/30">
           <div className="relative w-full max-w-md mx-auto">
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="w-full flex items-center justify-between bg-zinc-900 border border-zinc-800 text-white text-[11px] font-black uppercase tracking-widest rounded-xl py-3 px-5 focus:border-[var(--plan-theme)] outline-none transition-all active:scale-[0.98]"
+              className="w-full flex items-center justify-between bg-zinc-900 border border-zinc-800 text-white text-[11px] font-black uppercase tracking-widest rounded-xl py-2.5 px-5 focus:border-[var(--plan-theme)] outline-none transition-all active:scale-[0.98]"
             >
               <div className="flex items-center gap-3 truncate">
                 <div className="w-5 flex justify-center shrink-0">

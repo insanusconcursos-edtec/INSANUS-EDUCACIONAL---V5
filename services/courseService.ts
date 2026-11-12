@@ -1502,8 +1502,21 @@ export const courseService = {
       const snapshot = await getDocs(q);
       const lastOrder = snapshot.docs.length > 0 ? snapshot.docs[0].data().order : 0;
 
+      const cleanData: any = { ...data };
+      if (cleanData.type === 'interactive_map') {
+        const rawMap = cleanData.interactiveMapJson || cleanData.interactiveMapData;
+        if (rawMap && typeof rawMap === 'object') {
+          const jsonStr = JSON.stringify(rawMap);
+          cleanData.interactiveMapJson = jsonStr;
+          cleanData.interactiveMapData = jsonStr;
+        } else if (typeof rawMap === 'string') {
+          cleanData.interactiveMapJson = rawMap;
+          cleanData.interactiveMapData = rawMap;
+        }
+      }
+
       const docRef = await addDoc(collection(db, CONTENTS_COLLECTION), {
-        ...data,
+        ...cleanData,
         order: lastOrder + 1
       });
 
@@ -1526,7 +1539,20 @@ export const courseService = {
         orderBy('order', 'asc')
       );
       const snapshot = await getDocs(q);
-      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CourseContent));
+      return snapshot.docs.map(doc => {
+        const item = { id: doc.id, ...doc.data() } as CourseContent;
+        if (item.type === 'interactive_map') {
+          const raw = item.interactiveMapJson || item.interactiveMapData;
+          if (typeof raw === 'string') {
+            try {
+              item.interactiveMapData = JSON.parse(raw);
+            } catch (e) {
+              console.warn('[courseService] Falha ao parsear interactiveMapJson:', e);
+            }
+          }
+        }
+        return item;
+      });
     } catch (error) {
       console.error("Erro ao buscar conteúdos:", error);
       throw error;
@@ -1534,7 +1560,19 @@ export const courseService = {
   },
 
   updateContent: async (id: string, data: Partial<CourseContent>) => {
-    await updateDoc(doc(db, CONTENTS_COLLECTION, id), data);
+    const cleanData: any = { ...data };
+    if (cleanData.type === 'interactive_map') {
+      const rawMap = cleanData.interactiveMapJson || cleanData.interactiveMapData;
+      if (rawMap && typeof rawMap === 'object') {
+        const jsonStr = JSON.stringify(rawMap);
+        cleanData.interactiveMapJson = jsonStr;
+        cleanData.interactiveMapData = jsonStr;
+      } else if (typeof rawMap === 'string') {
+        cleanData.interactiveMapJson = rawMap;
+        cleanData.interactiveMapData = rawMap;
+      }
+    }
+    await updateDoc(doc(db, CONTENTS_COLLECTION, id), cleanData);
   },
 
   deleteContent: async (id: string) => {

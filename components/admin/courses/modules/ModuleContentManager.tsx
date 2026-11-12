@@ -340,7 +340,7 @@ export function ModuleContentManager({ module, onBack }: ModuleContentManagerPro
   };
 
   // --- CRUD AULAS ---
-  const handleSaveLesson = async (title: string, coverUrl: string, type: 'video' | 'pdf', groupId?: string | null, isProduction?: boolean) => {
+  const handleSaveLesson = async (title: string, coverUrl: string, type: 'video' | 'pdf' | 'system_json', groupId?: string | null, isProduction?: boolean) => {
     try {
       const data = { title, coverUrl, type, groupId: groupId || null, isProduction: isProduction || false };
       if (editingLesson) {

@@ -455,6 +455,16 @@ const LessonRow: React.FC<LessonRowProps> = ({ lesson, isActive, isCompleted, on
             );
         }
 
+        if (lesson.type === 'system_json') {
+            return (
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="4" y="4" width="16" height="16" rx="2" />
+                    <rect x="9" y="9" width="6" height="6" />
+                    <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
+                </svg>
+            );
+        }
+
         if (lesson.type === 'pdf') {
             return (
                 <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -477,7 +487,9 @@ const LessonRow: React.FC<LessonRowProps> = ({ lesson, isActive, isCompleted, on
             className={`w-full flex items-center gap-3 p-3 rounded-lg text-left transition-all group
                 ${isLocked ? 'opacity-40 cursor-not-allowed bg-black/20' : ''}
                 ${isActive 
-                    ? 'bg-[var(--plan-theme)]/10 border border-[var(--plan-theme)]/20' 
+                    ? lesson.type === 'system_json'
+                        ? 'bg-cyan-500/10 border border-cyan-500/30'
+                        : 'bg-[var(--plan-theme)]/10 border border-[var(--plan-theme)]/20' 
                     : !isLocked ? 'hover:bg-[#1a1d24] border border-transparent' : 'border-transparent'
                 }
             `}
@@ -489,8 +501,12 @@ const LessonRow: React.FC<LessonRowProps> = ({ lesson, isActive, isCompleted, on
                     : isCompleted 
                         ? 'bg-green-500/10 border-green-500/30' 
                         : isActive 
-                            ? 'bg-[var(--plan-theme)] border-[var(--plan-theme)] text-white' 
-                            : 'bg-black border-gray-800 text-gray-500 group-hover:border-gray-600 group-hover:text-gray-300'
+                            ? lesson.type === 'system_json'
+                                ? 'bg-cyan-600 border-cyan-500 text-white shadow-lg shadow-cyan-950/50'
+                                : 'bg-[var(--plan-theme)] border-[var(--plan-theme)] text-white' 
+                            : lesson.type === 'system_json'
+                                ? 'bg-black border-cyan-900/50 text-cyan-400 group-hover:border-cyan-500 group-hover:text-cyan-300'
+                                : 'bg-black border-gray-800 text-gray-500 group-hover:border-gray-600 group-hover:text-gray-300'
                 }
             `}>
                 <Icon />

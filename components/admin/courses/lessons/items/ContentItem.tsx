@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, FileQuestion, Layers, Video, Link as LinkIcon, Type, Code, ChevronUp, ChevronDown, Edit2, Trash2 } from 'lucide-react';
+import { FileText, FileQuestion, Layers, Video, Link as LinkIcon, Type, Code, ChevronUp, ChevronDown, Edit2, Trash2, Network } from 'lucide-react';
 import { CourseContent } from '../../../../../types/course';
 
 interface ContentItemProps {
@@ -60,11 +60,21 @@ export const ContentItem: React.FC<ContentItemProps> = ({ content, onEdit, onDel
       case 'link': return <LinkIcon size={16} className="text-blue-500" />;
       case 'text': return <Type size={16} className="text-gray-300" />;
       case 'embed': return <Code size={16} className="text-green-500" />;
+      case 'interactive_map': return <Network size={16} className="text-purple-400" />;
       default: return null;
     }
   };
 
   const renderClassificationBadge = () => {
+    if (content.type === 'interactive_map') {
+      return (
+        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded border text-[9px] font-black uppercase tracking-tighter bg-purple-950/40 text-purple-300 border-purple-800/50">
+          <Network size={10} />
+          MAPA / REVISÃO
+        </div>
+      );
+    }
+
     if (content.type !== 'pdf') return null;
 
     const styles = getMaterialStyles(content.pdfClassification);
@@ -100,7 +110,9 @@ export const ContentItem: React.FC<ContentItemProps> = ({ content, onEdit, onDel
             <h4 className="text-sm font-bold text-gray-200 truncate">{content.title}</h4>
             {renderClassificationBadge()}
           </div>
-          <span className="text-[10px] text-gray-500 uppercase tracking-wider">{content.type}</span>
+          <span className="text-[10px] text-gray-500 uppercase tracking-wider">
+            {content.type === 'interactive_map' ? 'Mapa / Revisão' : content.type}
+          </span>
         </div>
 
         {/* Ações */}

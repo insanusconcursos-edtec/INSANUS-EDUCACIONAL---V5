@@ -10,7 +10,7 @@ import { StudentModuleCard } from './StudentModuleCard';
 import { StudentModuleGroupCard } from './StudentModuleGroupCard';
 import { CoursePlayer } from './player/CoursePlayer';
 import { useAuth } from '../../../contexts/AuthContext';
-import { CheckCircle2, LayoutList, ListTree, PlayCircle, ArrowLeft, Radio, Video, Clock, Play, Calendar, PlaySquare, Lock, MapPin, ChevronDown, ChevronRight, FileText, Loader2, Layers, Folder, X, Users, Megaphone, Bell, CheckCircle } from 'lucide-react';
+import { CheckCircle2, LayoutList, ListTree, PlayCircle, ArrowLeft, Radio, Video, Clock, Play, Calendar, PlaySquare, Lock, MapPin, ChevronDown, ChevronRight, FileText, Loader2, Layers, Folder, X, Users, Megaphone, Bell, CheckCircle, Cpu } from 'lucide-react';
 import { StudentCourseEdital } from './edital/StudentCourseEdital';
 import { CourseReviewDashboard } from './reviews/CourseReviewDashboard';
 import { WelcomeVideoModal } from './WelcomeVideoModal';
@@ -93,7 +93,13 @@ export function CourseDetails({ course, onBack, isInsidePlan = false }: CourseDe
           className="w-full flex items-center justify-between p-3 pl-10 hover:bg-zinc-800/50 rounded-xl transition-colors group/lesson"
         >
           <div className="flex items-center gap-3">
-            <PlayCircle size={14} className="text-zinc-600 group-hover/lesson:text-brand-red" />
+            {lesson.type === 'system_json' ? (
+              <Cpu size={14} className="text-cyan-400 group-hover/lesson:text-cyan-300" />
+            ) : lesson.type === 'pdf' ? (
+              <FileText size={14} className="text-yellow-500 group-hover/lesson:text-yellow-400" />
+            ) : (
+              <PlayCircle size={14} className="text-zinc-600 group-hover/lesson:text-brand-red" />
+            )}
             <span className="text-zinc-400 text-xs font-bold group-hover/lesson:text-zinc-200 transition-colors">
               {lesson.title}
             </span>
