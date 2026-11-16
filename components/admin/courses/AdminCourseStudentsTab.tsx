@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Users, UserCheck, UserPlus, GraduationCap, MessageCircle, ExternalLink, Search, Link as LinkIcon, X, Copy, Check, RefreshCw, Trash2, Play, Pause, ArrowLeft, FileText, CheckCircle } from 'lucide-react';
 import { CourseEnrollment } from '../../../types/course';
+import { getStudentsByCourse } from '../../../services/studentService';
+import { db } from '../../../services/firebase';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { differenceInDays, parseISO, format } from 'date-fns';
 import toast from 'react-hot-toast';
 
@@ -40,10 +43,25 @@ export function AdminCourseStudentsTab({ courseId }: AdminCourseStudentsTabProps
     if (!courseId) return;
     setLoadingLinks(true);
     try {
-      const res = await fetch(`/api/admin/courses/${courseId}/migration-links`);
-      const data = await res.json();
-      if (data.success) {
-        setMigrationLinks(data.links || []);
+      let loadedFromApi = false;
+      try {
+        const res = await fetch(`/api/admin/courses/${courseId}/migration-links`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success && Array.isArray(data.links)) {
+            setMigrationLinks(data.links);
+            loadedFromApi = true;
+          }
+        }
+      } catch {
+        // Fallback para Firestore direto abaixo
+      }
+
+      if (!loadedFromApi) {
+        const snap = await getDocs(query(collection(db, 'MigrationLinks'), where('courseId', '==', courseId)));
+        const links = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        links.sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        setMigrationLinks(links);
       }
     } catch (e) {
       console.error("Erro ao buscar links de migração:", e);
@@ -64,26 +82,44 @@ export function AdminCourseStudentsTab({ courseId }: AdminCourseStudentsTabProps
     if (!viewingLinkDetails) return;
     setIsSavingEdit(true);
     try {
-      const res = await fetch(`/api/admin/courses/${courseId}/migration-links`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          linkId: viewingLinkDetails.id,
-          action: 'edit',
+      let updatedViaApi = false;
+      try {
+        const res = await fetch(`/api/admin/courses/${courseId}/migration-links`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            linkId: viewingLinkDetails.id,
+            action: 'edit',
+            expiresAt: editingExpiresAt,
+            accessDurationDays: Number(editingAccessDurationDays)
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success) {
+            toast.success('Configurações do link atualizadas!');
+            setViewingLinkDetails(data.link);
+            loadMigrationLinks();
+            updatedViaApi = true;
+          }
+        }
+      } catch {
+        // Fallback para Firestore direto abaixo
+      }
+
+      if (!updatedViaApi) {
+        const linkRef = doc(db, 'MigrationLinks', viewingLinkDetails.id);
+        await updateDoc(linkRef, {
           expiresAt: editingExpiresAt,
           accessDurationDays: Number(editingAccessDurationDays)
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
+        });
+        const updatedSnap = await getDoc(linkRef);
         toast.success('Configurações do link atualizadas!');
-        setViewingLinkDetails(data.link);
+        setViewingLinkDetails({ id: updatedSnap.id, ...updatedSnap.data() });
         loadMigrationLinks();
-      } else {
-        toast.error(data.error || 'Erro ao salvar alterações');
       }
     } catch (e) {
-      toast.error('Erro de conexão');
+      toast.error('Erro ao salvar alterações');
     } finally {
       setIsSavingEdit(false);
     }
@@ -105,26 +141,56 @@ export function AdminCourseStudentsTab({ courseId }: AdminCourseStudentsTabProps
       const currentEmailsList = (viewingLinkDetails.authorizedEmails || []).map((e: any) => e.email);
       const mergedEmails = Array.from(new Set([...currentEmailsList, ...newEmails]));
 
-      const res = await fetch(`/api/admin/courses/${courseId}/migration-links`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          linkId: viewingLinkDetails.id,
-          action: 'edit',
-          authorizedEmails: mergedEmails
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
+      let updatedViaApi = false;
+      try {
+        const res = await fetch(`/api/admin/courses/${courseId}/migration-links`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            linkId: viewingLinkDetails.id,
+            action: 'edit',
+            authorizedEmails: mergedEmails
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success) {
+            toast.success(`${newEmails.length} novo(s) e-mail(s) adicionado(s) com sucesso!`);
+            setViewingLinkDetails(data.link);
+            setNewEmailsText('');
+            loadMigrationLinks();
+            updatedViaApi = true;
+          }
+        }
+      } catch {
+        // Fallback para Firestore direto abaixo
+      }
+
+      if (!updatedViaApi) {
+        const linkRef = doc(db, 'MigrationLinks', viewingLinkDetails.id);
+        const existingEmails = Array.isArray(viewingLinkDetails.authorizedEmails) ? viewingLinkDetails.authorizedEmails : [];
+        const existingMap = new Map<string, any>();
+        existingEmails.forEach((item: any) => {
+          if (item?.email) existingMap.set(item.email.trim().toLowerCase(), item);
+        });
+        const cleanEmails = mergedEmails.map(email => {
+          const norm = email.trim().toLowerCase();
+          return existingMap.get(norm) || {
+            email: norm,
+            status: 'pending',
+            completedAt: null,
+            completedUid: null
+          };
+        });
+        await updateDoc(linkRef, { authorizedEmails: cleanEmails });
+        const updatedSnap = await getDoc(linkRef);
         toast.success(`${newEmails.length} novo(s) e-mail(s) adicionado(s) com sucesso!`);
-        setViewingLinkDetails(data.link);
+        setViewingLinkDetails({ id: updatedSnap.id, ...updatedSnap.data() });
         setNewEmailsText('');
         loadMigrationLinks();
-      } else {
-        toast.error(data.error || 'Erro ao adicionar e-mails');
       }
     } catch (e) {
-      toast.error('Erro de conexão');
+      toast.error('Erro ao adicionar e-mails');
     } finally {
       setIsSavingEdit(false);
     }
@@ -132,46 +198,81 @@ export function AdminCourseStudentsTab({ courseId }: AdminCourseStudentsTabProps
 
   const handleToggleLinkActive = async (linkId: string) => {
     try {
-      const res = await fetch(`/api/admin/courses/${courseId}/migration-links`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ linkId, action: 'toggle' })
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast.success(data.active ? 'Link ativado com sucesso!' : 'Link desativado com sucesso!');
-        loadMigrationLinks();
-        if (viewingLinkDetails && viewingLinkDetails.id === linkId) {
-          setViewingLinkDetails(prev => prev ? { ...prev, active: data.active } : null);
+      let toggledViaApi = false;
+      try {
+        const res = await fetch(`/api/admin/courses/${courseId}/migration-links`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ linkId, action: 'toggle' })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success) {
+            toast.success(data.active ? 'Link ativado com sucesso!' : 'Link desativado com sucesso!');
+            loadMigrationLinks();
+            if (viewingLinkDetails && viewingLinkDetails.id === linkId) {
+              setViewingLinkDetails((prev: any) => prev ? { ...prev, active: data.active } : null);
+            }
+            toggledViaApi = true;
+          }
         }
-      } else {
-        toast.error(data.error || 'Erro ao alterar status');
+      } catch {
+        // Fallback para Firestore direto abaixo
+      }
+
+      if (!toggledViaApi) {
+        const linkRef = doc(db, 'MigrationLinks', linkId);
+        const linkSnap = await getDoc(linkRef);
+        if (linkSnap.exists()) {
+          const nextActive = !(linkSnap.data()?.active !== false);
+          await updateDoc(linkRef, { active: nextActive });
+          toast.success(nextActive ? 'Link ativado com sucesso!' : 'Link desativado com sucesso!');
+          loadMigrationLinks();
+          if (viewingLinkDetails && viewingLinkDetails.id === linkId) {
+            setViewingLinkDetails((prev: any) => prev ? { ...prev, active: nextActive } : null);
+          }
+        }
       }
     } catch (e) {
-      toast.error('Erro de rede');
+      toast.error('Erro ao alterar status do link');
     }
   };
 
   const handleDeleteLink = async (linkId: string) => {
     if (!window.confirm('Tem certeza de que deseja excluir permanentemente este link de migração? Todas as autorizações associadas serão perdidas.')) return;
     try {
-      const res = await fetch(`/api/admin/courses/${courseId}/migration-links`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ linkId, action: 'delete' })
-      });
-      const data = await res.json();
-      if (data.success) {
+      let deletedViaApi = false;
+      try {
+        const res = await fetch(`/api/admin/courses/${courseId}/migration-links`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ linkId, action: 'delete' })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success) {
+            toast.success('Link de migração excluído!');
+            loadMigrationLinks();
+            if (viewingLinkDetails && viewingLinkDetails.id === linkId) {
+              setViewingLinkDetails(null);
+            }
+            deletedViaApi = true;
+          }
+        }
+      } catch {
+        // Fallback para Firestore direto abaixo
+      }
+
+      if (!deletedViaApi) {
+        await deleteDoc(doc(db, 'MigrationLinks', linkId));
         toast.success('Link de migração excluído!');
         loadMigrationLinks();
         if (viewingLinkDetails && viewingLinkDetails.id === linkId) {
           setViewingLinkDetails(null);
         }
-      } else {
-        toast.error(data.error || 'Erro ao excluir link');
       }
     } catch (e) {
-      toast.error('Erro de rede');
+      toast.error('Erro ao excluir link');
     }
   };
 
@@ -196,25 +297,37 @@ export function AdminCourseStudentsTab({ courseId }: AdminCourseStudentsTabProps
     setLoading(true);
     try {
       fetchLock.current = courseId;
-      const response = await fetch(`/api/admin/courses/${courseId}/students`);
-      const data = await response.json();
-      
-      if (data.success) {
-        const realStudents = (data.students || []) as CourseEnrollment[];
-        
-        // Ordenação Alfabética Real (Defensiva)
-        realStudents.sort((a, b) => (a?.userName || '').localeCompare(b?.userName || ''));
-        
-        setEnrollments(realStudents);
-        
-        // Cálculo Dinâmico das Métricas
-        setMetrics({
-          total: realStudents.length,
-          regular: realStudents.filter(s => s?.enrollmentType === 'REGULAR' || !s?.enrollmentType).length,
-          migration: realStudents.filter(s => s?.enrollmentType === 'MIGRACAO').length,
-          scholarship: realStudents.filter(s => s?.enrollmentType === 'BOLSISTA').length
-        });
+      let realStudents: CourseEnrollment[] | null = null;
+
+      try {
+        const response = await fetch(`/api/admin/courses/${courseId}/students`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.success && Array.isArray(data.students)) {
+            realStudents = data.students as CourseEnrollment[];
+          }
+        }
+      } catch (apiErr) {
+        console.warn("API de alunos indisponível, utilizando fallback direto do Firestore:", apiErr);
       }
+
+      // Fallback resiliente via SDK autenticado do Admin (garante funcionamento mesmo sem variáveis de Admin na Vercel)
+      if (!realStudents) {
+        realStudents = (await getStudentsByCourse(courseId)) as CourseEnrollment[];
+      }
+
+      // Ordenação Alfabética Real (Defensiva)
+      realStudents.sort((a, b) => (a?.userName || '').localeCompare(b?.userName || ''));
+
+      setEnrollments(realStudents);
+
+      // Cálculo Dinâmico das Métricas
+      setMetrics({
+        total: realStudents.length,
+        regular: realStudents.filter(s => s?.enrollmentType === 'REGULAR' || !s?.enrollmentType).length,
+        migration: realStudents.filter(s => s?.enrollmentType === 'MIGRACAO').length,
+        scholarship: realStudents.filter(s => s?.enrollmentType === 'BOLSISTA').length
+      });
     } catch (error) {
       fetchLock.current = ''; // Destranca em caso de erro para permitir retry
       console.error("Erro ao buscar alunos reais:", error);
@@ -279,37 +392,79 @@ export function AdminCourseStudentsTab({ courseId }: AdminCourseStudentsTabProps
     return matchesSearch && matchesFilter;
   });
 
+  const formatSafeDate = (dateStr?: string | null) => {
+    if (!dateStr) return '---';
+    try {
+      const parsed = parseISO(dateStr);
+      if (isNaN(parsed.getTime())) return '---';
+      return format(parsed, 'dd/MM/yyyy');
+    } catch {
+      return '---';
+    }
+  };
+
   const handleCreateMigrationLink = async () => {
     setIsCreatingLink(true);
     try {
-      const response = await fetch(`/api/admin/courses/${courseId}/migration-links`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          expiresAt: migrationConfig.expiresAt,
-          accessDurationDays: migrationConfig.accessDurationDays,
-          authorizedEmails: importedEmails
-        })
-      });
-      const data = await response.json();
-      if (data.success) {
-        const fullUrl = `${window.location.origin}${data.link}`;
-        setGeneratedLink({
-          id: data.id,
-          url: fullUrl,
-          embed: `<iframe src="${fullUrl}" width="100%" height="600px" frameborder="0"></iframe>`
+      let createdId: string | null = null;
+      let createdPath: string | null = null;
+
+      try {
+        const response = await fetch(`/api/admin/courses/${courseId}/migration-links`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            expiresAt: migrationConfig.expiresAt,
+            accessDurationDays: migrationConfig.accessDurationDays,
+            authorizedEmails: importedEmails
+          })
         });
-        toast.success('Link de migração gerado com sucesso!');
-        loadMigrationLinks();
-        // Limpar lista local de emails carregados
-        setImportedEmails([]);
-        setRawEmailsText('');
-      } else {
-        toast.error(data.error || 'Erro ao gerar link');
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.success && data.id) {
+            createdId = data.id;
+            createdPath = data.link || `/migracao/${data.id}`;
+          }
+        }
+      } catch {
+        // Fallback para Firestore direto abaixo
       }
+
+      if (!createdId) {
+        const cleanEmails = Array.isArray(importedEmails)
+          ? importedEmails.map((email: string) => ({
+              email: email.trim().toLowerCase(),
+              status: 'pending',
+              completedAt: null,
+              completedUid: null
+            }))
+          : [];
+
+        const docRef = await addDoc(collection(db, 'MigrationLinks'), {
+          courseId,
+          expiresAt: migrationConfig.expiresAt,
+          accessDurationDays: Number(migrationConfig.accessDurationDays),
+          active: true,
+          createdAt: new Date().toISOString(),
+          authorizedEmails: cleanEmails
+        });
+        createdId = docRef.id;
+        createdPath = `/migracao/${docRef.id}`;
+      }
+
+      const fullUrl = `${window.location.origin}${createdPath}`;
+      setGeneratedLink({
+        id: createdId,
+        url: fullUrl,
+        embed: `<iframe src="${fullUrl}" width="100%" height="600px" frameborder="0"></iframe>`
+      });
+      toast.success('Link de migração gerado com sucesso!');
+      loadMigrationLinks();
+      setImportedEmails([]);
+      setRawEmailsText('');
     } catch (error) {
       console.error("Erro ao criar link:", error);
-      toast.error('Erro de conexão');
+      toast.error('Erro ao gerar link de migração');
     } finally {
       setIsCreatingLink(false);
     }
@@ -506,7 +661,7 @@ export function AdminCourseStudentsTab({ courseId }: AdminCourseStudentsTabProps
                         <div className="space-y-1">
                           <p className="text-zinc-400 text-[10px] uppercase font-bold">
                             Expira em: <span className="text-white">
-                              {enrollment.expiresAt ? format(parseISO(enrollment.expiresAt), 'dd/MM/yyyy') : '---'}
+                              {formatSafeDate(enrollment.expiresAt)}
                             </span>
                           </p>
                           <p className={`text-xs font-bold ${remaining.color}`}>{remaining.label}</p>

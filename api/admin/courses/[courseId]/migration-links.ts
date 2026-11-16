@@ -1,36 +1,28 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import * as firebaseAdmin from 'firebase-admin';
-
-// Tratamento para o empacotador da Vercel
-const admin = firebaseAdmin.default || firebaseAdmin;
-
-// Inicialização segura com Cold Start
-try {
-  if (!admin.apps?.length) {
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY
-      ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n').replace(/"/g, '')
-      : undefined;
-    if (privateKey && process.env.FIREBASE_PROJECT_ID) {
-      admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId: process.env.FIREBASE_PROJECT_ID,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: privateKey,
-        }),
-      });
-    }
-  }
-} catch (error) {
-  console.error("Crash no Firebase Init:", error);
-}
+import { getAdminConfig } from '../../../../src/backend/services/firebaseAdmin.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { courseId } = req.query;
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  const rawCourseId = req.query.courseId;
+  const courseId = Array.isArray(rawCourseId) ? rawCourseId[0] : rawCourseId;
   if (!courseId || typeof courseId !== 'string') {
     return res.status(400).json({ success: false, error: 'ID do curso inválido' });
   }
 
-  const db = admin.firestore();
+  let db: ReturnType<typeof getAdminConfig>['dbAdmin'];
+  try {
+    db = getAdminConfig().dbAdmin;
+  } catch (err: any) {
+    console.error("Erro no Firebase Admin em migration-links:", err);
+    return res.status(500).json({ success: false, error: err?.message || 'Erro de configuração no servidor' });
+  }
 
   // 1. GET: Retornar todos os links de migração do curso
   if (req.method === 'GET') {

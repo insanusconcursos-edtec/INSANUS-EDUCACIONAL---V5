@@ -863,6 +863,148 @@ export const getStudentsByPlan = async (planId: string) => {
 };
 
 /**
+ * Busca todos os alunos matriculados em um curso online específico (via Combo/Produto ou Matrícula Direta),
+ * servindo como fallback resiliente caso a Serverless Function de API não esteja disponível.
+ */
+export const getStudentsByCourse = async (courseId: string) => {
+  const normalizeDateValue = (val: any): string => {
+    if (!val) return '';
+    if (typeof val?.toDate === 'function') {
+      return val.toDate().toISOString();
+    }
+    if (typeof val === 'object' && typeof val.seconds === 'number') {
+      return new Date(val.seconds * 1000).toISOString();
+    }
+    return String(val);
+  };
+
+  // 1. Matrículas diretas em course_enrollments
+  const enrollmentsQuery = query(collection(db, 'course_enrollments'), where('courseId', '==', courseId));
+  const [directEnrollmentsSnap, studentsSnap] = await Promise.all([
+    getDocs(enrollmentsQuery),
+    getDocs(query(collection(db, 'users'), where('role', '==', 'student')))
+  ]);
+
+  const studentMap = new Map<string, any>();
+
+  // Parte A: Alunos com acesso via Combo/Produto ou Migração no array access
+  studentsSnap.forEach(docSnap => {
+    const userData: any = docSnap.data();
+    const accessArray: any[] = userData.access || [];
+
+    const courseAccess = accessArray.find(
+      (acc: any) => acc.type === 'course' && acc.targetId === courseId && acc.isActive === true
+    );
+
+    if (courseAccess) {
+      const isMig = Boolean(courseAccess.id && String(courseAccess.id).startsWith('mig_'));
+      const enrollmentType = isMig
+        ? 'MIGRACAO'
+        : courseAccess.isScholarship
+        ? 'BOLSISTA'
+        : 'REGULAR';
+
+      const expiresAt = normalizeDateValue(courseAccess.diaFim);
+      const releasedAt = normalizeDateValue(courseAccess.diaInicio) || normalizeDateValue(userData.createdAt);
+
+      studentMap.set(docSnap.id, {
+        id: docSnap.id,
+        courseId,
+        userId: docSnap.id,
+        userName: userData.name || userData.displayName || 'Sem Nome',
+        userEmail: userData.email || '',
+        userPhone: userData.phone || userData.whatsapp || userData.contact || '',
+        userCpf: userData.cpf || '',
+        userAvatar: userData.photoURL || '',
+        enrollmentType,
+        accessOrigin: isMig ? 'MIGRATION' : 'COMBO',
+        expiresAt,
+        releasedAt,
+        diaInicio: releasedAt,
+        diaFim: expiresAt,
+        active: courseAccess.isActive !== false
+      });
+    }
+  });
+
+  // Parte B: Matrículas diretas em course_enrollments (sobrescrevendo ou complementando)
+  for (const enrollDoc of directEnrollmentsSnap.docs) {
+    const enrollmentData: any = { id: enrollDoc.id, ...enrollDoc.data() };
+    const userId = enrollmentData.userId;
+    if (!userId) continue;
+
+    let userProfile = studentMap.get(userId);
+
+    if (!userProfile) {
+      const existingStudentDoc = studentsSnap.docs.find(d => d.id === userId);
+      if (existingStudentDoc) {
+        const userData: any = existingStudentDoc.data();
+        userProfile = {
+          id: existingStudentDoc.id,
+          courseId,
+          userId: existingStudentDoc.id,
+          userName: userData.name || userData.displayName || 'Sem Nome',
+          userEmail: userData.email || '',
+          userPhone: userData.phone || userData.whatsapp || userData.contact || '',
+          userCpf: userData.cpf || '',
+          userAvatar: userData.photoURL || '',
+          createdAt: userData.createdAt
+        };
+      } else {
+        const userDocSnap = await getDoc(doc(db, 'users', userId));
+        if (userDocSnap.exists()) {
+          const userData: any = userDocSnap.data();
+          userProfile = {
+            id: userDocSnap.id,
+            courseId,
+            userId: userDocSnap.id,
+            userName: userData.name || userData.displayName || 'Sem Nome',
+            userEmail: userData.email || '',
+            userPhone: userData.phone || userData.whatsapp || userData.contact || '',
+            userCpf: userData.cpf || '',
+            userAvatar: userData.photoURL || '',
+            createdAt: userData.createdAt
+          };
+        } else if (enrollmentData.userName || enrollmentData.userEmail) {
+          userProfile = {
+            id: userId,
+            courseId,
+            userId,
+            userName: enrollmentData.userName || 'Sem Nome',
+            userEmail: enrollmentData.userEmail || '',
+            userPhone: enrollmentData.userPhone || '',
+            userCpf: enrollmentData.userCpf || '',
+            userAvatar: enrollmentData.userAvatar || ''
+          };
+        }
+      }
+    }
+
+    if (userProfile) {
+      const expiresAt = normalizeDateValue(enrollmentData.diaFim || enrollmentData.expiresAt);
+      const releasedAt =
+        normalizeDateValue(enrollmentData.diaInicio || enrollmentData.releasedAt) ||
+        normalizeDateValue(enrollmentData.createdAt) ||
+        normalizeDateValue(userProfile.createdAt);
+
+      studentMap.set(userId, {
+        ...userProfile,
+        courseId,
+        enrollmentType: enrollmentData.enrollmentType || (enrollmentData.isScholarship ? 'BOLSISTA' : 'REGULAR'),
+        accessOrigin: 'DIRECT',
+        expiresAt,
+        releasedAt,
+        diaInicio: releasedAt,
+        diaFim: expiresAt,
+        active: enrollmentData.active !== false
+      });
+    }
+  }
+
+  return Array.from(studentMap.values());
+};
+
+/**
  * Libera o acesso em lote de alunos de uma turma presencial para outra.
  */
 export const batchReleaseClassAccess = async (

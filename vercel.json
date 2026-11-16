@@ -14,17 +14,8 @@
       "destination": "/sw.js"
     },
     {
-      "source": "/api/(.*)",
-      "destination": "/api/index.ts"
-    },
-    {
-      "source": "/((?!assets/|manifest.json|sw.js|favicon.ico).*)",
+      "source": "/((?!api/|assets/|manifest.json|sw.js|favicon.ico).*)",
       "destination": "/index.html"
     }
-  ],
-  "functions": {
-    "api/index.ts": {
-      "includeFiles": "dist/**"
-    }
-  }
+  ]
 }
