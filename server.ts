@@ -20,6 +20,9 @@ import {
   getAutentiqueSyncLogs,
   handleAutentiqueWebhook,
   initAutentiqueSyncCron,
+  resendAutentiqueContractEmail,
+  resendFailedClassContractEmails,
+  revokeAutentiqueContractEnrollment,
 } from './src/backend/services/autentiqueService.js';
 
 process.stdout.write(">>>> [SISTEMA] SERVIDOR INICIALIZADO COM SUCESSO <<<<\n");
@@ -1671,20 +1674,61 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
     if (req.method !== 'POST' && req.method !== 'GET') {
       return res.status(405).json({ success: false, error: 'Método não permitido' });
     }
-    if (!isAutentiqueConfigured()) {
-      return res.status(400).json({
-        success: false,
-        error: 'AUTENTIQUE_API_TOKEN não está configurado nas variáveis de ambiente do servidor.',
-      });
-    }
     try {
+      const action = String(req.body?.action || '').trim();
+
+      if (req.method === 'POST' && action === 'resend') {
+        const logId = String(req.body?.logId || '').trim();
+        if (!logId) {
+          return res.status(400).json({ success: false, error: 'ID do registro é obrigatório.' });
+        }
+        const outcome = await resendAutentiqueContractEmail(logId);
+        return res.status(200).json({ success: true, ...outcome });
+      }
+
+      if (req.method === 'POST' && action === 'resend_failed') {
+        const classId = String(req.body?.classId || '').trim();
+        if (!classId) {
+          return res.status(400).json({ success: false, error: 'ID da turma é obrigatório.' });
+        }
+        const outcome = await resendFailedClassContractEmails(classId, 20);
+        return res.status(200).json({ success: true, ...outcome });
+      }
+
+      if (req.method === 'POST' && action === 'revoke') {
+        const logId = String(req.body?.logId || '').trim();
+        const blockFutureEmail = Boolean(req.body?.blockFutureEmail);
+        const reason =
+          req.body?.reason === 'CONTRACT_REMOVED_FROM_FOLDER'
+            ? 'CONTRACT_REMOVED_FROM_FOLDER'
+            : 'MANUAL_ADMIN';
+        if (!logId) {
+          return res.status(400).json({ success: false, error: 'ID do registro é obrigatório.' });
+        }
+        const outcome = await revokeAutentiqueContractEnrollment(logId, {
+          blockFutureEmail,
+          reason,
+        });
+        return res.status(200).json({ success: true, ...outcome });
+      }
+
+      if (!isAutentiqueConfigured()) {
+        return res.status(400).json({
+          success: false,
+          error: 'AUTENTIQUE_API_TOKEN não está configurado nas variáveis de ambiente do servidor.',
+        });
+      }
+
       const classId = String(req.body?.classId || req.query?.classId || '').trim();
+      const maxNewProvisions = Number(req.body?.maxNewProvisions) || 25;
+
       if (classId) {
-        const singleResult = await syncClassAutentiqueFolder(classId, 'MANUAL_SYNC');
+        const singleResult = await syncClassAutentiqueFolder(classId, 'MANUAL_SYNC', maxNewProvisions);
         return res.status(200).json({ success: true, results: [singleResult] });
       }
       const results = await syncAllActiveAutentiqueClasses(
-        req.method === 'GET' ? 'CRON' : 'MANUAL_SYNC'
+        req.method === 'GET' ? 'CRON' : 'MANUAL_SYNC',
+        maxNewProvisions
       );
       return res.status(200).json({ success: true, results });
     } catch (error: any) {

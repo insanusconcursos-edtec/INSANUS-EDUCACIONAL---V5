@@ -5,13 +5,17 @@ import { sendWelcomeEmail, sendAccessNotificationEmail } from './emailService.js
 import {
   AutentiqueFolder,
   AutentiqueClassSyncResult,
+  AutentiqueFolderXRay,
+  AutentiquePendingDocItem,
   AutentiqueProvisionAction,
+  AutentiqueRevokeReason,
   AutentiqueSyncedContract,
   AutentiqueTriggerSource,
 } from '../../../types/autentique.js';
 
 const AUTENTIQUE_GRAPHQL_URL = 'https://api.autentique.com.br/v2/graphql';
 const DEFAULT_ACCESS_DAYS = 60;
+const DEFAULT_MAX_NEW_PROVISIONS_PER_BATCH = 25;
 const SYNC_LOGS_COLLECTION = 'autentique_synced_contracts';
 
 interface AutentiqueSignatureNode {
@@ -92,17 +96,22 @@ const getAutentiqueAccountOwnerEmail = async (): Promise<string> => {
   }
 
   try {
-    const data = await executeAutentiqueGraphQL<{ user?: { email?: string } }>(
-      `query { user { id name email } }`
+    // Na API GraphQL v2 do Autentique, o titular autenticado é retornado pela query raiz `me`
+    const data = await executeAutentiqueGraphQL<{ me?: { id?: string; name?: string; email?: string } }>(
+      `query { me { id name email } }`
     );
-    const ownerEmail = (data?.user?.email || '').trim().toLowerCase();
+    const ownerEmail = (data?.me?.email || '').trim().toLowerCase();
     cachedOwnerEmail = {
       email: ownerEmail,
       expiresAt: Date.now() + 10 * 60 * 1000,
     };
     return ownerEmail;
   } catch (err) {
-    console.warn('[Autentique] Não foi possível consultar e-mail titular da conta:', err);
+    console.warn('[Autentique] Aviso ao consultar query `me` do titular da conta:', err);
+    cachedOwnerEmail = {
+      email: '',
+      expiresAt: Date.now() + 2 * 60 * 1000,
+    };
     return '';
   }
 };
@@ -154,7 +163,6 @@ export const listAutentiqueFolders = async (): Promise<{
           { limit: 60, page }
         );
       } catch {
-        // Fallback minimalista caso o plano não exponha path/context
         resultData = await executeAutentiqueGraphQL(
           `query ListFoldersBasic($limit: Int!, $page: Int!) {
             folders(limit: $limit, page: $page) {
@@ -203,13 +211,21 @@ export const listAutentiqueFolders = async (): Promise<{
   }
 };
 
-const fetchDocumentsInFolder = async (folderId: string): Promise<AutentiqueDocumentNode[]> => {
+const fetchDocumentsInFolder = async (
+  folderId: string
+): Promise<{
+  activeDocuments: AutentiqueDocumentNode[];
+  deletedDocumentIds: Set<string>;
+}> => {
   const safeFolderId = sanitizeFolderId(folderId);
-  if (!safeFolderId) return [];
+  if (!safeFolderId) {
+    return { activeDocuments: [], deletedDocumentIds: new Set<string>() };
+  }
 
-  const documents: AutentiqueDocumentNode[] = [];
+  const activeDocuments: AutentiqueDocumentNode[] = [];
+  const deletedDocumentIds = new Set<string>();
   let page = 1;
-  const maxPages = 25;
+  const maxPages = 30;
 
   while (page <= maxPages) {
     let data: {
@@ -242,7 +258,6 @@ const fetchDocumentsInFolder = async (folderId: string): Promise<AutentiqueDocum
         }`
       );
     } catch {
-      // Fallback sem subcampo user caso algum nível de permissão restrinja
       data = await executeAutentiqueGraphQL(
         `query {
           documentsByFolder(folder_id: "${safeFolderId}", limit: 60, page: ${page}) {
@@ -267,8 +282,11 @@ const fetchDocumentsInFolder = async (folderId: string): Promise<AutentiqueDocum
 
     const items = data?.documentsByFolder?.data || [];
     for (const doc of items) {
-      if (doc?.id && !doc.deleted_at) {
-        documents.push(doc);
+      if (!doc?.id) continue;
+      if (doc.deleted_at) {
+        deletedDocumentIds.add(doc.id);
+      } else {
+        activeDocuments.push(doc);
       }
     }
 
@@ -278,43 +296,61 @@ const fetchDocumentsInFolder = async (folderId: string): Promise<AutentiqueDocum
     page += 1;
   }
 
-  return documents;
+  return { activeDocuments, deletedDocumentIds };
 };
 
-const isInternalOrExcludedSigner = (
-  sig: AutentiqueSignatureNode,
+const isInternalEmail = (
+  email: string,
   ownerEmail: string,
   extraIgnoredEmails: string[]
 ): boolean => {
-  const actionName = (sig.action?.name || 'SIGN').toUpperCase();
-  // Ignorar testemunhas, aprovadores ou reconhecedores — apenas partes contratantes (SIGN)
-  if (actionName !== 'SIGN') {
-    return true;
-  }
-
-  const email = (sig.email || sig.user?.email || '').trim().toLowerCase();
-  if (!email || !email.includes('@')) {
-    return true;
-  }
-
-  if (ownerEmail && email === ownerEmail) {
-    return true;
-  }
-
+  if (!email) return false;
+  if (ownerEmail && email === ownerEmail) return true;
   if (
     email.endsWith('@insanus.com.br') ||
     email.endsWith('@portal-insanus.com') ||
     email.endsWith('@insanuseducacional.com.br') ||
+    email.startsWith('insanusconcursos@') ||
     email === (process.env.SMTP_USER || '').trim().toLowerCase()
   ) {
     return true;
   }
+  if (extraIgnoredEmails.includes(email)) return true;
+  return false;
+};
 
-  if (extraIgnoredEmails.includes(email)) {
-    return true;
+type SignerClassification =
+  | 'INTERNAL_OR_NON_SIGN'
+  | 'UNSIGNED_STUDENT'
+  | 'SIGNED_MISSING_EMAIL'
+  | 'SIGNED_STUDENT';
+
+const classifySigner = (
+  sig: AutentiqueSignatureNode,
+  ownerEmail: string,
+  extraIgnoredEmails: string[]
+): SignerClassification => {
+  const actionName = (sig.action?.name || 'SIGN').toUpperCase();
+  // Ignora testemunhas, aprovadores ou reconhecedores
+  if (actionName !== 'SIGN') {
+    return 'INTERNAL_OR_NON_SIGN';
   }
 
-  return false;
+  const email = (sig.email || sig.user?.email || '').trim().toLowerCase();
+  if (email && isInternalEmail(email, ownerEmail, extraIgnoredEmails)) {
+    return 'INTERNAL_OR_NON_SIGN';
+  }
+
+  const hasSigned = Boolean(sig.signed?.created_at);
+  if (!hasSigned) {
+    return 'UNSIGNED_STUDENT';
+  }
+
+  if (!email || !email.includes('@')) {
+    return 'SIGNED_MISSING_EMAIL';
+  }
+
+  return 'SIGNED_STUDENT';
 };
 
 const buildSyncDocId = (classId: string, documentId: string, normalizedEmail: string): string => {
@@ -329,7 +365,6 @@ const resolveDisplayName = (rawName: string | null | undefined, email: string, d
   if (cleaned.length >= 2) {
     return cleaned;
   }
-  // Tenta extrair nome após hífen no título do contrato se houver (ex: "Contrato - João da Silva")
   const parts = docName.split(/[-–—]/).map((s) => s.trim()).filter(Boolean);
   if (parts.length >= 2) {
     const candidate = parts[parts.length - 1].replace(/\.pdf$/i, '').trim();
@@ -341,6 +376,28 @@ const resolveDisplayName = (rawName: string | null | undefined, email: string, d
   return localPart
     .replace(/[._-]+/g, ' ')
     .replace(/\b\w/g, (l) => l.toUpperCase());
+};
+
+const resolvePendingSignerName = (sig: AutentiqueSignatureNode, docName: string): string => {
+  const explicitName = (sig.user?.name || sig.name || '').trim();
+  if (explicitName.length >= 2) {
+    return explicitName;
+  }
+  const parts = docName
+    .replace(/\.pdf$/i, '')
+    .split(/[-–—_]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length >= 2) {
+    const candidate = parts[parts.length - 1];
+    if (
+      candidate.length >= 3 &&
+      !/contrato|turma|presencial|pc\.?ac|insanus|\d{4}/i.test(candidate)
+    ) {
+      return `${candidate} (identificado pelo título)`;
+    }
+  }
+  return 'Signatário sem nome preenchido (link)';
 };
 
 const isTimestampStillValid = (val: any): boolean => {
@@ -357,7 +414,135 @@ const isTimestampStillValid = (val: any): boolean => {
   return Boolean(dateObj && dateObj.getTime() > Date.now());
 };
 
+export const revokeAutentiqueContractEnrollment = async (
+  logId: string,
+  blockFutureEmailOrOptions:
+    | boolean
+    | {
+        blockFutureEmail?: boolean;
+        reason?: AutentiqueRevokeReason;
+        skipUserAccessRevoke?: boolean;
+        deleteLogDoc?: boolean;
+      } = false
+): Promise<{
+  revoked: boolean;
+  accessRevokedFromUser: boolean;
+  userDeleted: boolean;
+  studentEmail: string;
+  studentName: string;
+}> => {
+  const opts =
+    typeof blockFutureEmailOrOptions === 'boolean'
+      ? { blockFutureEmail: blockFutureEmailOrOptions }
+      : blockFutureEmailOrOptions || {};
+
+  const blockFutureEmail = Boolean(opts.blockFutureEmail);
+  const reason: AutentiqueRevokeReason = opts.reason || 'MANUAL_ADMIN';
+  const skipUserAccessRevoke = Boolean(opts.skipUserAccessRevoke);
+  const deleteLogDoc = Boolean(opts.deleteLogDoc);
+
+  const { dbAdmin } = getAdminConfig();
+  const logRef = dbAdmin.collection(SYNC_LOGS_COLLECTION).doc(logId);
+  const logSnap = await logRef.get();
+
+  if (!logSnap.exists) {
+    throw new Error('Registro de contrato não encontrado.');
+  }
+
+  const logData = logSnap.data() as Omit<AutentiqueSyncedContract, 'id'>;
+  const classId = String(logData.classId || '').trim();
+  const documentId = String(logData.documentId || '').trim();
+  const studentUid = String(logData.studentUid || '').trim();
+  const studentEmail = String(logData.studentEmail || '').trim().toLowerCase();
+  const studentName = String(logData.studentName || studentEmail || 'Usuário');
+
+  let targetUid: string | null = null;
+  let userData: Record<string, any> | null = null;
+
+  if (studentUid) {
+    const userDoc = await dbAdmin.collection('users').doc(studentUid).get();
+    if (userDoc.exists) {
+      targetUid = userDoc.id;
+      userData = userDoc.data() || null;
+    }
+  }
+
+  if (!targetUid && studentEmail) {
+    const snapByEmail = await dbAdmin
+      .collection('users')
+      .where('email', '==', studentEmail)
+      .limit(1)
+      .get();
+    if (!snapByEmail.empty) {
+      targetUid = snapByEmail.docs[0].id;
+      userData = snapByEmail.docs[0].data() || null;
+    }
+  }
+
+  let accessRevokedFromUser = false;
+
+  // IMPORTANTE: Nunca exclui o cadastro/conta do aluno no portal; revoga estritamente o recurso da turma liberado pelo contrato!
+  if (!skipUserAccessRevoke && targetUid && userData) {
+    const currentAccess: any[] = Array.isArray(userData.access) ? userData.access : [];
+    const remainingAccess = currentAccess.filter((acc: any) => {
+      const matchesClass = acc?.targetId === classId || acc?.classId === classId;
+      if (!matchesClass) return true;
+      if (acc?.autentiqueDocumentId && documentId) {
+        return acc.autentiqueDocumentId !== documentId;
+      }
+      if (acc?.origin === 'AUTENTIQUE') {
+        return false;
+      }
+      return true;
+    });
+
+    if (remainingAccess.length !== currentAccess.length) {
+      await dbAdmin.collection('users').doc(targetUid).update({
+        access: remainingAccess,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      accessRevokedFromUser = true;
+    }
+  }
+
+  if (blockFutureEmail && classId && studentEmail) {
+    await dbAdmin
+      .collection('classes')
+      .doc(classId)
+      .update({
+        autentiqueIgnoreEmails: FieldValue.arrayUnion(studentEmail),
+      })
+      .catch(() => {});
+  }
+
+  const nowIso = new Date().toISOString();
+  if (deleteLogDoc) {
+    await logRef.delete();
+  } else {
+    await logRef.update({
+      accessRevoked: true,
+      missingFromFolder:
+        reason === 'CONTRACT_REMOVED_FROM_FOLDER' ? true : Boolean(logData.missingFromFolder),
+      missingDetectedAt:
+        reason === 'CONTRACT_REMOVED_FROM_FOLDER'
+          ? logData.missingDetectedAt || nowIso
+          : logData.missingDetectedAt || null,
+      revokedAt: nowIso,
+      revokeReason: reason,
+    });
+  }
+
+  return {
+    revoked: true,
+    accessRevokedFromUser,
+    userDeleted: false,
+    studentEmail,
+    studentName,
+  };
+};
+
 const provisionStudentForSignedContract = async (params: {
+  syncDocId: string;
   classId: string;
   className: string;
   folderId: string;
@@ -366,19 +551,17 @@ const provisionStudentForSignedContract = async (params: {
   doc: AutentiqueDocumentNode;
   sig: AutentiqueSignatureNode;
   triggerSource: AutentiqueTriggerSource;
-}): Promise<{ status: 'SKIPPED_ALREADY_SYNCED' | AutentiqueProvisionAction }> => {
+}): Promise<{
+  status: AutentiqueProvisionAction;
+  emailSent: boolean;
+  emailError?: string;
+}> => {
   const { dbAdmin, authAdmin } = getAdminConfig();
   const normalizedEmail = (params.sig.email || params.sig.user?.email || '').trim().toLowerCase();
-  const syncDocId = buildSyncDocId(params.classId, params.doc.id, normalizedEmail);
-  const syncRef = dbAdmin.collection(SYNC_LOGS_COLLECTION).doc(syncDocId);
-
-  const existingSync = await syncRef.get();
-  if (existingSync.exists) {
-    return { status: 'SKIPPED_ALREADY_SYNCED' };
-  }
+  const syncRef = dbAdmin.collection(SYNC_LOGS_COLLECTION).doc(params.syncDocId);
 
   const studentName = resolveDisplayName(
-    params.sig.name || params.sig.user?.name,
+    params.sig.user?.name || params.sig.name,
     normalizedEmail,
     params.doc.name
   );
@@ -409,7 +592,6 @@ const provisionStudentForSignedContract = async (params: {
     endDate: Timestamp.fromDate(expirationDate),
   };
 
-  // 1. Verificar se o aluno já possui cadastro (no Firebase Auth ou na coleção users)
   let uid: string | null = null;
   let existingUserDocData: Record<string, any> | null = null;
 
@@ -442,9 +624,11 @@ const provisionStudentForSignedContract = async (params: {
   }
 
   let actionTaken: AutentiqueProvisionAction = 'CREATED_AND_RELEASED';
+  let emailSent = true;
+  let emailError: string | undefined;
 
   if (!uid) {
-    // CASO 1: ALUNO NÃO CADASTRADO -> Criar no Auth + Firestore + Liberar Turma + Enviar E-mail com Senha
+    // CASO 1: ALUNO NÃO CADASTRADO -> Criar no Auth + Firestore + Liberar Turma + E-mail individual com senha exclusiva
     const tempPassword = generateRandomPassword(8);
     const createdAuth = await authAdmin.createUser({
       email: normalizedEmail,
@@ -471,11 +655,12 @@ const provisionStudentForSignedContract = async (params: {
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    await sendWelcomeEmail(studentName, normalizedEmail, tempPassword, params.className);
+    const mailRes = await sendWelcomeEmail(studentName, normalizedEmail, tempPassword, params.className);
+    emailSent = mailRes.sent;
+    emailError = mailRes.error;
     actionTaken = 'CREATED_AND_RELEASED';
   } else {
-    // CASO 2: ALUNO JÁ CADASTRADO -> Manter conta/senha atual e liberar a turma presencial
-    // Garantir que existe no Firebase Auth caso estivesse apenas no Firestore legado
+    // CASO 2: ALUNO JÁ CADASTRADO -> Preservar senha atual e liberar a turma presencial
     let createdFallbackPassword: string | null = null;
     try {
       await authAdmin.getUser(uid);
@@ -510,6 +695,7 @@ const provisionStudentForSignedContract = async (params: {
 
     if (alreadyActiveAndValid) {
       actionTaken = 'ALREADY_HAD_ACCESS';
+      emailSent = true;
     } else {
       if (existingClassIdx >= 0) {
         currentAccess[existingClassIdx] = {
@@ -545,12 +731,12 @@ const provisionStudentForSignedContract = async (params: {
       await dbAdmin.collection('users').doc(uid).set(updatePayload, { merge: true });
 
       const recipientName = existingUserDocData?.name || studentName;
-      if (createdFallbackPassword) {
-        await sendWelcomeEmail(recipientName, normalizedEmail, createdFallbackPassword, params.className);
-      } else {
-        await sendAccessNotificationEmail(recipientName, normalizedEmail, params.className);
-      }
+      const mailRes = createdFallbackPassword
+        ? await sendWelcomeEmail(recipientName, normalizedEmail, createdFallbackPassword, params.className)
+        : await sendAccessNotificationEmail(recipientName, normalizedEmail, params.className);
 
+      emailSent = mailRes.sent;
+      emailError = mailRes.error;
       actionTaken = 'EXISTING_USER_RELEASED';
     }
   }
@@ -572,16 +758,24 @@ const provisionStudentForSignedContract = async (params: {
     syncedAt: new Date().toISOString(),
     triggerSource: params.triggerSource,
     actionTaken,
+    emailSent,
+    emailError: emailError || null,
+    missingFromFolder: false,
+    missingDetectedAt: null,
+    accessRevoked: false,
+    revokedAt: null,
+    revokeReason: null,
   };
 
   await syncRef.set(logRecord);
 
-  return { status: actionTaken };
+  return { status: actionTaken, emailSent, emailError };
 };
 
 export const syncClassAutentiqueFolder = async (
   classId: string,
-  triggerSource: AutentiqueTriggerSource = 'MANUAL_SYNC'
+  triggerSource: AutentiqueTriggerSource = 'MANUAL_SYNC',
+  maxNewProvisions: number = DEFAULT_MAX_NEW_PROVISIONS_PER_BATCH
 ): Promise<AutentiqueClassSyncResult> => {
   const { dbAdmin } = getAdminConfig();
   const classRef = dbAdmin.collection('classes').doc(classId);
@@ -607,12 +801,55 @@ export const syncClassAutentiqueFolder = async (
     throw new Error('AUTENTIQUE_API_TOKEN não está configurado nas variáveis de ambiente do servidor.');
   }
 
-  const ownerEmail = await getAutentiqueAccountOwnerEmail();
+  const [ownerEmail, folderFetchResult, existingLogsSnap] = await Promise.all([
+    getAutentiqueAccountOwnerEmail(),
+    fetchDocumentsInFolder(folderId),
+    dbAdmin.collection(SYNC_LOGS_COLLECTION).where('classId', '==', classId).get(),
+  ]);
+
+  const { activeDocuments: documents } = folderFetchResult;
+
+  // Set em memória com os contratos ativos já processados (contratos revogados por saída da pasta podem ser reativados se voltarem à pasta)
+  const syncedIdsSet = new Set<string>();
+  existingLogsSnap.docs.forEach((d) => {
+    const dData = d.data();
+    const wasAutoRevokedByFolderRemoval =
+      dData?.accessRevoked === true && dData?.revokeReason === 'CONTRACT_REMOVED_FROM_FOLDER';
+    if (!wasAutoRevokedByFolderRemoval) {
+      syncedIdsSet.add(d.id);
+    }
+  });
+
   const extraIgnoredEmails: string[] = Array.isArray(classData.autentiqueIgnoreEmails)
     ? classData.autentiqueIgnoreEmails.map((e: string) => String(e).trim().toLowerCase()).filter(Boolean)
     : [];
 
-  const documents = await fetchDocumentsInFolder(folderId);
+  // Autocorreção para e-mail titular da conta ou e-mails corporativos ignorados
+  let purgedInvalidEnrollments = 0;
+  for (const existingDoc of existingLogsSnap.docs) {
+    const logData = existingDoc.data();
+    const logEmail = String(logData?.studentEmail || '').trim().toLowerCase();
+
+    if (logEmail && isInternalEmail(logEmail, ownerEmail, extraIgnoredEmails)) {
+      try {
+        const revokeRes = await revokeAutentiqueContractEnrollment(existingDoc.id, {
+          deleteLogDoc: true,
+        });
+        if (revokeRes.revoked) {
+          syncedIdsSet.delete(existingDoc.id);
+          purgedInvalidEnrollments += 1;
+          console.log(`[Autentique] Acesso interno removido automaticamente: ${logEmail}`);
+        }
+      } catch (purgeErr) {
+        console.warn(`[Autentique] Aviso ao limpar registro interno ${existingDoc.id}:`, purgeErr);
+      }
+    }
+  }
+
+  const unsignedItems: AutentiquePendingDocItem[] = [];
+  const missingEmailItems: AutentiquePendingDocItem[] = [];
+  const activeSignedDocIds = new Set<string>();
+  const activeSignedStudentEmails = new Set<string>();
 
   const summary: AutentiqueClassSyncResult = {
     classId,
@@ -621,64 +858,310 @@ export const syncClassAutentiqueFolder = async (
     folderName: classData.autentiqueFolderName || null,
     accessDays,
     scannedDocuments: documents.length,
+    unsignedDocuments: 0,
+    missingEmailSigners: 0,
     signedStudentContractsFound: 0,
+    activeSignedDocumentIds: [],
+    missingFromFolderCount: 0,
+    autoRevokedContracts: 0,
+    unsignedItems,
+    missingEmailItems,
+    purgedInvalidEnrollments,
     newlyCreatedStudents: 0,
     existingReleasedStudents: 0,
     alreadySyncedSkipped: 0,
+    remainingPendingToSync: 0,
+    hasMoreToSync: false,
+    emailFailures: 0,
     errors: [],
   };
 
+  let newProvisionsProcessed = 0;
+  const safeBatchLimit = maxNewProvisions > 0 ? maxNewProvisions : DEFAULT_MAX_NEW_PROVISIONS_PER_BATCH;
+
   for (const doc of documents) {
     const signatures = Array.isArray(doc.signatures) ? doc.signatures : [];
+    const signedStudentSigs: AutentiqueSignatureNode[] = [];
+    const signedMissingEmailSigs: AutentiqueSignatureNode[] = [];
+    const unsignedStudentSigs: AutentiqueSignatureNode[] = [];
 
     for (const sig of signatures) {
-      // REGRA 1: Liberar assim que o aluno assinar sua parte (signed.created_at presente)
-      if (!sig?.signed?.created_at) {
-        continue;
+      const classification = classifySigner(sig, ownerEmail, extraIgnoredEmails);
+      if (classification === 'SIGNED_STUDENT') {
+        signedStudentSigs.push(sig);
+      } else if (classification === 'SIGNED_MISSING_EMAIL') {
+        signedMissingEmailSigs.push(sig);
+      } else if (classification === 'UNSIGNED_STUDENT') {
+        unsignedStudentSigs.push(sig);
       }
+    }
 
-      if (isInternalOrExcludedSigner(sig, ownerEmail, extraIgnoredEmails)) {
-        continue;
-      }
-
+    // Classificação estritamente por DOCUMENTO (soma exata: Assinados c/ E-mail + Assinados Sem E-mail + Aguardando = Total na Pasta)
+    if (signedStudentSigs.length > 0) {
       summary.signedStudentContractsFound += 1;
+      activeSignedDocIds.add(doc.id);
 
-      try {
-        const res = await provisionStudentForSignedContract({
-          classId,
-          className,
-          folderId,
-          folderName: classData.autentiqueFolderName || null,
-          accessDays,
-          doc,
-          sig,
-          triggerSource,
-        });
-
-        if (res.status === 'SKIPPED_ALREADY_SYNCED') {
-          summary.alreadySyncedSkipped += 1;
-        } else if (res.status === 'CREATED_AND_RELEASED') {
-          summary.newlyCreatedStudents += 1;
-        } else if (res.status === 'EXISTING_USER_RELEASED' || res.status === 'ALREADY_HAD_ACCESS') {
-          summary.existingReleasedStudents += 1;
+      for (const sig of signedStudentSigs) {
+        const normalizedEmail = (sig.email || sig.user?.email || '').trim().toLowerCase();
+        if (normalizedEmail) {
+          activeSignedStudentEmails.add(normalizedEmail);
         }
-      } catch (err: any) {
-        const signerEmail = sig.email || sig.user?.email || 'desconhecido';
-        console.error(`[Autentique] Erro ao provisionar aluno (${signerEmail}) no doc ${doc.id}:`, err);
-        summary.errors.push(`${signerEmail}: ${err?.message || 'Erro ao liberar acesso'}`);
+        const syncDocId = buildSyncDocId(classId, doc.id, normalizedEmail);
+
+        if (syncedIdsSet.has(syncDocId)) {
+          summary.alreadySyncedSkipped += 1;
+          continue;
+        }
+
+        // Controle de lote anti-timeout da Vercel
+        if (newProvisionsProcessed >= safeBatchLimit) {
+          summary.remainingPendingToSync += 1;
+          continue;
+        }
+
+        newProvisionsProcessed += 1;
+        syncedIdsSet.add(syncDocId);
+
+        try {
+          const res = await provisionStudentForSignedContract({
+            syncDocId,
+            classId,
+            className,
+            folderId,
+            folderName: classData.autentiqueFolderName || null,
+            accessDays,
+            doc,
+            sig,
+            triggerSource,
+          });
+
+          if (!res.emailSent) {
+            summary.emailFailures += 1;
+          }
+
+          if (res.status === 'CREATED_AND_RELEASED') {
+            summary.newlyCreatedStudents += 1;
+          } else if (res.status === 'EXISTING_USER_RELEASED' || res.status === 'ALREADY_HAD_ACCESS') {
+            summary.existingReleasedStudents += 1;
+          }
+        } catch (err: any) {
+          const signerEmail = sig.email || sig.user?.email || 'desconhecido';
+          console.error(`[Autentique] Erro ao provisionar aluno (${signerEmail}) no doc ${doc.id}:`, err);
+          summary.errors.push(`${signerEmail}: ${err?.message || 'Erro ao liberar acesso'}`);
+        }
       }
+    } else if (signedMissingEmailSigs.length > 0) {
+      summary.missingEmailSigners += 1;
+      missingEmailItems.push({
+        documentId: doc.id,
+        documentName: doc.name || 'Contrato sem título',
+        createdAt: doc.created_at || null,
+        signedAt: signedMissingEmailSigs[0]?.signed?.created_at || null,
+        signers: signedMissingEmailSigs.map((s) => ({
+          name: resolvePendingSignerName(s, doc.name || ''),
+          email: null,
+          phone: (s.user?.phone || '').trim() || null,
+          signedAt: s.signed?.created_at || null,
+        })),
+      });
+    } else {
+      summary.unsignedDocuments += 1;
+      unsignedItems.push({
+        documentId: doc.id,
+        documentName: doc.name || 'Contrato sem título',
+        createdAt: doc.created_at || null,
+        signedAt: null,
+        signers:
+          unsignedStudentSigs.length > 0
+            ? unsignedStudentSigs.map((s) => ({
+                name: resolvePendingSignerName(s, doc.name || ''),
+                email: (s.email || s.user?.email || '').trim().toLowerCase() || null,
+                phone: (s.user?.phone || '').trim() || null,
+                signedAt: null,
+              }))
+            : [
+                {
+                  name: 'Aguardando assinatura do aluno',
+                  email: null,
+                  phone: null,
+                  signedAt: null,
+                },
+              ],
+      });
     }
   }
 
+  missingEmailItems.sort((a, b) => a.documentName.localeCompare(b.documentName, 'pt-BR'));
+  unsignedItems.sort((a, b) => a.documentName.localeCompare(b.documentName, 'pt-BR'));
+
+  summary.hasMoreToSync = summary.remainingPendingToSync > 0;
+
+  const nowIso = new Date().toISOString();
+  const activeSignedDocumentIds = Array.from(activeSignedDocIds);
+  summary.activeSignedDocumentIds = activeSignedDocumentIds;
+
+  // Revoga automaticamente o acesso à turma presencial para contratos removidos/cancelados na pasta do Autentique (mantendo a conta do aluno intacta)
+  let missingFromFolderCount = 0;
+  let autoRevokedContracts = 0;
+
+  for (const existingDoc of existingLogsSnap.docs) {
+    const logData = existingDoc.data();
+    const logEmail = String(logData?.studentEmail || '').trim().toLowerCase();
+    if (logEmail && isInternalEmail(logEmail, ownerEmail, extraIgnoredEmails)) {
+      continue;
+    }
+
+    const logDocId = String(logData?.documentId || '').trim();
+    const isMissingNow = Boolean(logDocId && !activeSignedDocIds.has(logDocId));
+
+    if (isMissingNow) {
+      missingFromFolderCount += 1;
+      if (logData?.accessRevoked !== true) {
+        try {
+          // Se o mesmo aluno possuir outro contrato assinado ativo na pasta, mantém o acesso e apenas marca este contrato antigo como revogado
+          const hasAnotherActiveContract = Boolean(
+            logEmail && activeSignedStudentEmails.has(logEmail)
+          );
+          await revokeAutentiqueContractEnrollment(existingDoc.id, {
+            reason: 'CONTRACT_REMOVED_FROM_FOLDER',
+            skipUserAccessRevoke: hasAnotherActiveContract,
+          });
+          autoRevokedContracts += 1;
+          console.log(
+            `[Autentique] Acesso da turma revogado automaticamente por remoção/cancelamento do contrato (${logEmail})`
+          );
+        } catch (revErr) {
+          console.error(`[Autentique] Falha ao revogar acesso do contrato removido ${existingDoc.id}:`, revErr);
+        }
+      }
+    } else if (logData?.missingFromFolder === true && logData?.accessRevoked !== true) {
+      await existingDoc.ref
+        .update({
+          missingFromFolder: false,
+          missingDetectedAt: null,
+        })
+        .catch(() => {});
+    }
+  }
+
+  summary.missingFromFolderCount = missingFromFolderCount;
+  summary.autoRevokedContracts = autoRevokedContracts;
+
+  const xraySnapshot: AutentiqueFolderXRay = {
+    scannedDocuments: summary.scannedDocuments,
+    signedStudentContractsFound: summary.signedStudentContractsFound,
+    unsignedDocuments: summary.unsignedDocuments,
+    missingEmailSigners: summary.missingEmailSigners,
+    activeSignedDocumentIds: activeSignedDocumentIds.slice(0, 1000),
+    unsignedItems: unsignedItems.slice(0, 500),
+    missingEmailItems: missingEmailItems.slice(0, 500),
+    updatedAt: nowIso,
+  };
+
   await classRef.update({
-    autentiqueLastSyncedAt: new Date().toISOString(),
+    autentiqueLastSyncedAt: nowIso,
+    autentiqueLastXRay: xraySnapshot,
   });
 
   return summary;
 };
 
+export const resendAutentiqueContractEmail = async (
+  logId: string
+): Promise<{ sent: boolean; mode: 'WELCOME_NEW_PASSWORD' | 'ACCESS_NOTIFICATION'; error?: string }> => {
+  const { dbAdmin, authAdmin } = getAdminConfig();
+  const logRef = dbAdmin.collection(SYNC_LOGS_COLLECTION).doc(logId);
+  const logSnap = await logRef.get();
+
+  if (!logSnap.exists) {
+    throw new Error('Registro de contrato não encontrado.');
+  }
+
+  const logData = logSnap.data() as Omit<AutentiqueSyncedContract, 'id'>;
+  const email = (logData.studentEmail || '').trim().toLowerCase();
+  const name = logData.studentName || 'Aluno';
+  const className = logData.className || 'Turma Presencial';
+
+  if (!email) {
+    throw new Error('E-mail do aluno inválido no registro.');
+  }
+
+  let authUser: any = null;
+  try {
+    authUser = logData.studentUid
+      ? await authAdmin.getUser(logData.studentUid)
+      : await authAdmin.getUserByEmail(email);
+  } catch {
+    authUser = await authAdmin.getUserByEmail(email);
+  }
+
+  const neverSignedIn = !authUser?.metadata?.lastSignInTime;
+
+  if (neverSignedIn && logData.actionTaken === 'CREATED_AND_RELEASED') {
+    const freshPassword = generateRandomPassword(8);
+    await authAdmin.updateUser(authUser.uid, { password: freshPassword });
+    const res = await sendWelcomeEmail(name, email, freshPassword, className);
+
+    await logRef.update({
+      emailSent: res.sent,
+      emailError: res.error || null,
+      lastEmailResentAt: new Date().toISOString(),
+    });
+
+    return { sent: res.sent, mode: 'WELCOME_NEW_PASSWORD', error: res.error };
+  } else {
+    const res = await sendAccessNotificationEmail(name, email, className);
+
+    await logRef.update({
+      emailSent: res.sent,
+      emailError: res.error || null,
+      lastEmailResentAt: new Date().toISOString(),
+    });
+
+    return { sent: res.sent, mode: 'ACCESS_NOTIFICATION', error: res.error };
+  }
+};
+
+export const resendFailedClassContractEmails = async (
+  classId: string,
+  maxBatch: number = 20
+): Promise<{ resentSuccess: number; resentFailed: number; remainingFailed: number }> => {
+  const { dbAdmin } = getAdminConfig();
+  const snap = await dbAdmin
+    .collection(SYNC_LOGS_COLLECTION)
+    .where('classId', '==', classId)
+    .get();
+
+  const failedDocs = snap.docs.filter((d) => d.data()?.emailSent === false);
+  const batch = failedDocs.slice(0, maxBatch);
+
+  let resentSuccess = 0;
+  let resentFailed = 0;
+
+  for (const docSnap of batch) {
+    try {
+      const outcome = await resendAutentiqueContractEmail(docSnap.id);
+      if (outcome.sent) {
+        resentSuccess += 1;
+      } else {
+        resentFailed += 1;
+      }
+    } catch (err) {
+      console.error(`[Autentique] Falha ao reenviar e-mail do log ${docSnap.id}:`, err);
+      resentFailed += 1;
+    }
+  }
+
+  return {
+    resentSuccess,
+    resentFailed,
+    remainingFailed: Math.max(0, failedDocs.length - batch.length) + resentFailed,
+  };
+};
+
 export const syncAllActiveAutentiqueClasses = async (
-  triggerSource: AutentiqueTriggerSource = 'MANUAL_SYNC'
+  triggerSource: AutentiqueTriggerSource = 'MANUAL_SYNC',
+  maxNewProvisionsPerClass: number = DEFAULT_MAX_NEW_PROVISIONS_PER_BATCH
 ): Promise<AutentiqueClassSyncResult[]> => {
   if (!isAutentiqueConfigured()) {
     return [];
@@ -697,7 +1180,11 @@ export const syncAllActiveAutentiqueClasses = async (
     if (!data?.autentiqueFolderId) continue;
 
     try {
-      const res = await syncClassAutentiqueFolder(docSnap.id, triggerSource);
+      const res = await syncClassAutentiqueFolder(
+        docSnap.id,
+        triggerSource,
+        maxNewProvisionsPerClass
+      );
       results.push(res);
     } catch (err: any) {
       console.error(`[Autentique] Falha ao sincronizar turma ${docSnap.id}:`, err);
@@ -708,10 +1195,18 @@ export const syncAllActiveAutentiqueClasses = async (
         folderName: data.autentiqueFolderName || null,
         accessDays: Number(data.autentiqueAccessDays) > 0 ? Number(data.autentiqueAccessDays) : DEFAULT_ACCESS_DAYS,
         scannedDocuments: 0,
+        unsignedDocuments: 0,
+        missingEmailSigners: 0,
         signedStudentContractsFound: 0,
+        unsignedItems: [],
+        missingEmailItems: [],
+        purgedInvalidEnrollments: 0,
         newlyCreatedStudents: 0,
         existingReleasedStudents: 0,
         alreadySyncedSkipped: 0,
+        remainingPendingToSync: 0,
+        hasMoreToSync: false,
+        emailFailures: 0,
         errors: [err?.message || 'Erro inesperado na sincronização'],
       });
     }
@@ -730,7 +1225,7 @@ export const getAutentiqueSyncLogs = async (classId?: string): Promise<Autentiqu
       .where('classId', '==', classId)
       .get();
   } else {
-    snap = await dbAdmin.collection(SYNC_LOGS_COLLECTION).limit(200).get();
+    snap = await dbAdmin.collection(SYNC_LOGS_COLLECTION).limit(300).get();
   }
 
   const logs: AutentiqueSyncedContract[] = snap.docs.map((d) => ({
@@ -749,12 +1244,9 @@ export const verifyAutentiqueWebhookAuth = (
 ): boolean => {
   const secret = (process.env.AUTENTIQUE_WEBHOOK_SECRET || '').trim();
   if (!secret) {
-    // Se AUTENTIQUE_WEBHOOK_SECRET não estiver definido, aceita o gatilho
-    // (a validação real dos contratos ocorre consultando diretamente a API GraphQL oficial com AUTENTIQUE_API_TOKEN)
     return true;
   }
 
-  // 1. Suporte ao modo "Autenticação (Pro) -> Bearer token" do painel Autentique
   if (authorizationHeader) {
     const bearerValue = authorizationHeader.replace(/^Bearer\s+/i, '').trim();
     if (bearerValue && bearerValue === secret) {
@@ -762,7 +1254,6 @@ export const verifyAutentiqueWebhookAuth = (
     }
   }
 
-  // 2. Suporte a assinatura HMAC SHA-256 (caso enviada via header de assinatura)
   if (signatureHeader) {
     if (signatureHeader.trim() === secret) {
       return true;
@@ -774,7 +1265,7 @@ export const verifyAutentiqueWebhookAuth = (
         return true;
       }
     } catch {
-      // ignora erro de tamanho de buffer diferente
+      // ignore buffer mismatch
     }
   }
 
@@ -798,14 +1289,17 @@ export const handleAutentiqueWebhook = async (
   const body = typeof payload === 'string' ? JSON.parse(payload) : payload || {};
   const eventType = String(body?.event?.type || body?.type || 'UNKNOWN').toUpperCase();
 
-  // Aceita eventos de assinatura aceita (signature.accepted) e eventos de documento (document.finished / document.updated)
   const relevantEvents = [
     'SIGNATURE_ACCEPTED',
     'SIGNATURE.ACCEPTED',
+    'SIGNATURE_REJECTED',
+    'SIGNATURE.REJECTED',
     'DOCUMENT_FINISHED',
     'DOCUMENT.FINISHED',
     'DOCUMENT_UPDATED',
     'DOCUMENT.UPDATED',
+    'DOCUMENT_DELETED',
+    'DOCUMENT.DELETED',
   ];
 
   if (eventType !== 'UNKNOWN' && !relevantEvents.some((ev) => eventType.includes(ev))) {
@@ -816,9 +1310,7 @@ export const handleAutentiqueWebhook = async (
     };
   }
 
-  // Varre todas as turmas presenciais com automação Autentique ativa junto à API oficial (fonte da verdade),
-  // garantindo segurança contra falsificação de payload e identificando exatamente em qual pasta o contrato está.
-  const results = await syncAllActiveAutentiqueClasses('WEBHOOK');
+  const results = await syncAllActiveAutentiqueClasses('WEBHOOK', 15);
 
   return {
     processed: true,
@@ -833,11 +1325,11 @@ export const initAutentiqueSyncCron = (): void => {
   if (autentiqueCronStarted) return;
   autentiqueCronStarted = true;
 
-  const INTERVAL_MS = 5 * 60 * 1000; // A cada 5 minutos varre contratos movidos para pastas vinculadas
+  const INTERVAL_MS = 5 * 60 * 1000;
   setInterval(async () => {
     if (!isAutentiqueConfigured()) return;
     try {
-      await syncAllActiveAutentiqueClasses('CRON');
+      await syncAllActiveAutentiqueClasses('CRON', 25);
     } catch (err) {
       console.error('[Autentique Cron] Erro na varredura periódica:', err);
     }

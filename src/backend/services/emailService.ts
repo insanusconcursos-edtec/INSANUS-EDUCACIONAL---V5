@@ -4,6 +4,17 @@ import { generateEventTicketPdf } from './ticketService.js';
 
 let transporter: nodemailer.Transporter | null = null;
 
+const resetTransporter = () => {
+  if (transporter) {
+    try {
+      transporter.close();
+    } catch {
+      // ignore close errors
+    }
+    transporter = null;
+  }
+};
+
 const getTransporter = () => {
   if (!transporter) {
     const user = process.env.SMTP_USER;
@@ -15,7 +26,14 @@ const getTransporter = () => {
       console.warn('⚠️ SMTP_USER ou SMTP_PASS não configurados. O envio de e-mail falhará.');
     }
 
+    // Pool com 1 única conexão persistente autenticada evita dezenas de logins simultâneos no Gmail (erro 454-4.7.0),
+    // mantendo cada e-mail 100% individual (destinatário e senha exclusivos por aluno).
     transporter = nodemailer.createTransport({
+      pool: true,
+      maxConnections: 1,
+      maxMessages: 90,
+      rateDelta: 1000,
+      rateLimit: 2,
       host,
       port,
       secure: port === 465,
@@ -28,7 +46,12 @@ const getTransporter = () => {
   return transporter;
 };
 
-export const sendWelcomeEmail = async (name: string, email: string, password: string, productName: string) => {
+export const sendWelcomeEmail = async (
+  name: string,
+  email: string,
+  password: string,
+  productName: string
+): Promise<{ sent: boolean; error?: string }> => {
   const mailOptions = {
     from: `"Insanus Educacional" <${process.env.SMTP_USER || 'contato@portal-insanus.com'}>`,
     to: email,
@@ -68,12 +91,19 @@ export const sendWelcomeEmail = async (name: string, email: string, password: st
     const client = getTransporter();
     await client.sendMail(mailOptions);
     console.log(`[E-MAIL] Boas-vindas enviadas com sucesso para ${email}`);
-  } catch (error) {
+    return { sent: true };
+  } catch (error: any) {
     console.error("❌ ERRO CRÍTICO NO SMTP (FALHA AO ENVIAR E-MAIL):", error);
+    resetTransporter();
+    return { sent: false, error: error?.message || 'Falha no envio SMTP' };
   }
 };
 
-export const sendAccessNotificationEmail = async (name: string, email: string, productName: string) => {
+export const sendAccessNotificationEmail = async (
+  name: string,
+  email: string,
+  productName: string
+): Promise<{ sent: boolean; error?: string }> => {
   const mailOptions = {
     from: `"Insanus Educacional" <${process.env.SMTP_USER || 'contato@portal-insanus.com'}>`,
     to: email,
@@ -113,8 +143,11 @@ export const sendAccessNotificationEmail = async (name: string, email: string, p
     const client = getTransporter();
     await client.sendMail(mailOptions);
     console.log(`[E-MAIL] Notificação de novo acesso enviada para ${email}`);
-  } catch (error) {
+    return { sent: true };
+  } catch (error: any) {
     console.error("❌ ERRO CRÍTICO NO SMTP (FALHA AO ENVIAR NOTIFICAÇÃO):", error);
+    resetTransporter();
+    return { sent: false, error: error?.message || 'Falha no envio SMTP' };
   }
 };
 

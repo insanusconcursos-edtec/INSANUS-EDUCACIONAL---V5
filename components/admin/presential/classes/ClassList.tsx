@@ -211,11 +211,23 @@ export const ClassList: React.FC = () => {
       return;
     }
     setIsSyncingAll(true);
+    let totalCreated = 0;
+    let totalReleased = 0;
+    let totalErrors = 0;
     try {
-      const results = await autentiqueAdminService.syncAllClasses();
-      const totalCreated = results.reduce((acc, r) => acc + (r.newlyCreatedStudents || 0), 0);
-      const totalReleased = results.reduce((acc, r) => acc + (r.existingReleasedStudents || 0), 0);
-      const totalErrors = results.reduce((acc, r) => acc + (r.errors?.length || 0), 0);
+      let maxLoops = 12;
+      while (maxLoops > 0) {
+        maxLoops -= 1;
+        const results = await autentiqueAdminService.syncAllClasses(25);
+        totalCreated += results.reduce((acc, r) => acc + (r.newlyCreatedStudents || 0), 0);
+        totalReleased += results.reduce((acc, r) => acc + (r.existingReleasedStudents || 0), 0);
+        totalErrors += results.reduce((acc, r) => acc + (r.errors?.length || 0), 0);
+
+        const stillPending = results.some((r) => r.hasMoreToSync);
+        if (!stillPending) {
+          break;
+        }
+      }
 
       if (totalCreated > 0 || totalReleased > 0) {
         toast.success(

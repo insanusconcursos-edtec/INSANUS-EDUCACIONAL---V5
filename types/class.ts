@@ -1,3 +1,5 @@
+import { AutentiqueFolderXRay } from './autentique';
+
 export type ClassType = 'PRE_EDITAL' | 'POS_EDITAL';
 export type ClassModality = 'REGULAR' | 'INTENSIVO';
 export type ClassShift = 'MORNING' | 'AFTERNOON' | 'NIGHT';
@@ -82,5 +84,7 @@ export interface Class {
   autentiqueAccessDays?: number;
   autentiqueLastSyncedAt?: string | null;
   autentiqueIgnoreEmails?: string[];
+  autentiqueLastXRay?: AutentiqueFolderXRay | null;
 }
+
 
