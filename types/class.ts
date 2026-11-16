@@ -75,4 +75,12 @@ export interface Class {
   excludeFromFreePass?: boolean;
   isBlocked?: boolean;
   unlockDate?: string | null;
+  // Automação de Contratos (Autentique)
+  autentiqueEnabled?: boolean;
+  autentiqueFolderId?: string | null;
+  autentiqueFolderName?: string | null;
+  autentiqueAccessDays?: number;
+  autentiqueLastSyncedAt?: string | null;
+  autentiqueIgnoreEmails?: string[];
 }
+

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, Link, useSearchParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Calendar, Users, DollarSign, BookOpen, Clock, LayoutDashboard, Monitor } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, DollarSign, BookOpen, Clock, LayoutDashboard, Monitor, FileCheck2 } from 'lucide-react';
 import { classService } from '../../services/classService';
 import { curriculumService } from '../../services/curriculumService';
 import { teacherService } from '../../services/teacherService';
@@ -253,7 +253,13 @@ const PresentialClassManager: React.FC = () => {
           </div>
         );
       case 'students':
-        return <StudentsTab classId={currentClass.id} />;
+        return (
+          <StudentsTab
+            classId={currentClass.id}
+            cls={currentClass}
+            onClassRefresh={() => fetchData(true)}
+          />
+        );
       default:
         return null;
     }
@@ -306,6 +312,17 @@ const PresentialClassManager: React.FC = () => {
               >
                 <span>🎯 Estudo Guiado: {currentClass.isGuidedStudyEnabled ? 'Ativo' : 'Inativo'}</span>
               </button>
+              {currentClass.autentiqueEnabled && currentClass.autentiqueFolderId && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('students')}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 text-xs font-bold transition-colors font-mono tabular-nums"
+                  title="Ver contratos sincronizados do Autentique"
+                >
+                  <FileCheck2 className="w-3.5 h-3.5" />
+                  <span>Autentique ({currentClass.autentiqueAccessDays || 60}d)</span>
+                </button>
+              )}
             </div>
             <div className="flex flex-wrap gap-4 text-sm text-zinc-400">
               <div className="flex items-center gap-2">

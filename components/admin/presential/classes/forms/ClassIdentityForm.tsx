@@ -6,6 +6,7 @@ import { getSimulatedClasses, SimulatedClass } from '../../../../../services/sim
 import { classService } from '../../../../../services/classService';
 import { courseService } from '../../../../../services/courseService';
 import { OnlineCourse } from '../../../../../types/course';
+import { AutentiqueIntegrationFields } from './AutentiqueIntegrationFields';
 
 interface ClassIdentityFormProps {
   data: Partial<Class>;
@@ -901,8 +902,11 @@ export const ClassIdentityForm: React.FC<ClassIdentityFormProps> = ({
           </p>
         </div>
 
+        {/* Automação de Contratos (Autentique) */}
+        <AutentiqueIntegrationFields data={data} onChange={onChange} />
+
         {/* SEGURANÇA E FREE PASS */}
-        <div className="bg-[#1a1d24] p-4 rounded-xl border border-zinc-800 space-y-4">
+        <div className="col-span-2 bg-[#1a1d24] p-4 rounded-xl border border-zinc-800 space-y-4">
           <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Segurança, Rascunho e Passe Livre (Free Pass)</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>

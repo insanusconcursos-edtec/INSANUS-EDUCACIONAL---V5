@@ -12,6 +12,15 @@ import { createPagarmeOrder, handlePagarmeWebhook, getPagarmeOrderStatus, reques
 import { initOrderNotificationListener } from './src/backend/services/orderNotificationService.js';
 import { initStudyReminderCron } from './src/backend/services/studyReminderService.js';
 import { addWatermarkToPdf } from './src/backend/services/pdfWatermarkService.js';
+import {
+  isAutentiqueConfigured,
+  listAutentiqueFolders,
+  syncClassAutentiqueFolder,
+  syncAllActiveAutentiqueClasses,
+  getAutentiqueSyncLogs,
+  handleAutentiqueWebhook,
+  initAutentiqueSyncCron,
+} from './src/backend/services/autentiqueService.js';
 
 process.stdout.write(">>>> [SISTEMA] SERVIDOR INICIALIZADO COM SUCESSO <<<<\n");
 
@@ -1639,6 +1648,91 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
     }
   });
 
+  // ==================== INTEGRAÇÃO AUTENTIQUE (TURMAS PRESENCIAIS) ====================
+  app.get('/api/admin/autentique/folders', async (_req, res) => {
+    try {
+      const result = await listAutentiqueFolders();
+      return res.status(200).json({
+        success: true,
+        configured: result.configured,
+        folders: result.folders,
+        warning: result.error || null,
+      });
+    } catch (error: any) {
+      console.error('[Autentique] Erro na rota /folders:', error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || 'Erro interno ao listar pastas do Autentique.',
+      });
+    }
+  });
+
+  app.all('/api/admin/autentique/sync', async (req, res) => {
+    if (req.method !== 'POST' && req.method !== 'GET') {
+      return res.status(405).json({ success: false, error: 'Método não permitido' });
+    }
+    if (!isAutentiqueConfigured()) {
+      return res.status(400).json({
+        success: false,
+        error: 'AUTENTIQUE_API_TOKEN não está configurado nas variáveis de ambiente do servidor.',
+      });
+    }
+    try {
+      const classId = String(req.body?.classId || req.query?.classId || '').trim();
+      if (classId) {
+        const singleResult = await syncClassAutentiqueFolder(classId, 'MANUAL_SYNC');
+        return res.status(200).json({ success: true, results: [singleResult] });
+      }
+      const results = await syncAllActiveAutentiqueClasses(
+        req.method === 'GET' ? 'CRON' : 'MANUAL_SYNC'
+      );
+      return res.status(200).json({ success: true, results });
+    } catch (error: any) {
+      console.error('[Autentique] Erro na rota /sync:', error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || 'Erro interno ao sincronizar pastas do Autentique.',
+      });
+    }
+  });
+
+  app.get('/api/admin/autentique/logs', async (req, res) => {
+    try {
+      const classId = typeof req.query.classId === 'string' ? req.query.classId.trim() : undefined;
+      const logs = await getAutentiqueSyncLogs(classId || undefined);
+      return res.status(200).json({ success: true, logs });
+    } catch (error: any) {
+      console.error('[Autentique] Erro na rota /logs:', error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || 'Erro interno ao buscar histórico do Autentique.',
+      });
+    }
+  });
+
+  app.post('/api/webhooks/autentique', async (req, res) => {
+    const signature =
+      (req.headers['x-autentique-signature'] as string) ||
+      (req.headers['x-webhook-signature'] as string) ||
+      (req.headers['signature'] as string) ||
+      '';
+    const authorization = (req.headers['authorization'] as string) || '';
+    try {
+      const outcome = await handleAutentiqueWebhook(
+        req.body,
+        signature || undefined,
+        authorization || undefined
+      );
+      return res.status(200).json({ success: true, ...outcome });
+    } catch (error: any) {
+      console.error('[Webhook Autentique] Erro:', error);
+      return res.status(200).json({
+        success: false,
+        error: error?.message || 'Erro ao processar webhook Autentique',
+      });
+    }
+  });
+
   // Rota de Migração Temporária para Sincronizar Dados de Afiliados (Follow-up) - VERSÃO ROBUSTA
   app.get('/api/admin/migrations/sync-commissions', async (req, res) => {
     try {
@@ -1822,6 +1916,7 @@ async function startServer() {
         try {
           initOrderNotificationListener();
           initStudyReminderCron();
+          initAutentiqueSyncCron();
           // cleanupExistingDuplicates(); // Comentado por ser potencialmente lento no boot
         } catch (bgError) {
           console.error("Erro ao inicializar tarefas de segundo plano:", bgError);

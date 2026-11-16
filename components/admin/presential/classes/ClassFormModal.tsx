@@ -6,6 +6,7 @@ import { ClassIdentityForm } from './forms/ClassIdentityForm';
 import { ClassStructureForm } from './forms/ClassStructureForm';
 import { ClassScheduleForm } from './forms/ClassScheduleForm';
 import { ClassroomSelectionForm } from './forms/ClassroomSelectionForm';
+import { toast } from 'react-hot-toast';
 
 interface ClassFormModalProps {
   isOpen: boolean;
@@ -39,7 +40,12 @@ const INITIAL_DATA: Partial<Class> = {
   category: '',
   subcategory: '',
   organization: '',
-  linkedSimulatedId: null
+  linkedSimulatedId: null,
+  autentiqueEnabled: false,
+  autentiqueFolderId: null,
+  autentiqueFolderName: null,
+  autentiqueAccessDays: 60,
+  autentiqueIgnoreEmails: [],
 };
 
 const STEPS = [
@@ -65,7 +71,11 @@ export const ClassFormModal: React.FC<ClassFormModalProps> = ({ isOpen, onClose,
       if (classToEdit) {
         setFormData({
           ...classToEdit,
-          published: classToEdit.published !== false
+          published: classToEdit.published !== false,
+          autentiqueAccessDays:
+            Number(classToEdit.autentiqueAccessDays) > 0
+              ? Number(classToEdit.autentiqueAccessDays)
+              : 60,
         });
         // Calculate break count if needed, though it's not stored directly in Class interface as a count, 
         // but derived from logic. For now, we default to 1 if hasBreak is true.
@@ -91,8 +101,18 @@ export const ClassFormModal: React.FC<ClassFormModalProps> = ({ isOpen, onClose,
     switch (step) {
       case 1: // Identity
         if (!formData.name?.trim()) {
-          alert('Por favor, informe o nome da turma.');
+          toast.error('Por favor, informe o nome da turma.');
           return false;
+        }
+        if (formData.autentiqueEnabled) {
+          if (!formData.autentiqueFolderId?.trim()) {
+            toast.error('Selecione ou informe o ID da pasta do Autentique para esta turma.');
+            return false;
+          }
+          if (!formData.autentiqueAccessDays || formData.autentiqueAccessDays < 1) {
+            toast.error('O prazo de acesso automático do Autentique deve ser de pelo menos 1 dia.');
+            return false;
+          }
         }
         return true;
       case 2: // Structure
@@ -109,7 +129,7 @@ export const ClassFormModal: React.FC<ClassFormModalProps> = ({ isOpen, onClose,
           return false;
         }
         return true;
-      case 3: // Schedule
+      case 3: { // Schedule
         if (!formData.startTime) {
           alert('Informe o horário de início.');
           return false;
@@ -128,6 +148,7 @@ export const ClassFormModal: React.FC<ClassFormModalProps> = ({ isOpen, onClose,
           return false;
         }
         return true;
+      }
       case 4: // Room
         if (!formData.classroomId) {
           alert('Selecione uma sala de aula.');

@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Search, Filter, Calendar, Users, Edit2, Trash2, AlertTriangle, ChevronDown, ChevronUp, Settings, Layers, GitMerge, GitBranch } from 'lucide-react';
+import { Plus, Search, Filter, Calendar, Users, Edit2, Trash2, AlertTriangle, ChevronDown, ChevronUp, Settings, Layers, GitMerge, GitBranch, FileCheck2, Copy, Check, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import { Class } from '../../../../types/class';
 import { classService } from '../../../../services/classService';
 import { classMetadataService, MetadataItem } from '../../../../services/classMetadataService';
+import { autentiqueAdminService } from '../../../../services/autentiqueAdminService';
 import { ClassFormModal } from './ClassFormModal';
 import { ClassMetadataManagerModal } from './ClassMetadataManagerModal';
 import { formatSafeDateLocal } from '../../../../utils/dateUtils';
@@ -80,6 +82,12 @@ const ClassCard: React.FC<ClassCardProps> = ({ cls, onEdit, onDelete }) => {
           {getStatusBadge(cls.status)}
           {getTypeBadge(cls.type)}
           {getHierarchyBadge(cls)}
+          {cls.autentiqueEnabled && cls.autentiqueFolderId && (
+            <span className="px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold uppercase border border-emerald-500/30 flex items-center gap-1 font-mono tabular-nums">
+              <FileCheck2 size={10} />
+              Autentique • {cls.autentiqueAccessDays || 60}d
+            </span>
+          )}
         </div>
       </div>
 
@@ -175,6 +183,57 @@ export const ClassList: React.FC = () => {
   const [subcategoryFilter, setSubcategoryFilter] = useState('');
   const [orgFilter, setOrgFilter] = useState('');
 
+  // Autentique Bar States
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
+
+  const webhookUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/autentique` : '/api/webhooks/autentique';
+
+  const activeAutentiqueCount = classes.filter(
+    (c) => c.autentiqueEnabled && Boolean(c.autentiqueFolderId)
+  ).length;
+
+  const handleCopyWebhook = async () => {
+    try {
+      await navigator.clipboard.writeText(webhookUrl);
+      setCopiedWebhook(true);
+      toast.success('URL do Webhook Autentique copiada!');
+      setTimeout(() => setCopiedWebhook(false), 2500);
+    } catch {
+      toast.error('Não foi possível copiar a URL.');
+    }
+  };
+
+  const handleSyncAllAutentique = async () => {
+    if (activeAutentiqueCount === 0) {
+      toast.error('Nenhuma turma possui automação Autentique ativa no momento.');
+      return;
+    }
+    setIsSyncingAll(true);
+    try {
+      const results = await autentiqueAdminService.syncAllClasses();
+      const totalCreated = results.reduce((acc, r) => acc + (r.newlyCreatedStudents || 0), 0);
+      const totalReleased = results.reduce((acc, r) => acc + (r.existingReleasedStudents || 0), 0);
+      const totalErrors = results.reduce((acc, r) => acc + (r.errors?.length || 0), 0);
+
+      if (totalCreated > 0 || totalReleased > 0) {
+        toast.success(
+          `Sincronização concluída: ${totalCreated} novo(s) cadastro(s) e ${totalReleased} acesso(s) liberado(s).`
+        );
+      } else if (totalErrors > 0) {
+        toast.error(`Sincronização finalizada com ${totalErrors} aviso(s). Verifique o token/pastas.`);
+      } else {
+        toast.success('Pastas verificadas: todos os contratos assinados já estavam liberados.');
+      }
+      await fetchClasses();
+    } catch (error: any) {
+      toast.error(error?.message || 'Erro ao sincronizar pastas do Autentique.');
+    } finally {
+      setIsSyncingAll(false);
+    }
+  };
+
   const fetchClasses = async () => {
     try {
       setLoading(true);
@@ -243,6 +302,55 @@ export const ClassList: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Autentique Webhook & Global Sync Bar */}
+      <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4">
+        <div className="flex items-start sm:items-center gap-3">
+          <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 shrink-0">
+            <FileCheck2 className="w-5 h-5" />
+          </div>
+          <div className="space-y-0.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-white uppercase tracking-wider">
+                Automação de Contratos (Autentique)
+              </span>
+              <span className="px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-[10px] font-mono tabular-nums font-bold text-zinc-300 uppercase">
+                {activeAutentiqueCount} turma(s) vinculada(s)
+              </span>
+            </div>
+            <p className="text-xs text-zinc-400">
+              Cadastre a URL de Webhook no Autentique (<span className="text-zinc-300 font-mono">SIGNATURE_ACCEPTED</span>) para liberação imediata após assinatura do aluno, ou sincronize as pastas manualmente.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full xl:w-auto">
+          <div className="flex items-center bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 gap-2 flex-1 sm:flex-initial">
+            <span className="text-[11px] font-mono text-zinc-400 truncate max-w-[260px] sm:max-w-[320px]">
+              {webhookUrl}
+            </span>
+            <button
+              type="button"
+              onClick={handleCopyWebhook}
+              className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] font-bold uppercase text-zinc-200 transition-colors shrink-0"
+              title="Copiar URL do Webhook"
+            >
+              {copiedWebhook ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+              {copiedWebhook ? 'Copiado' : 'Copiar Webhook'}
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSyncAllAutentique}
+            disabled={isSyncingAll}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold uppercase text-xs tracking-wider transition-colors disabled:opacity-50 whitespace-nowrap"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAll ? 'animate-spin' : ''}`} />
+            {isSyncingAll ? 'Sincronizando...' : 'Sincronizar Pastas'}
+          </button>
+        </div>
+      </div>
+
       {/* Filters Bar */}
       <div className="bg-zinc-900/50 border border-zinc-800 p-4 rounded-xl flex flex-col lg:flex-row gap-4 justify-between items-start lg:items-center">
         <div className="flex flex-col md:flex-row gap-3 w-full lg:w-auto flex-1">

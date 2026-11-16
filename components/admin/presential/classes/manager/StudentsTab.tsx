@@ -1,15 +1,20 @@
 /* eslint-disable react/prop-types */
 import React, { useState, useEffect, useMemo } from 'react';
-import { Search, MessageCircle, User, Star, Loader2, RefreshCw, Users } from 'lucide-react';
+import { Search, MessageCircle, User, Star, Loader2, RefreshCw, Users, FileCheck2, FolderSync, Clock, History, Save } from 'lucide-react';
 import { getStudentsByClass, batchReleaseClassAccess } from '../../../../../services/studentService';
 import { classService } from '../../../../../services/classService';
+import { autentiqueAdminService } from '../../../../../services/autentiqueAdminService';
+import { Class } from '../../../../../types/class';
+import { AutentiqueSyncedContract } from '../../../../../types/autentique';
 import { toast } from 'react-hot-toast';
 
 interface Props {
   classId: string;
+  cls?: Class | null;
+  onClassRefresh?: () => void;
 }
 
-export const StudentsTab: React.FC<Props> = ({ classId }) => {
+export const StudentsTab: React.FC<Props> = ({ classId, cls, onClassRefresh }) => {
   const [students, setStudents] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -31,6 +36,97 @@ export const StudentsTab: React.FC<Props> = ({ classId }) => {
     affectedCount: number;
     days: number;
   } | null>(null);
+
+  // States para Automação Autentique
+  const [autentiqueLogs, setAutentiqueLogs] = useState<AutentiqueSyncedContract[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [showLogsPanel, setShowLogsPanel] = useState(false);
+  const [logSearch, setLogSearch] = useState('');
+  const [isSyncingAutentique, setIsSyncingAutentique] = useState(false);
+  const [editableAutentiqueDays, setEditableAutentiqueDays] = useState<number>(
+    Number(cls?.autentiqueAccessDays) > 0 ? Number(cls?.autentiqueAccessDays) : 60
+  );
+  const [savingAutentiqueDays, setSavingAutentiqueDays] = useState(false);
+
+  useEffect(() => {
+    setEditableAutentiqueDays(
+      Number(cls?.autentiqueAccessDays) > 0 ? Number(cls?.autentiqueAccessDays) : 60
+    );
+  }, [cls?.autentiqueAccessDays]);
+
+  const loadAutentiqueLogs = async () => {
+    if (!classId) return;
+    setLoadingLogs(true);
+    try {
+      const logs = await autentiqueAdminService.fetchLogs(classId);
+      setAutentiqueLogs(logs);
+    } catch (error) {
+      console.error('Erro ao carregar histórico de contratos Autentique:', error);
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
+  useEffect(() => {
+    if (classId && cls?.autentiqueEnabled) {
+      loadAutentiqueLogs();
+    }
+  }, [classId, cls?.autentiqueEnabled, refreshTrigger]);
+
+  const handleSyncClassAutentique = async () => {
+    if (!classId) return;
+    setIsSyncingAutentique(true);
+    try {
+      const summary = await autentiqueAdminService.syncClass(classId);
+      if (summary) {
+        if (summary.newlyCreatedStudents > 0 || summary.existingReleasedStudents > 0) {
+          toast.success(
+            `Autentique sincronizado: ${summary.newlyCreatedStudents} novo(s) cadastro(s) e ${summary.existingReleasedStudents} acesso(s) liberado(s)!`
+          );
+        } else if (summary.errors && summary.errors.length > 0) {
+          toast.error(`Sincronizado com avisos: ${summary.errors[0]}`);
+        } else {
+          toast.success(
+            `Pasta verificada (${summary.scannedDocuments} documento(s)): nenhum contrato pendente.`
+          );
+        }
+      }
+      setRefreshTrigger((prev) => prev + 1);
+      if (onClassRefresh) onClassRefresh();
+    } catch (err: any) {
+      toast.error(err?.message || 'Erro ao sincronizar pasta do Autentique.');
+    } finally {
+      setIsSyncingAutentique(false);
+    }
+  };
+
+  const handleSaveAutentiqueDays = async () => {
+    if (!classId || editableAutentiqueDays < 1) {
+      toast.error('O prazo de acesso deve ser de pelo menos 1 dia.');
+      return;
+    }
+    setSavingAutentiqueDays(true);
+    try {
+      await classService.updateClass(classId, { autentiqueAccessDays: editableAutentiqueDays });
+      toast.success(`Prazo padrão atualizado para ${editableAutentiqueDays} dias.`);
+      if (onClassRefresh) onClassRefresh();
+    } catch {
+      toast.error('Erro ao salvar prazo de acesso da turma.');
+    } finally {
+      setSavingAutentiqueDays(false);
+    }
+  };
+
+  const filteredAutentiqueLogs = useMemo(() => {
+    if (!logSearch.trim()) return autentiqueLogs;
+    const term = logSearch.toLowerCase();
+    return autentiqueLogs.filter(
+      (item) =>
+        (item.studentName || '').toLowerCase().includes(term) ||
+        (item.studentEmail || '').toLowerCase().includes(term) ||
+        (item.documentName || '').toLowerCase().includes(term)
+    );
+  }, [autentiqueLogs, logSearch]);
 
   useEffect(() => {
     const fetchStudents = async () => {
@@ -168,9 +264,14 @@ export const StudentsTab: React.FC<Props> = ({ classId }) => {
           
           {/* Dados do Aluno */}
           <div className="flex flex-col">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h3 className="font-bold text-white text-lg">{student.name}</h3>
               {isScholarship && <span className="flex items-center gap-1 bg-blue-900/50 text-blue-400 border border-blue-800 text-[10px] px-2 py-0.5 rounded uppercase font-bold"><Star size={10} /> Bolsista</span>}
+              {access?.origin === 'AUTENTIQUE' && (
+                <span className="flex items-center gap-1 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[10px] px-2 py-0.5 rounded uppercase font-bold">
+                  <FileCheck2 size={10} /> Contrato Autentique
+                </span>
+              )}
             </div>
             <div className="text-sm text-zinc-500 flex flex-col sm:flex-row sm:gap-3">
               <span>{student.email}</span>
@@ -227,6 +328,179 @@ export const StudentsTab: React.FC<Props> = ({ classId }) => {
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Painel de Automação Autentique da Turma */}
+      {cls?.autentiqueEnabled && cls?.autentiqueFolderId && (
+        <div className="bg-zinc-900/70 border border-zinc-800 rounded-xl p-5 space-y-4">
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 shrink-0">
+                <FolderSync className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    Automação Autentique Vinculada
+                  </h3>
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold uppercase">
+                    Liberação na Assinatura
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-400">
+                  <span>
+                    Pasta:{' '}
+                    <strong className="text-zinc-200">
+                      {cls.autentiqueFolderName || cls.autentiqueFolderId}
+                    </strong>
+                  </span>
+                  {cls.autentiqueLastSyncedAt && (
+                    <span className="font-mono tabular-nums text-zinc-500">
+                      Última leitura:{' '}
+                      {new Date(cls.autentiqueLastSyncedAt).toLocaleString('pt-BR')}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Editor rápido do prazo padrão (60 dias ou customizado) */}
+              <div className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5">
+                <Clock className="w-3.5 h-3.5 text-zinc-500" />
+                <span className="text-[10px] font-bold uppercase text-zinc-400">Prazo:</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={3650}
+                  value={editableAutentiqueDays}
+                  onChange={(e) => setEditableAutentiqueDays(parseInt(e.target.value, 10) || 0)}
+                  className="w-14 bg-transparent text-xs font-mono tabular-nums font-bold text-white text-right focus:outline-none"
+                />
+                <span className="text-[10px] font-bold uppercase text-zinc-500">dias</span>
+                {editableAutentiqueDays !== (cls.autentiqueAccessDays || 60) && (
+                  <button
+                    type="button"
+                    onClick={handleSaveAutentiqueDays}
+                    disabled={savingAutentiqueDays}
+                    className="ml-1 flex items-center gap-1 px-2 py-0.5 rounded bg-brand-red hover:bg-red-600 text-white text-[10px] font-bold uppercase transition-colors disabled:opacity-50"
+                    title="Salvar novo prazo de acesso"
+                  >
+                    <Save className="w-3 h-3" />
+                    Salvar
+                  </button>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowLogsPanel((prev) => !prev)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-bold uppercase tracking-wider text-zinc-200 transition-colors font-mono tabular-nums"
+              >
+                <History className="w-3.5 h-3.5 text-zinc-400" />
+                Contratos ({autentiqueLogs.length})
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSyncClassAutentique}
+                disabled={isSyncingAutentique}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAutentique ? 'animate-spin' : ''}`} />
+                {isSyncingAutentique ? 'Sincronizando...' : 'Sincronizar Pasta'}
+              </button>
+            </div>
+          </div>
+
+          {showLogsPanel && (
+            <div className="pt-4 border-t border-zinc-800 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                  Histórico de Contratos Assinados & Liberações Automáticas
+                </span>
+                <div className="relative w-full sm:w-72">
+                  <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={logSearch}
+                    onChange={(e) => setLogSearch(e.target.value)}
+                    placeholder="Filtrar aluno, e-mail ou contrato..."
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-brand-red"
+                  />
+                </div>
+              </div>
+
+              {loadingLogs ? (
+                <div className="py-6 text-center text-xs text-zinc-500 uppercase font-bold tracking-wider">
+                  Carregando registros do Autentique...
+                </div>
+              ) : filteredAutentiqueLogs.length === 0 ? (
+                <div className="py-6 px-4 text-center border border-dashed border-zinc-800 rounded-lg text-xs text-zinc-500">
+                  Nenhum contrato processado ainda para esta pasta. Clique em &quot;Sincronizar Pasta&quot; para verificar contratos já assinados.
+                </div>
+              ) : (
+                <div className="overflow-x-auto border border-zinc-800 rounded-lg">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-zinc-950/80 border-b border-zinc-800 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                        <th className="py-2.5 px-3">Aluno / E-mail</th>
+                        <th className="py-2.5 px-3">Contrato (Autentique)</th>
+                        <th className="py-2.5 px-3">Assinado em</th>
+                        <th className="py-2.5 px-3 text-right">Prazo</th>
+                        <th className="py-2.5 px-3">Ação Executada</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800/70 text-xs">
+                      {filteredAutentiqueLogs.map((log) => (
+                        <tr key={log.id} className="hover:bg-zinc-800/30 transition-colors">
+                          <td className="py-2.5 px-3">
+                            <div className="font-semibold text-white">{log.studentName}</div>
+                            <div className="text-[11px] text-zinc-400">{log.studentEmail}</div>
+                          </td>
+                          <td className="py-2.5 px-3 text-zinc-300 max-w-[240px] truncate" title={log.documentName}>
+                            {log.documentName}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono tabular-nums text-zinc-400 whitespace-nowrap">
+                            {log.signedAt
+                              ? new Date(log.signedAt).toLocaleString('pt-BR', {
+                                  day: '2-digit',
+                                  month: '2-digit',
+                                  year: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })
+                              : 'N/D'}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-zinc-300 whitespace-nowrap">
+                            {log.accessDays}d
+                          </td>
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            {log.actionTaken === 'CREATED_AND_RELEASED' && (
+                              <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold uppercase">
+                                Novo Cadastro + Liberado
+                              </span>
+                            )}
+                            {log.actionTaken === 'EXISTING_USER_RELEASED' && (
+                              <span className="px-2 py-0.5 rounded bg-blue-500/15 border border-blue-500/30 text-blue-400 text-[10px] font-bold uppercase">
+                                Já Cadastrado + Liberado
+                              </span>
+                            )}
+                            {log.actionTaken === 'ALREADY_HAD_ACCESS' && (
+                              <span className="px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[10px] font-bold uppercase">
+                                Acesso Já Ativo
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Cabeçalho e Pesquisa */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
         <div className="flex flex-wrap items-center gap-3">
