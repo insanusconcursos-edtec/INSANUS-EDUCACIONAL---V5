@@ -1,4 +1,5 @@
 import { AutentiqueFolderXRay } from './autentique';
+import { SubjectGroup } from './curriculum';
 
 export type ClassType = 'PRE_EDITAL' | 'POS_EDITAL';
 export type ClassModality = 'REGULAR' | 'INTENSIVO';
@@ -85,6 +86,8 @@ export interface Class {
   autentiqueLastSyncedAt?: string | null;
   autentiqueIgnoreEmails?: string[];
   autentiqueLastXRay?: AutentiqueFolderXRay | null;
+  // Organização de Disciplinas em Grupos (Ex.: Conhecimentos Básicos, Específicos)
+  subjectGroups?: SubjectGroup[];
 }
 
 

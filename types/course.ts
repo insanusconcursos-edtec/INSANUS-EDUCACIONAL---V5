@@ -128,6 +128,9 @@ export interface CourseSubModule {
   status?: 'published' | 'recording' | 'scheduled' | null; // Novo: Status do módulo
   parentId?: string | null; // Adicionado para suportar subpastas aninhadas
   isRecording?: boolean; // NOVO: Flag para "Em Gravação" manual
+  pandaFolderId?: string | null; // Vínculo opcional com pasta/subpasta do Panda Vídeo
+  pandaFolderName?: string | null;
+  pandaFolderPath?: string | null;
 }
 
 // --- NOVO: Interface da Aula ---
@@ -214,6 +217,7 @@ export interface CourseContent {
   videoUrl?: string;
   videoPlatform?: 'panda' | 'youtube';
   useAlternativePlayer?: boolean; // Para YouTube
+  pandaVideoId?: string | null; // ID original no Panda Vídeo (anti-duplicidade em lote)
   
   fileUrl?: string; // Para PDF
   pdfClassification?: 'TEORIA' | 'QUESTÕES' | 'TEORIA_QUESTÕES';

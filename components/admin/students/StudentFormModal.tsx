@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, User, Mail, Phone, Lock, Hash, Loader2, Eye, EyeOff } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 import { Student, CreateStudentData } from '../../../services/userService';
 
 interface StudentFormModalProps {
@@ -78,8 +79,10 @@ const StudentFormModal: React.FC<StudentFormModalProps> = ({ isOpen, onClose, on
     setFormData(prev => ({ ...prev, [field]: finalValue }));
   };
 
-  // Validations
-  const emailValid = !!(formData.name && formData.email && formData.cpf);
+  // Validations (when editing an existing student who came without CPF, e.g. via Autentique, CPF is optional)
+  const cpfDigits = (formData.cpf || '').replace(/\D/g, '');
+  const cpfValid = initialData ? (cpfDigits.length === 0 || cpfDigits.length === 11) : cpfDigits.length === 11;
+  const emailValid = !!(formData.name.trim() && formData.email.trim() && cpfValid);
   const emailsMatch = formData.email.trim().toLowerCase() === confirmEmail.trim().toLowerCase();
   const passwordValid = !!initialData || (!!formData.password && formData.password.length >= 6 && formData.password === confirmPassword);
   
@@ -92,23 +95,28 @@ const StudentFormModal: React.FC<StudentFormModalProps> = ({ isOpen, onClose, on
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.name || !formData.email || !formData.cpf) {
-        alert("Preencha os campos obrigatórios.");
+    if (!formData.name.trim() || !formData.email.trim() || (!initialData && !cpfDigits)) {
+        toast.error("Preencha os campos obrigatórios.");
+        return;
+    }
+
+    if (cpfDigits.length > 0 && cpfDigits.length !== 11) {
+        toast.error("Informe um CPF válido com 11 dígitos.");
         return;
     }
 
     if (!emailsMatch) {
-        alert("Os e-mails não conferem.");
+        toast.error("Os e-mails não conferem.");
         return;
     }
 
     if (!initialData) {
         if (!formData.password || formData.password.length < 6) {
-            alert("A senha deve ter no mínimo 6 caracteres.");
+            toast.error("A senha deve ter no mínimo 6 caracteres.");
             return;
         }
         if (formData.password !== confirmPassword) {
-            alert("As senhas não conferem.");
+            toast.error("As senhas não conferem.");
             return;
         }
     }
@@ -117,14 +125,15 @@ const StudentFormModal: React.FC<StudentFormModalProps> = ({ isOpen, onClose, on
     try {
         await onSave({
             ...formData,
-            cpf: (formData.cpf || '').replace(/\D/g, ''), // Send raw numbers
+            email: formData.email.trim().toLowerCase(),
+            cpf: cpfDigits, // Send raw numbers
             whatsapp: formData.whatsapp ? formData.whatsapp.replace(/\D/g, '') : '',
         });
         onClose();
     } catch (error: unknown) {
         console.error(error);
         const message = error instanceof Error ? error.message : "Erro ao salvar.";
-        alert(message);
+        toast.error(message);
     } finally {
         setLoading(false);
     }
@@ -171,9 +180,9 @@ const StudentFormModal: React.FC<StudentFormModalProps> = ({ isOpen, onClose, on
                             value={formData.cpf}
                             onChange={e => handleChange('cpf', e.target.value)}
                             placeholder="000.000.000-00"
-                            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-zinc-700 focus:outline-none focus:border-brand-red font-mono"
-                            required
-                            disabled={!!initialData} // CPF usually immutable as key
+                            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white placeholder-zinc-700 focus:outline-none focus:border-brand-red font-mono disabled:opacity-60"
+                            required={!initialData}
+                            disabled={Boolean(initialData?.cpf)} // Immutable once registered, editable if missing
                         />
                     </div>
                 </div>

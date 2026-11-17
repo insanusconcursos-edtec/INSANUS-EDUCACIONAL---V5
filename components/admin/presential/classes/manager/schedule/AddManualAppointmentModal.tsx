@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { X, Check, Clock, AlertCircle } from 'lucide-react';
+import { X, Check, Clock, AlertCircle, Radio, MapPin, AlertTriangle, Plus, Minus, Layers } from 'lucide-react';
 import { Class } from '../../../../../../types/class';
 import { Teacher } from '../../../../../../types/teacher';
 import { Subject, Topic } from '../../../../../../types/curriculum';
@@ -13,6 +13,7 @@ interface AddManualAppointmentModalProps {
   subjects: Subject[];
   topics: Topic[];
   isHoliday?: boolean;
+  initialIsLiveEvent?: boolean;
   onClose: () => void;
   onSave: (appointments: any[]) => void;
 }
@@ -30,6 +31,7 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
   subjects,
   topics,
   isHoliday = false,
+  initialIsLiveEvent = false,
   onClose,
   onSave
 }) => {
@@ -37,6 +39,7 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
   const dayOfWeek = dateObj.getDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6 || isHoliday;
 
+  const [isLiveEvent, setIsLiveEvent] = useState<boolean>(initialIsLiveEvent);
   const [startTime, setStartTime] = useState(isWeekend ? '' : classData.startTime);
   const [shift, setShift] = useState(isWeekend ? '' : classData.shift);
   
@@ -47,6 +50,15 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
   const [periodSelections, setPeriodSelections] = useState<Array<{ subjectId: string, teacherId: string }>>(
     Array(4).fill({ subjectId: '', teacherId: '' })
   );
+  const [periodExtraModules, setPeriodExtraModules] = useState<number[]>([0, 0, 0, 0]);
+
+  const updatePeriodExtraModules = (periodIdx: number, delta: number) => {
+    setPeriodExtraModules(prev => {
+      const next = [...prev];
+      next[periodIdx] = Math.max(0, Math.min(8, (next[periodIdx] || 0) + delta));
+      return next;
+    });
+  };
 
   const intervalMinutes = classData.hasBreak ? classData.breakDuration : 0;
   const classDurationMinutes = useMemo(() => {
@@ -146,6 +158,7 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
 
     const appointmentsToSave = periodsTimes.map((period, index) => {
       const selection = isSameSubject ? globalSelection : periodSelections[index]; 
+      const extraMods = Math.max(0, periodExtraModules[index] || 0);
       
       return {
         id: Math.random().toString(36).substring(2, 15),
@@ -156,7 +169,9 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
         teacherId: selection.teacherId,
         subjectId: selection.subjectId,
         periodNumber: period.periodNumber,
-        isManual: true
+        extraModulesCount: extraMods,
+        isManual: true,
+        isLiveEvent: isLiveEvent
       };
     });
 
@@ -198,6 +213,80 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
           </select>
         </div>
 
+        {selection.subjectId && (
+          <div className="p-2.5 rounded-lg bg-zinc-900/70 border border-zinc-800/80 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-bold text-zinc-400 uppercase flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                Módulos da fila por tempo
+              </span>
+              {!isGlobal || numberOfPeriods === 1 ? (
+                <div className="flex items-center gap-1.5 tabular-nums">
+                  <button
+                    type="button"
+                    onClick={() => updatePeriodExtraModules(isGlobal ? 0 : index, -1)}
+                    disabled={(periodExtraModules[isGlobal ? 0 : index] || 0) === 0}
+                    className="w-6 h-6 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                    title="Reduzir módulos neste tempo"
+                  >
+                    <Minus className="w-3 h-3" />
+                  </button>
+                  <span className="text-xs font-bold text-white min-w-[74px] text-center whitespace-nowrap">
+                    {1 + (periodExtraModules[isGlobal ? 0 : index] || 0)}{' '}
+                    {1 + (periodExtraModules[isGlobal ? 0 : index] || 0) === 1 ? 'módulo' : 'módulos'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => updatePeriodExtraModules(isGlobal ? 0 : index, 1)}
+                    className="w-6 h-6 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors"
+                    title="Incluir próximo módulo da disciplina neste mesmo tempo"
+                  >
+                    <Plus className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
+            {isGlobal && numberOfPeriods > 1 && (
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                {Array.from({ length: numberOfPeriods }).map((_, pIdx) => {
+                  const totalMods = 1 + (periodExtraModules[pIdx] || 0);
+                  return (
+                    <div
+                      key={pIdx}
+                      className="flex items-center justify-between gap-1.5 bg-zinc-950 px-2.5 py-1.5 rounded border border-zinc-800 tabular-nums"
+                    >
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase whitespace-nowrap">
+                        {pIdx + 1}º Tempo
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => updatePeriodExtraModules(pIdx, -1)}
+                          disabled={(periodExtraModules[pIdx] || 0) === 0}
+                          className="w-5 h-5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center disabled:opacity-30 disabled:pointer-events-none"
+                        >
+                          <Minus className="w-2.5 h-2.5" />
+                        </button>
+                        <span className="text-[11px] font-bold text-white min-w-[20px] text-center">
+                          {totalMods}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => updatePeriodExtraModules(pIdx, 1)}
+                          className="w-5 h-5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center"
+                        >
+                          <Plus className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {shift && selection.subjectId && (
           <div className="space-y-2 pt-2 border-t border-zinc-800">
             <label className="text-sm font-medium text-zinc-300 block">Professor</label>
@@ -235,19 +324,32 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
 
                   {unavailableTeachers.length > 0 && (
                     <div>
-                      <div className="text-xs font-bold text-red-500 uppercase mb-1 flex items-center gap-1">
-                        ❌ Professores Indisponíveis
+                      <div className="text-xs font-bold text-amber-400 uppercase mb-1 flex items-center gap-1">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        Professores com Restrição no Turno (Clique para forçar)
                       </div>
                       <div className="space-y-1">
-                        {unavailableTeachers.map(({ teacher, details }) => (
-                          <div
-                            key={teacher.id}
-                            className="w-full text-left px-2 py-1.5 rounded text-sm flex items-center justify-between opacity-75 bg-zinc-950/50 border border-zinc-800"
-                          >
-                            <span className="text-zinc-400">{teacher.name}</span>
-                            <span className="text-[10px] text-red-400 max-w-[50%] text-right truncate" title={details}>{details}</span>
-                          </div>
-                        ))}
+                        {unavailableTeachers.map(({ teacher, details }) => {
+                          const isSelected = selection.teacherId === teacher.id;
+                          return (
+                            <button
+                              type="button"
+                              key={teacher.id}
+                              onClick={() => setSelection({ teacherId: teacher.id })}
+                              className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors flex items-center justify-between gap-2 border ${
+                                isSelected
+                                  ? 'bg-amber-900/30 text-amber-200 border-amber-600'
+                                  : 'bg-zinc-950/50 text-zinc-400 border-zinc-800 hover:bg-zinc-800/70 hover:text-zinc-200'
+                              }`}
+                            >
+                              <span className="truncate">{teacher.name}</span>
+                              <span className="flex items-center gap-1.5 shrink-0 max-w-[50%]">
+                                <span className="text-[10px] text-amber-400/90 truncate" title={details}>{details}</span>
+                                {isSelected && <Check className="w-3 h-3 text-amber-300 shrink-0" />}
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -277,7 +379,17 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200">
         <div className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/50">
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
-            Adicionar Agendamento
+            {isLiveEvent ? (
+              <>
+                <Radio className="w-5 h-5 text-sky-400 shrink-0" />
+                <span>Agendar Evento Ao Vivo</span>
+              </>
+            ) : (
+              <>
+                <MapPin className="w-5 h-5 text-brand-red shrink-0" />
+                <span>Agendar Aula Presencial</span>
+              </>
+            )}
           </h3>
           <button onClick={onClose} className="text-zinc-500 hover:text-white transition-colors">
             <X className="w-5 h-5" />
@@ -286,6 +398,52 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
         
         <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700">
           <div className="space-y-4">
+            {/* Modality Selector */}
+            <div>
+              <label className="text-xs font-bold text-zinc-500 uppercase block mb-1.5">Formato do Encontro</label>
+              <div className="grid grid-cols-2 gap-2 p-1 bg-zinc-950 rounded-lg border border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsLiveEvent(false);
+                    if (!isWeekend) {
+                      setShift(classData.shift);
+                      setStartTime(classData.startTime);
+                    }
+                  }}
+                  className={`flex items-center justify-center gap-2 py-2 px-3 rounded-md text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                    !isLiveEvent
+                      ? 'bg-brand-red text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  <MapPin className="w-3.5 h-3.5 shrink-0" />
+                  Aula Presencial
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsLiveEvent(true);
+                    if (!shift && classData.shift) setShift(classData.shift);
+                    if (!startTime && classData.startTime) setStartTime(classData.startTime);
+                  }}
+                  className={`flex items-center justify-center gap-2 py-2 px-3 rounded-md text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                    isLiveEvent
+                      ? 'bg-sky-600 text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  <Radio className="w-3.5 h-3.5 shrink-0" />
+                  Evento Ao Vivo
+                </button>
+              </div>
+              {isLiveEvent && (
+                <p className="text-[11px] text-sky-400/90 mt-1.5">
+                  Segue exatamente a mesma sequência de assuntos/módulos da disciplina, indicando ao aluno transmissão ao vivo pelo portal.
+                </p>
+              )}
+            </div>
+
             <div>
               <label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Data</label>
               <div className="text-sm font-medium text-white bg-zinc-800/50 p-2 rounded border border-zinc-700">
@@ -296,7 +454,7 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Turno</label>
-                {isWeekend ? (
+                {(isWeekend || isLiveEvent) ? (
                   <select
                     value={shift}
                     onChange={(e) => setShift(e.target.value)}
@@ -315,15 +473,15 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
               </div>
               <div>
                 <label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Horário de Início</label>
-                {isWeekend ? (
+                {(isWeekend || isLiveEvent) ? (
                   <input
                     type="time"
                     value={startTime}
                     onChange={(e) => setStartTime(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-white text-sm focus:border-brand-red focus:ring-1 focus:ring-brand-red outline-none"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-white text-sm focus:border-brand-red focus:ring-1 focus:ring-brand-red outline-none tabular-nums"
                   />
                 ) : (
-                  <div className="text-sm font-medium text-zinc-300 bg-zinc-800/30 p-2 rounded border border-zinc-800 flex items-center gap-2">
+                  <div className="text-sm font-medium text-zinc-300 bg-zinc-800/30 p-2 rounded border border-zinc-800 flex items-center gap-2 tabular-nums">
                     <Clock className="w-4 h-4" />
                     {startTime}
                   </div>
@@ -397,10 +555,14 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
           <button
             onClick={handleSave}
             disabled={isSaveDisabled()}
-            className="flex items-center gap-2 px-4 py-2 bg-brand-red text-white rounded-lg hover:bg-red-600 font-medium shadow-lg shadow-brand-red/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg font-medium shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap ${
+              isLiveEvent
+                ? 'bg-sky-600 hover:bg-sky-500 shadow-sky-600/20'
+                : 'bg-brand-red hover:bg-red-600 shadow-brand-red/20'
+            }`}
           >
-            <Check className="w-4 h-4" />
-            Salvar Agendamento
+            <Check className="w-4 h-4 shrink-0" />
+            {isLiveEvent ? 'Salvar Evento Ao Vivo' : 'Salvar Agendamento'}
           </button>
         </div>
       </div>

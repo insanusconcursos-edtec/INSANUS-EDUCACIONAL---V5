@@ -16,12 +16,19 @@ export const sanitizeSchedule = (
 
   // Retorna apenas os eventos que pertencem a tópicos e módulos que AINDA existem
   return events.filter(event => {
+    // Eventos de simulado são independentes dos tópicos/módulos de disciplinas
+    if (event.eventType === 'SIMULADO') return true;
     // Se o evento não for uma aula padrão (ex: feriado, lacuna), mantenha-o.
     if (!event.topicId || !event.moduleId) return true; 
 
     const topicExists = activeTopicIds.has(event.topicId);
     const moduleExists = activeModuleIds.has(event.moduleId);
+    const anyLinkedExists = Boolean(
+      event.linkedModules?.some(
+        lm => activeTopicIds.has(lm.topicId) && activeModuleIds.has(lm.moduleId)
+      )
+    );
 
-    return topicExists && moduleExists;
+    return (topicExists && moduleExists) || anyLinkedExists;
   });
 };

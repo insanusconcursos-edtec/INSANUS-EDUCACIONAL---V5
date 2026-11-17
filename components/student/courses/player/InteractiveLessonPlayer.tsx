@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   Network, Table, HelpCircle, Layers, Maximize2, Minimize2, ZoomIn, ZoomOut, 
-  RotateCcw, ChevronRight, CheckCircle2, Circle, AlertTriangle, Lightbulb, 
+  RotateCcw, ChevronLeft, ChevronRight, CheckCircle2, Circle, AlertTriangle, Lightbulb, 
   BookOpen, CheckSquare, Sparkles, Filter, ChevronDown, ChevronUp, Eye, EyeOff,
   Volume2, X, ArrowLeft, ArrowRight, Shuffle, CornerDownRight, ExternalLink, Scissors,
   History, Flag, BarChart3, Sun, Moon
@@ -19,6 +19,85 @@ import { useAuth } from '../../../../contexts/AuthContext';
 interface InteractiveLessonPlayerProps {
   content: CourseContent;
   lessonId: string;
+  embeddedInModal?: boolean;
+}
+
+/**
+ * Converte Markdown básico (**negrito**, *itálico* e quebras de linha \n) em HTML seguro
+ * com destaque visual para palavras-chave nos Quadros/Matrizes e painéis de apoio.
+ */
+function formatMarkdown(text: string | undefined | null, isDark = false): string {
+  if (!text) return '';
+  const strongColor = isDark ? '#93c5fd' : '#002060';
+  const converted = String(text)
+    .replace(/\*\*([\s\S]*?)\*\*/g, `<strong class="matrix-kw" style="color: ${strongColor}; font-weight: 700;">$1</strong>`)
+    .replace(/\*([^*\n]+?)\*/g, '<em>$1</em>')
+    .replace(/\r?\n/g, '<br/>');
+  return sanitizeInteractiveHtml(converted);
+}
+
+interface PegaAVisaoSegment {
+  marker?: string;
+  html: string;
+}
+
+function highlightInitialKeyword(segmentBody: string): string {
+  const trimmed = segmentBody.trim();
+  if (!trimmed || /^(\*\*|<strong\b|<b\b)/i.test(trimmed)) {
+    return trimmed;
+  }
+  const colonMatch = trimmed.match(/^([A-ZÀ-Ú0-9][^:\n]{1,55}):(\s+[\s\S]+)$/);
+  if (colonMatch && !colonMatch[1].includes('**')) {
+    return `**${colonMatch[1]}:**${colonMatch[2]}`;
+  }
+  return trimmed;
+}
+
+/**
+ * Estrutura verticalmente o texto do "PEGA A VISÃO", separando quebras de linha (\n)
+ * e marcadores inline como "•", "1)", "2)", "3)" ou listas "1.", "2." em itens independentes.
+ */
+function parsePegaAVisaoSegments(rawText: string | undefined | null, isDark = false): PegaAVisaoSegment[] {
+  if (!rawText) return [];
+  let normalized = String(rawText).replace(/\r\n/g, '\n').trim();
+
+  // 1. Quebra marcadores "•" inline em novas linhas
+  normalized = normalized.replace(/([^\n])\s*•\s+/g, '$1\n• ');
+
+  // 2. Quebra enumerações "1)", "2)", "3)" inline em novas linhas (sem afetar "(1)")
+  normalized = normalized.replace(/(^|[\s.;:—–-])(\d{1,2}\))\s+/g, '$1\n$2 ');
+
+  // 3. Quebra enumerações "1.", "2." inline quando compõem sequência enumerada (evitando "Art. 1.", "nº 1.")
+  if (/(?:^|[\s.;:])1\.\s+[\s\S]+?[\s.;:]2\.\s+/.test(normalized)) {
+    normalized = normalized.replace(
+      /(^|[.;:!?]\s+|\s+—\s+|\s+-\s+)(\d{1,2}\.)\s+(?=\*\*|[A-ZÀ-Ú])/g,
+      (match, prefix: string, marker: string, offset: number, fullStr: string) => {
+        const lookback = fullStr.slice(Math.max(0, offset - 8), offset + prefix.length);
+        if (/\b(art|inc|par|item|lei|dec|cap|n|nº)\.\s*$/i.test(lookback)) {
+          return match;
+        }
+        return `${prefix}\n${marker} `;
+      }
+    );
+  }
+
+  const lines = normalized
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  return lines.map(line => {
+    const markerMatch = line.match(/^(•|\d{1,2}\)|\d{1,2}\.)\s+([\s\S]+)$/);
+    if (markerMatch) {
+      return {
+        marker: markerMatch[1],
+        html: formatMarkdown(highlightInitialKeyword(markerMatch[2]), isDark)
+      };
+    }
+    return {
+      html: formatMarkdown(highlightInitialKeyword(line), isDark)
+    };
+  });
 }
 
 // Cores temáticas para os nós e colunas
@@ -85,7 +164,7 @@ const MATRIX_COLUMN_SOLID_COLORS: Record<string, string> = {
   amber: '#b45309',
 };
 
-export function InteractiveLessonPlayer({ content, lessonId }: InteractiveLessonPlayerProps) {
+export function InteractiveLessonPlayer({ content, lessonId, embeddedInModal = false }: InteractiveLessonPlayerProps) {
   const { currentUser } = useAuth();
   const userId = currentUser?.uid || 'guest';
 
@@ -137,7 +216,8 @@ export function InteractiveLessonPlayer({ content, lessonId }: InteractiveLesson
       mapData={mapData} 
       lessonId={lessonId} 
       contentId={content.id} 
-      userId={userId} 
+      userId={userId}
+      embeddedInModal={embeddedInModal}
     />
   );
 }
@@ -147,9 +227,10 @@ interface CoreProps {
   lessonId: string;
   contentId: string;
   userId: string;
+  embeddedInModal?: boolean;
 }
 
-function InteractivePlayerCore({ mapData, lessonId, contentId, userId }: CoreProps) {
+function InteractivePlayerCore({ mapData, lessonId, contentId, userId, embeddedInModal = false }: CoreProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Tema Claro como padrão (isDark = false)
@@ -329,7 +410,13 @@ function InteractivePlayerCore({ mapData, lessonId, contentId, userId }: CorePro
       } ${
         isFullscreen 
           ? 'fixed inset-0 z-50 w-screen h-screen flex flex-col overflow-hidden' 
-          : 'w-full h-full flex flex-col overflow-hidden'
+          : activeTab === 'mindmap'
+            ? embeddedInModal
+              ? 'w-full h-[calc(92vh-165px)] min-h-[460px] flex flex-col overflow-hidden rounded-xl border border-zinc-800/40'
+              : 'w-full h-[calc(100vh-176px)] lg:h-[calc(100vh-112px)] min-h-[560px] md:min-h-[640px] flex flex-col overflow-hidden'
+            : embeddedInModal
+              ? 'w-full min-h-[460px] h-auto flex flex-col overflow-visible rounded-xl border border-zinc-800/40'
+              : 'w-full min-h-[calc(100vh-176px)] lg:min-h-[calc(100vh-112px)] h-auto flex flex-col overflow-visible'
       }`}
     >
       {/* Header do Player */}
@@ -610,7 +697,13 @@ function InteractivePlayerCore({ mapData, lessonId, contentId, userId }: CorePro
       </nav>
 
       {/* Área Central de Conteúdo */}
-      <main className={`flex-1 min-h-0 relative overflow-hidden flex flex-col ${
+      <main className={`flex-1 relative flex flex-col ${
+        activeTab === 'mindmap'
+          ? 'min-h-0 overflow-hidden'
+          : isFullscreen
+            ? 'min-h-0 overflow-y-auto custom-scrollbar'
+            : 'h-auto overflow-visible'
+      } ${
         isDark ? 'bg-[#0a0c10]' : 'bg-[#f8fafc]'
       }`}>
         {activeTab === 'mindmap' && (
@@ -1497,22 +1590,66 @@ function MindmapTab({
             className="flex-1 p-5 overflow-y-auto overflow-x-auto space-y-4 custom-scrollbar"
             style={{ fontSize: `${panelFontScale * 0.875}rem` }}
           >
-            {/* 1. Pega a Visão (Resumo) */}
-            {selectedNode.detail?.resumo && (
-              <div className={`p-4 rounded-xl border ${
-                isDark 
-                  ? 'bg-gradient-to-br from-blue-950/40 to-indigo-950/20 border-blue-900/40 text-gray-200' 
-                  : 'bg-white border-slate-200 shadow-sm text-slate-700'
-              }`}>
-                <div className={`flex items-center gap-2 mb-2 ${isDark ? 'text-blue-400' : 'text-[#002060]'}`}>
-                  <Lightbulb size={16} />
-                  <span className="text-[10px] font-black uppercase tracking-wider">Pega a Visão</span>
+            {/* 1. Pega a Visão (Resumo Estruturado Verticalmente) */}
+            {selectedNode.detail?.resumo && (() => {
+              const pegaSegments = parsePegaAVisaoSegments(selectedNode.detail.resumo, isDark);
+              const hasMarkedItems = pegaSegments.some(seg => Boolean(seg.marker));
+
+              return (
+                <div className={`p-4 rounded-xl border ${
+                  isDark 
+                    ? 'bg-gradient-to-br from-blue-950/40 to-indigo-950/20 border-blue-900/40 text-gray-200' 
+                    : 'bg-white border-slate-200 shadow-sm text-slate-700'
+                }`}>
+                  <div className={`flex items-center gap-2 mb-2.5 ${isDark ? 'text-blue-400' : 'text-[#002060]'}`}>
+                    <Lightbulb size={16} />
+                    <span className="text-[10px] font-black uppercase tracking-wider">Pega a Visão</span>
+                  </div>
+                  <div className={`pega-a-visao-content font-medium ${isDark ? 'text-gray-200' : 'text-slate-700'}`}>
+                    {hasMarkedItems ? (
+                      <ul className="flex flex-col gap-2 list-none m-0 p-0">
+                        {pegaSegments.map((seg, idx) => (
+                          <li
+                            key={idx}
+                            className={
+                              seg.marker
+                                ? `flex items-start gap-2 rounded-lg px-2.5 py-1.5 border ${
+                                    isDark
+                                      ? 'bg-black/20 border-blue-900/30'
+                                      : 'bg-slate-50/80 border-slate-200/80'
+                                  }`
+                                : 'leading-[1.6]'
+                            }
+                          >
+                            {seg.marker && (
+                              <span
+                                className={`font-black text-xs shrink-0 mt-0.5 min-w-[1.25rem] ${
+                                  isDark ? 'text-blue-400' : 'text-[#002060]'
+                                }`}
+                              >
+                                {seg.marker}
+                              </span>
+                            )}
+                            <span
+                              className="flex-1 leading-[1.6]"
+                              dangerouslySetInnerHTML={{ __html: seg.html }}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      pegaSegments.map((seg, idx) => (
+                        <div
+                          key={idx}
+                          className="leading-[1.6]"
+                          dangerouslySetInnerHTML={{ __html: seg.html }}
+                        />
+                      ))
+                    )}
+                  </div>
                 </div>
-                <p className={`leading-relaxed font-medium ${isDark ? 'text-gray-200' : 'text-slate-700'}`}>
-                  {selectedNode.detail.resumo}
-                </p>
-              </div>
-            )}
+              );
+            })()}
 
             {/* 2. Texto da Lei (Lei Seca com Sanitização e incisos verticais) */}
             {selectedNode.detail?.lei_seca && selectedNode.detail.lei_seca.length > 0 && (
@@ -1563,9 +1700,9 @@ function MindmapTab({
                 </div>
                 <ul className="space-y-1.5">
                   {selectedNode.detail.checklist.map((item, idx) => (
-                    <li key={idx} className={`flex items-start gap-2 text-xs ${isDark ? 'text-gray-300' : 'text-slate-700'}`}>
+                    <li key={idx} className={`flex items-start gap-2 text-xs leading-relaxed ${isDark ? 'text-gray-300' : 'text-slate-700'}`}>
                       <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
-                      <span>{item}</span>
+                      <span dangerouslySetInnerHTML={{ __html: formatMarkdown(item, isDark) }} />
                     </li>
                   ))}
                 </ul>
@@ -1582,9 +1719,10 @@ function MindmapTab({
                   <Sparkles size={16} />
                   <span className="text-[10px] font-black uppercase tracking-wider">Exemplo Prático</span>
                 </div>
-                <p className={`text-xs leading-relaxed italic ${isDark ? 'text-gray-300' : 'text-slate-800'}`}>
-                  &ldquo;{selectedNode.detail.exemplo}&rdquo;
-                </p>
+                <p
+                  className={`text-xs leading-relaxed italic ${isDark ? 'text-gray-300' : 'text-slate-800'}`}
+                  dangerouslySetInnerHTML={{ __html: `&ldquo;${formatMarkdown(selectedNode.detail.exemplo, isDark)}&rdquo;` }}
+                />
               </div>
             )}
 
@@ -1598,9 +1736,10 @@ function MindmapTab({
                   <AlertTriangle size={16} />
                   <span className="text-[10px] font-black uppercase tracking-wider">Atenção / Pegadinha</span>
                 </div>
-                <p className={`text-xs leading-relaxed ${isDark ? 'text-amber-200 font-medium' : 'text-red-950 font-semibold'}`}>
-                  {selectedNode.detail.pegadinha}
-                </p>
+                <p
+                  className={`text-xs leading-relaxed ${isDark ? 'text-amber-200 font-medium' : 'text-red-950 font-semibold'}`}
+                  dangerouslySetInnerHTML={{ __html: formatMarkdown(selectedNode.detail.pegadinha, isDark) }}
+                />
               </div>
             )}
 
@@ -1664,7 +1803,7 @@ function MatricesTab({ matrices, isDark = false }: { matrices: InteractiveMatrix
   if (!currentMatrix) return null;
 
   return (
-    <div className="p-3.5 sm:p-6 max-w-6xl mx-auto space-y-5 sm:space-y-6 w-full h-full min-h-0 overflow-y-auto custom-scrollbar">
+    <div className="p-3.5 sm:p-6 max-w-6xl mx-auto space-y-5 sm:space-y-6 w-full h-auto">
       {/* Seletor de Quadros */}
       <div className={`flex flex-wrap items-center justify-between gap-3 border-b pb-4 ${isDark ? 'border-gray-800' : 'border-slate-200'}`}>
         <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar w-full sm:w-auto py-1">
@@ -1712,7 +1851,10 @@ function MatricesTab({ matrices, isDark = false }: { matrices: InteractiveMatrix
             {currentMatrix.title}
           </h3>
           {currentMatrix.subtitle && (
-            <p className={`text-xs mt-0.5 ${isDark ? 'text-gray-400' : 'text-slate-500'}`}>{currentMatrix.subtitle}</p>
+            <p
+              className={`text-xs mt-0.5 ${isDark ? 'text-gray-400' : 'text-slate-500'}`}
+              dangerouslySetInnerHTML={{ __html: formatMarkdown(currentMatrix.subtitle, isDark) }}
+            />
           )}
         </div>
 
@@ -1737,7 +1879,7 @@ function MatricesTab({ matrices, isDark = false }: { matrices: InteractiveMatrix
                           : 'border-slate-300 text-white font-bold'
                       }`}
                     >
-                      {col.label}
+                      {col.label.replace(/\*\*/g, '')}
                     </th>
                   );
                 })}
@@ -1765,7 +1907,7 @@ function MatricesTab({ matrices, isDark = false }: { matrices: InteractiveMatrix
                             ? 'text-gray-300 border-gray-800/60' 
                             : 'text-slate-800 border-slate-200'
                         }`}
-                        dangerouslySetInnerHTML={{ __html: sanitizeInteractiveHtml(cell) }}
+                        dangerouslySetInnerHTML={{ __html: formatMarkdown(cell, isDark) }}
                       />
                     ))}
                   </tr>
@@ -1791,9 +1933,10 @@ function MatricesTab({ matrices, isDark = false }: { matrices: InteractiveMatrix
               }`}>
                 Síntese de Ouro
               </span>
-              <p className={`text-xs font-semibold leading-relaxed ${isDark ? 'text-red-200' : 'text-slate-800'}`}>
-                {currentMatrix.callout}
-              </p>
+              <div
+                className={`text-xs font-semibold leading-relaxed ${isDark ? 'text-red-200' : 'text-slate-800'}`}
+                dangerouslySetInnerHTML={{ __html: formatMarkdown(currentMatrix.callout, isDark) }}
+              />
             </div>
           </div>
         )}
@@ -1835,6 +1978,14 @@ function QuestoesTab({
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showQuestionHistory, setShowQuestionHistory] = useState(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+  const questionsStripRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollQuestionsStrip = useCallback((direction: 'left' | 'right') => {
+    const strip = questionsStripRef.current;
+    if (!strip) return;
+    const offset = direction === 'left' ? -320 : 320;
+    strip.scrollBy({ left: offset, behavior: 'smooth' });
+  }, []);
 
   // 1. Questões pertencentes à bateria atual (ou todas)
   const currentBatteryQuestions = useMemo(() => {
@@ -1894,6 +2045,16 @@ function QuestoesTab({
       setCurrentIndex(filteredQuestoes.length - 1);
     }
   }, [filteredQuestoes.length, currentIndex]);
+
+  // Mantém a pílula da questão ativa sempre visível e centralizada na fita horizontal (para baterias de 50 a 100+ questões)
+  useEffect(() => {
+    const strip = questionsStripRef.current;
+    if (!strip) return;
+    const activeBtn = strip.querySelector<HTMLButtonElement>(`[data-q-idx="${currentIndex}"]`);
+    if (!activeBtn) return;
+    const targetLeft = activeBtn.offsetLeft - strip.clientWidth / 2 + activeBtn.clientWidth / 2;
+    strip.scrollTo({ left: Math.max(0, targetLeft), behavior: 'smooth' });
+  }, [currentIndex, filteredQuestoes.length]);
 
   // 1. Estatísticas Gerais e da Bateria para as barras de progresso e desempenho
   const stats = useMemo(() => {
@@ -2068,7 +2229,7 @@ function QuestoesTab({
   const artigoVinculado = currentQ ? ((currentQ as any).artigo || (currentQ as any).artigos || (currentQ as any).lei) : null;
 
   return (
-    <div className={`p-3 sm:p-4 md:p-6 w-full h-full min-h-0 flex flex-col space-y-4 max-w-7xl mx-auto overflow-y-auto md:overflow-hidden custom-scrollbar ${
+    <div className={`p-3 sm:p-4 md:p-6 w-full h-auto flex flex-col space-y-4 max-w-7xl mx-auto overflow-visible ${
       isDark ? 'text-gray-100' : 'text-slate-800'
     }`}>
       {/* 1. BARRAS DE PROGRESSO GERAL E DESEMPENHO DA BATERIA */}
@@ -2286,44 +2447,118 @@ function QuestoesTab({
         </button>
       </div>
 
-      {/* Pílulas de Navegação Rápida (01, 02, 03...) */}
+      {/* Navegação da Fita de Questões (01, 02... 100) com rolagem horizontal estilizada, setas laterais e seletor rápido */}
       {filteredQuestoes.length > 0 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto hide-scrollbar shrink-0 py-1">
-          {filteredQuestoes.map((q, idx) => {
-            const ans = questionAnswers[q.numero];
-            const isAnswered = ans?.revealed && ans?.selected;
-            const isRight = isAnswered && ans.selected === q.gabarito;
-            const isWrong = isAnswered && ans.selected !== q.gabarito;
-            const isCurrent = idx === currentIndex;
-            const numLabel = String(idx + 1).padStart(2, '0');
+        <div className="flex items-center gap-2 shrink-0 w-full min-w-0">
+          {/* Botão Seta Esquerda (◀) */}
+          <button
+            type="button"
+            onClick={() => scrollQuestionsStrip('left')}
+            className={`h-8 w-8 rounded-lg border flex items-center justify-center shrink-0 transition-colors ${
+              isDark
+                ? 'bg-[#12151c] border-gray-800 text-gray-300 hover:text-white hover:bg-gray-800'
+                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100 hover:text-[#002060] shadow-sm'
+            }`}
+            title="Rolar fita de questões para a esquerda"
+            aria-label="Rolar questões para a esquerda"
+          >
+            <ChevronLeft size={16} />
+          </button>
 
-            return (
-              <button
-                key={q.numero}
-                onClick={() => setCurrentIndex(idx)}
-                className={`h-7 px-2 rounded-lg text-xs font-black flex items-center justify-center shrink-0 border transition-all ${
-                  isCurrent 
-                    ? (isDark 
-                        ? 'border-white text-white bg-white/20 scale-105 shadow-md' 
-                        : 'border-[#002060] bg-[#002060] text-white scale-105 shadow-md')
-                    : isRight 
-                      ? (isDark ? 'bg-emerald-950/60 border-emerald-600 text-emerald-300' : 'bg-emerald-100 border-emerald-400 text-emerald-800')
-                      : isWrong 
-                        ? (isDark ? 'bg-red-950/60 border-red-600 text-red-300' : 'bg-red-100 border-red-400 text-red-800')
-                        : (isDark ? 'bg-gray-900 border-gray-800 text-gray-400 hover:text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100 shadow-sm')
-                }`}
-                title={`Questão ${numLabel}${isAnswered ? (isRight ? ' (Correta)' : ' (Incorreta)') : ''}`}
-              >
-                {numLabel}
-              </button>
-            );
-          })}
+          {/* Fita horizontal rolável sem corte de botões */}
+          <div
+            ref={questionsStripRef}
+            className="questions-nav-strip flex-1 min-w-0 items-center py-1"
+          >
+            {filteredQuestoes.map((q, idx) => {
+              const ans = questionAnswers[q.numero];
+              const isAnswered = ans?.revealed && ans?.selected;
+              const isRight = isAnswered && ans.selected === q.gabarito;
+              const isWrong = isAnswered && ans.selected !== q.gabarito;
+              const isCurrent = idx === currentIndex;
+              const numLabel = String(idx + 1).padStart(2, '0');
+
+              return (
+                <button
+                  key={q.numero}
+                  type="button"
+                  data-q-idx={idx}
+                  onClick={() => setCurrentIndex(idx)}
+                  className={`h-7 px-2.5 rounded-lg text-xs font-black tabular-nums flex items-center justify-center shrink-0 border transition-all ${
+                    isCurrent 
+                      ? (isDark 
+                          ? 'border-white text-white bg-white/20 scale-105 shadow-md' 
+                          : 'border-[#002060] bg-[#002060] text-white scale-105 shadow-md')
+                      : isRight 
+                        ? (isDark ? 'bg-emerald-950/60 border-emerald-600 text-emerald-300' : 'bg-emerald-100 border-emerald-400 text-emerald-800')
+                        : isWrong 
+                          ? (isDark ? 'bg-red-950/60 border-red-600 text-red-300' : 'bg-red-100 border-red-400 text-red-800')
+                          : (isDark ? 'bg-gray-900 border-gray-800 text-gray-400 hover:text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100 shadow-sm')
+                  }`}
+                  title={`Questão ${numLabel}${isAnswered ? (isRight ? ' (Correta)' : ' (Incorreta)') : ''}`}
+                >
+                  {numLabel}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Botão Seta Direita (▶) */}
+          <button
+            type="button"
+            onClick={() => scrollQuestionsStrip('right')}
+            className={`h-8 w-8 rounded-lg border flex items-center justify-center shrink-0 transition-colors ${
+              isDark
+                ? 'bg-[#12151c] border-gray-800 text-gray-300 hover:text-white hover:bg-gray-800'
+                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100 hover:text-[#002060] shadow-sm'
+            }`}
+            title="Rolar fita de questões para a direita"
+            aria-label="Rolar questões para a direita"
+          >
+            <ChevronRight size={16} />
+          </button>
+
+          {/* Seletor rápido direto "Ir para: [ Q01 ▾ ]" */}
+          <div className="flex items-center gap-1.5 shrink-0 pl-1">
+            <label
+              htmlFor="quick-jump-question-select"
+              className={`hidden sm:inline text-[11px] font-bold whitespace-nowrap ${
+                isDark ? 'text-gray-400' : 'text-slate-600'
+              }`}
+            >
+              Ir para:
+            </label>
+            <select
+              id="quick-jump-question-select"
+              value={currentIndex}
+              onChange={e => setCurrentIndex(Number(e.target.value))}
+              className={`h-8 rounded-lg px-2 text-xs font-black tabular-nums outline-none transition-colors border cursor-pointer ${
+                isDark
+                  ? 'bg-[#12151c] border-gray-800 text-white focus:border-blue-500'
+                  : 'bg-white border-slate-200 text-[#002060] focus:border-[#002060] shadow-sm'
+              }`}
+              title="Navegar diretamente para qualquer questão da bateria"
+            >
+              {filteredQuestoes.map((q, idx) => {
+                const ans = questionAnswers[q.numero];
+                const isAnswered = Boolean(ans?.revealed && ans?.selected);
+                const isRight = isAnswered && ans.selected === q.gabarito;
+                const numLabel = String(idx + 1).padStart(2, '0');
+                const statusSuffix = isAnswered ? (isRight ? ' ✓' : ' ✗') : '';
+                return (
+                  <option key={q.numero} value={idx}>
+                    Q{numLabel}{statusSuffix}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
         </div>
       )}
 
       {/* Se não houver questões no filtro atual */}
       {filteredQuestoes.length === 0 ? (
-        <div className={`flex-1 min-h-0 flex flex-col items-center justify-center p-8 rounded-2xl border text-center space-y-3 ${
+        <div className={`flex-1 flex flex-col items-center justify-center p-8 rounded-2xl border text-center space-y-3 ${
           isDark ? 'bg-[#0f121a] border-gray-800' : 'bg-white border-slate-200 shadow-sm'
         }`}>
           <CheckCircle2 size={40} className="text-emerald-500 mx-auto" />
@@ -2359,11 +2594,11 @@ function QuestoesTab({
           </div>
         </div>
       ) : (
-        /* LAYOUT EM 2 COLUNAS (Mobile: empilhado flex-col | Desktop: lado a lado md:flex-row) */
-        <div className={`flex flex-col ${showSidePanel ? 'md:flex-row' : 'flex-col'} gap-5 flex-1 min-h-0 overflow-visible md:overflow-hidden`}>
+        /* LAYOUT EM 2 COLUNAS (Mobile: empilhado flex-col | Desktop: lado a lado md:flex-row com altura natural sem barra interna) */
+        <div className={`flex flex-col ${showSidePanel ? 'md:flex-row md:items-start' : 'flex-col'} gap-5 flex-1 h-auto overflow-visible`}>
           {/* COLUNA ESQUERDA (Questão) */}
-          <div className={`${showSidePanel ? 'w-full md:flex-1' : 'w-full'} flex flex-col min-h-0 md:h-full md:overflow-hidden shrink-0 md:shrink`}>
-            <div className={`flex-1 min-h-0 flex flex-col rounded-2xl border p-4 sm:p-5 md:p-6 shadow-sm overflow-hidden ${
+          <div className={`${showSidePanel ? 'w-full md:flex-1 min-w-0' : 'w-full'} flex flex-col h-auto overflow-visible`}>
+            <div className={`flex flex-col h-auto max-h-none rounded-2xl border p-4 sm:p-5 md:p-6 shadow-sm overflow-visible ${
               isDark 
                 ? 'bg-[#0f121a] border-gray-800 text-gray-100 shadow-xl' 
                 : 'bg-white border-slate-200 text-slate-800'
@@ -2407,8 +2642,8 @@ function QuestoesTab({
                 )}
               </div>
 
-              {/* Corpo Rolável da Questão: Enunciado e Alternativas */}
-              <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1 space-y-5">
+              {/* Corpo da Questão: Enunciado e Alternativas com fluxo natural sem scroll interno */}
+              <div className="h-auto max-h-none overflow-visible space-y-5">
                 {/* Enunciado */}
                 <p className={`text-sm md:text-base font-medium leading-relaxed whitespace-pre-line ${
                   isDark ? 'text-gray-100' : 'text-slate-800'
@@ -2416,8 +2651,8 @@ function QuestoesTab({
                   {enunciado}
                 </p>
 
-                {/* Alternativas A-E */}
-                <div className="space-y-3 pt-2">
+                {/* Alternativas A-E (sem max-height e sem barra de rolagem interna) */}
+                <div className="alternatives-container max-h-none h-auto overflow-y-visible overflow-x-hidden flex flex-col gap-2.5 pt-2">
                   {Object.entries(alternativas || {}).map(([letter, text]) => {
                     const isSelected = currentAns.selected === letter;
                     const isEliminated = eliminatedList.includes(letter);
@@ -2539,7 +2774,7 @@ function QuestoesTab({
 
               {/* Rodapé quando painel lateral está oculto */}
               {!showSidePanel && (
-                <div className={`pt-4 mt-3 border-t flex flex-wrap items-center justify-between gap-3 shrink-0 ${
+                <div className={`pt-4 mt-4 border-t flex flex-wrap items-center justify-between gap-3 shrink-0 ${
                   isDark ? 'border-gray-800' : 'border-slate-200'
                 }`}>
                   <div className="flex items-center gap-2">
@@ -2585,8 +2820,8 @@ function QuestoesTab({
 
           {/* COLUNA DIREITA (Gabarito & Comentário) */}
           {showSidePanel && (
-            <div className="w-full md:w-[380px] lg:w-[440px] shrink-0 flex flex-col min-h-0 md:h-full md:overflow-hidden">
-              <div className={`flex-1 min-h-0 flex flex-col rounded-2xl border p-4 sm:p-5 shadow-sm overflow-hidden ${
+            <div className="w-full md:w-[380px] lg:w-[440px] shrink-0 flex flex-col h-auto overflow-visible">
+              <div className={`flex flex-col h-auto max-h-none rounded-2xl border p-4 sm:p-5 shadow-sm overflow-visible ${
                 isDark 
                   ? 'bg-[#0f121a] border-gray-800 text-gray-100 shadow-xl' 
                   : 'bg-white border-slate-200 text-slate-800'
@@ -2646,25 +2881,26 @@ function QuestoesTab({
                   )}
                 </div>
 
-                {/* Comentário do Professor com rolagem própria */}
-                <div className="flex-1 min-h-0 flex flex-col pt-3 overflow-hidden">
+                {/* Comentário do Professor com altura natural */}
+                <div className="flex flex-col pt-3 h-auto overflow-visible">
                   <span className={`text-[11px] font-black uppercase tracking-wider block mb-2 ${
                     isDark ? 'text-gray-400' : 'text-slate-500'
                   }`}>
                     💡 Comentário do Professor
                   </span>
 
-                  <div className={`flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 rounded-xl border ${
+                  <div className={`h-auto max-h-none overflow-visible p-4 rounded-xl border ${
                     isDark ? 'bg-[#141822] border-gray-800' : 'bg-slate-50 border-slate-200'
                   }`}>
                     {currentAns.revealed ? (
                       currentQ.comentario ? (
                         <div className="space-y-2">
-                          <p className={`text-xs md:text-sm leading-relaxed whitespace-pre-line font-medium ${
-                            isDark ? 'text-gray-200' : 'text-slate-800'
-                          }`}>
-                            {currentQ.comentario}
-                          </p>
+                          <div
+                            className={`text-xs md:text-sm leading-relaxed whitespace-pre-line font-medium ${
+                              isDark ? 'text-gray-200' : 'text-slate-800'
+                            }`}
+                            dangerouslySetInnerHTML={{ __html: formatMarkdown(currentQ.comentario, isDark) }}
+                          />
                         </div>
                       ) : (
                         <p className={`text-xs italic ${isDark ? 'text-gray-400' : 'text-slate-500'}`}>
@@ -2672,7 +2908,7 @@ function QuestoesTab({
                         </p>
                       )
                     ) : (
-                      <div className="h-full flex flex-col items-center justify-center text-center p-4 space-y-2">
+                      <div className="py-8 flex flex-col items-center justify-center text-center px-4 space-y-2">
                         <BookOpen size={24} className={isDark ? 'text-gray-600' : 'text-slate-400'} />
                         <p className={`text-xs font-medium ${isDark ? 'text-gray-400' : 'text-slate-500'}`}>
                           Selecione uma alternativa e clique em <strong>Revelar Gabarito</strong> para conferir sua resposta e desbloquear a fundamentação do professor.
@@ -2683,7 +2919,7 @@ function QuestoesTab({
                 </div>
 
                 {/* Rodapé com Navegação: Anterior / Próxima */}
-                <div className={`pt-4 mt-3 border-t flex items-center justify-between gap-2 shrink-0 ${
+                <div className={`pt-4 mt-4 border-t flex items-center justify-between gap-2 shrink-0 ${
                   isDark ? 'border-gray-800' : 'border-slate-100'
                 }`}>
                   <button
@@ -2956,7 +3192,7 @@ function FlashcardsTab({
     : currentCard.bateria_id;
 
   return (
-    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6 w-full h-full min-h-0 overflow-y-auto custom-scrollbar flex flex-col justify-start">
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6 w-full h-auto flex flex-col justify-start">
       {/* 1. Barra superior dos Flashcards (ocupando a largura total com justify-between) */}
       <div className={`w-full max-w-[780px] mx-auto flex flex-wrap items-center justify-between gap-3 pb-4 border-b ${
         isDark ? 'border-gray-800' : 'border-slate-200'

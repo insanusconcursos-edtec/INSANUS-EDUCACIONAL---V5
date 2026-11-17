@@ -1228,18 +1228,17 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   app.get('/api/panda-explorer', async (req, res) => {
     try {
       const apiKey = process.env.PANDA_API_KEY;
+      if (!apiKey) {
+        return res.status(500).json({ success: false, error: "PANDA_API_KEY não configurada no ambiente." });
+      }
       const folderId = req.query.folderId as string | undefined;
+      const isRoot = !folderId || folderId === 'root' || folderId === 'null' || folderId === '';
 
-      // URLs para pastas e vídeos
-      // Buscamos todas as pastas para filtrar em memória (hierarquia cega)
-      // Para vídeos, buscamos com limite alto para garantir que pegamos os da pasta ou da raiz
       const foldersUrl = 'https://api-v2.pandavideo.com.br/folders';
       let videosUrl = 'https://api-v2.pandavideo.com.br/videos?limit=1000';
 
-      // Se tivermos um folderId, podemos tentar otimizar a busca de vídeos na API, 
-      // mas manteremos o filtro em memória para garantir a hierarquia correta
-      if (folderId && folderId !== 'root' && folderId !== 'null') {
-        videosUrl += `&folder_id=${folderId}`;
+      if (!isRoot && folderId) {
+        videosUrl += `&folder_id=${encodeURIComponent(folderId)}`;
       }
 
       const headers = {
@@ -1247,7 +1246,6 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
         'Accept': 'application/json'
       };
 
-      // Requisições paralelas
       const [foldersRes, videosRes] = await Promise.all([
         fetch(foldersUrl, { method: 'GET', headers }),
         fetch(videosUrl, { method: 'GET', headers })
@@ -1261,61 +1259,134 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
       const videosData = await videosRes.json();
 
       const foldersArray: PandaFolder[] = foldersData.folders || (Array.isArray(foldersData) ? foldersData : []);
-      const videosArray: PandaVideo[] = videosData.videos || (Array.isArray(videosData) ? videosData : []);
+      const videosArray: PandaVideo[] = [...(videosData.videos || (Array.isArray(videosData) ? videosData : []))];
 
-      const targetFolderId = req.query.folderId as string | undefined;
-      const isRoot = !targetFolderId || targetFolderId === 'root' || targetFolderId === 'null' || targetFolderId === '';
+      // Paginação defensiva caso a pasta tenha mais páginas de vídeos
+      const totalPages = Number(videosData.pages || 1);
+      if (!isRoot && folderId && totalPages > 1) {
+        const maxPages = Math.min(totalPages, 10);
+        const extraPromises: Promise<PandaVideo[]>[] = [];
+        for (let page = 2; page <= maxPages; page++) {
+          const pageUrl = `${videosUrl}&page=${page}`;
+          extraPromises.push(
+            fetch(pageUrl, { method: 'GET', headers })
+              .then(r => (r.ok ? r.json() : { videos: [] }))
+              .then(d => d.videos || (Array.isArray(d) ? d : []))
+              .catch(() => [])
+          );
+        }
+        const extraPages = await Promise.all(extraPromises);
+        const seenIds = new Set(videosArray.map(v => v.id));
+        for (const pageVideos of extraPages) {
+          for (const v of pageVideos) {
+            if (v?.id && !seenIds.has(v.id)) {
+              seenIds.add(v.id);
+              videosArray.push(v);
+            }
+          }
+        }
+      }
 
-      // Filtro Rigoroso de Hierarquia para Pastas com checagem defensiva de propriedades
-      const strictFolders = foldersArray.filter((folder: PandaFolder) => {
-        // O Panda pode usar diferentes nomenclaturas. Capturamos todas:
-        const parentId = folder.parent_folder_id || folder.parent_id || folder.parentId || null;
+      const getParentId = (f: PandaFolder): string | null => {
+        const raw = f.parent_folder_id || f.parent_id || f.parentId || null;
+        if (!raw || raw === 'null' || raw === '') return null;
+        return String(raw);
+      };
 
-        if (isRoot) {
-          // Estamos na RAIZ. Só queremos pastas "órfãs" (sem pai)
-          return !parentId || parentId === 'null' || parentId === '';
+      const folderMap = new Map<string, PandaFolder>();
+      for (const f of foldersArray) {
+        if (f?.id) folderMap.set(String(f.id), f);
+      }
+
+      let folderNotFound = false;
+      let currentFolder: { id: string; name: string; parentId: string | null } | null = null;
+      const breadcrumbs: Array<{ id: string; name: string }> = [];
+
+      if (!isRoot && folderId) {
+        const targetObj = folderMap.get(String(folderId));
+        if (!targetObj) {
+          folderNotFound = true;
         } else {
-          // Estamos dentro de uma pasta. Só queremos as filhas dela
-          return String(parentId) === String(targetFolderId);
+          currentFolder = {
+            id: String(targetObj.id),
+            name: targetObj.name || targetObj.title || 'Pasta sem nome',
+            parentId: getParentId(targetObj)
+          };
+          const visited = new Set<string>();
+          let cursor: PandaFolder | undefined = targetObj;
+          while (cursor && !visited.has(String(cursor.id))) {
+            visited.add(String(cursor.id));
+            breadcrumbs.unshift({
+              id: String(cursor.id),
+              name: cursor.name || cursor.title || 'Pasta sem nome'
+            });
+            const pId = getParentId(cursor);
+            cursor = pId ? folderMap.get(pId) : undefined;
+          }
+        }
+      }
+
+      const strictFolders = foldersArray.filter((folder: PandaFolder) => {
+        const parentId = getParentId(folder);
+        if (isRoot) {
+          return !parentId;
+        } else {
+          return String(parentId) === String(folderId);
         }
       });
 
-      // Ordenação alfabética das pastas
-      strictFolders.sort((a, b) => (a.name || a.title || '').localeCompare(b.name || b.title || ''));
+      strictFolders.sort((a, b) =>
+        (a.name || a.title || '').localeCompare(b.name || b.title || '', 'pt-BR', { numeric: true, sensitivity: 'base' })
+      );
 
       const folders = strictFolders.map((f) => ({
         id: f.id,
-        name: f.name || f.title || 'Pasta sem nome'
+        name: f.name || f.title || 'Pasta sem nome',
+        parentId: getParentId(f)
       }));
 
-      // Filtro Rigoroso de Hierarquia para Vídeos
+      // Filtro Rigoroso de Hierarquia para Vídeos (somente vídeos diretos da pasta selecionada)
       const strictVideos = videosArray.filter((video: PandaVideo) => {
-        const videoFolderId = video.folder_id || video.folderId || null;
+        const rawFolderId = video.folder_id || video.folderId || null;
+        const videoFolderId = !rawFolderId || rawFolderId === 'null' || rawFolderId === '' ? null : String(rawFolderId);
         if (isRoot) {
-          // Se estamos na RAIZ, só queremos vídeos que NÃO estejam em nenhuma pasta
-          return !videoFolderId || videoFolderId === 'null' || videoFolderId === '';
+          return !videoFolderId;
         } else {
-          // Se estamos dentro de uma pasta, só queremos os vídeos dela
-          return String(videoFolderId) === String(targetFolderId);
+          return videoFolderId === String(folderId);
         }
       });
 
-      // Ordenação alfabética dos vídeos
-      strictVideos.sort((a, b) => (a.title || a.name || '').localeCompare(b.title || b.name || ''));
+      strictVideos.sort((a, b) =>
+        (a.title || a.name || '').localeCompare(b.title || b.name || '', 'pt-BR', { numeric: true, sensitivity: 'base' })
+      );
 
-      const videos = strictVideos.map((v: PandaVideo) => ({
-        id: v.id,
-        video_id: v.video_id || v.id,
-        panda_id: v.video_id || v.id,
-        external_id: (v as any).external_id || null,
-        playback_id: (v as any).playback_id || null,
-        title: v.title || v.name || 'Sem título',
-        video_player_url: v.video_player_url || v.embed_url || null,
-        length: v.length || 0,
-        folder_id: v.folder_id || v.folderId || null
-      }));
+      const videos = strictVideos.map((v: PandaVideo) => {
+        const raw = v as unknown as Record<string, unknown>;
+        return {
+          id: v.id,
+          video_id: v.video_id || v.id,
+          panda_id: v.video_id || v.id,
+          external_id: (raw.external_id as string) || (raw.video_external_id as string) || null,
+          video_external_id: (raw.video_external_id as string) || (raw.external_id as string) || null,
+          playback_id: (raw.playback_id as string) || null,
+          title: v.title || v.name || 'Sem título',
+          video_player: (raw.video_player as string) || null,
+          video_player_url: v.video_player_url || v.embed_url || (raw.video_player as string) || null,
+          length: v.length || (raw.duration as number) || 0,
+          status: (raw.status as string) || null,
+          created_at: (raw.created_at as string) || (raw.createdAt as string) || null,
+          folder_id: v.folder_id || v.folderId || null
+        };
+      });
 
-      return res.status(200).json({ success: true, folders, videos });
+      return res.status(200).json({
+        success: true,
+        folders,
+        videos,
+        breadcrumbs,
+        currentFolder,
+        folderNotFound
+      });
     } catch (error) {
       console.error("Erro no Explorer do Panda:", error);
       return res.status(500).json({ success: false, error: "Falha ao navegar no Panda Video." });

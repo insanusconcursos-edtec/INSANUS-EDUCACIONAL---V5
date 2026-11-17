@@ -156,6 +156,29 @@
         "newAlternative": { "type": "string" }
       },
       "required": ["classId", "examId", "userId", "questionNumber", "type", "justification", "status"]
+    },
+    "GuidedStudyMeta": {
+      "title": "GuidedStudyMeta",
+      "description": "A scheduled Guided Study goal for a presential class, including video lessons, PDFs, questions, dry law, flashcards, summaries, and interactive .JSON maps.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "classId": { "type": "string" },
+        "date": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["aula", "material", "questoes", "lei_seca", "flashcards", "resumo", "interactive_map"]
+        },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "disciplineName": { "type": "string" },
+        "duration": { "type": "number" },
+        "color": { "type": "string" },
+        "interactiveMapJson": { "type": "string" },
+        "interactiveMapUrl": { "type": "string" },
+        "interactiveMapFileName": { "type": "string" }
+      },
+      "required": ["classId", "date", "type", "title"]
     }
   },
   "firestore": {
@@ -186,6 +209,10 @@
     "simulated_resources/{resourceId}": {
       "schema": "SimulatedResource",
       "description": "Collection of students resources/appeals for exam questions."
+    },
+    "guided_study_metas/{metaId}": {
+      "schema": "GuidedStudyMeta",
+      "description": "Collection of Guided Study scheduled metas for presential classes."
     }
   }
 }

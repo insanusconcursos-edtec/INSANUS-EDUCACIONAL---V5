@@ -25,6 +25,7 @@ import {
 import { ref, uploadBytes, getDownloadURL, deleteObject, getBlob } from 'firebase/storage';
 import { OnlineCourse, CourseFormData, CourseSection, CourseModule, CourseModuleGroup, CourseSubModule, CourseLesson, CourseContent, CourseStructureModule, CourseStructureFolder } from '../types/course';
 import { CourseEditalStructure } from '../types/courseEdital';
+import { extractPandaIdFromEmbedUrl } from '../utils/pandaUtils';
 
 const COLLECTION_NAME = 'online_courses';
 const SECTIONS_COLLECTION = 'course_sections';
@@ -1968,6 +1969,139 @@ export const courseService = {
     }
 
     return removedIds;
+  },
+
+  // --- CADASTRAMENTO EM LOTE PANDA VÍDEO ---
+
+  getExistingPandaVideoKeys: async (
+    moduleId: string,
+    subModuleId: string | null
+  ): Promise<{ videoIds: string[]; playbackIds: string[] }> => {
+    try {
+      const qLessons = query(
+        collection(db, LESSONS_COLLECTION),
+        where('moduleId', '==', moduleId)
+      );
+      const lessonsSnap = await getDocs(qLessons);
+      const targetSubId = subModuleId || null;
+      const lessonIds = lessonsSnap.docs
+        .filter((d) => (d.data().subModuleId || null) === targetSubId)
+        .map((d) => d.id);
+
+      const videoIds = new Set<string>();
+      const playbackIds = new Set<string>();
+
+      // Consultar conteúdos em fatias de 10 (limite seguro da cláusula 'in' no Firestore)
+      for (let i = 0; i < lessonIds.length; i += 10) {
+        const chunk = lessonIds.slice(i, i + 10);
+        const qContents = query(
+          collection(db, CONTENTS_COLLECTION),
+          where('lessonId', 'in', chunk)
+        );
+        const contentsSnap = await getDocs(qContents);
+        contentsSnap.docs.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (data.pandaVideoId && typeof data.pandaVideoId === 'string') {
+            videoIds.add(data.pandaVideoId);
+          }
+          if (data.type === 'video' && typeof data.videoUrl === 'string') {
+            const extracted = extractPandaIdFromEmbedUrl(data.videoUrl);
+            if (extracted) {
+              playbackIds.add(extracted);
+            }
+          }
+        });
+      }
+
+      return {
+        videoIds: Array.from(videoIds),
+        playbackIds: Array.from(playbackIds)
+      };
+    } catch (error) {
+      console.error('Erro ao verificar vídeos Panda já cadastrados na pasta:', error);
+      return { videoIds: [], playbackIds: [] };
+    }
+  },
+
+  createPandaLessonsBatch: async (params: {
+    moduleId: string;
+    subModuleId: string | null;
+    groupId: string | null;
+    startingOrder: number;
+    items: Array<{
+      title: string;
+      videoUrl: string;
+      pandaVideoId: string;
+    }>;
+    linkPandaFolder?: {
+      subModuleId: string;
+      pandaFolderId: string | null;
+      pandaFolderName: string | null;
+      pandaFolderPath: string | null;
+    } | null;
+  }): Promise<CourseLesson[]> => {
+    try {
+      const createdLessons: CourseLesson[] = [];
+      const CHUNK_SIZE = 150; // 150 aulas * 2 docs = 300 ops (< 500 limite do Firestore writeBatch)
+
+      for (let i = 0; i < params.items.length; i += CHUNK_SIZE) {
+        const slice = params.items.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+
+        slice.forEach((item, offset) => {
+          const currentOrder = params.startingOrder + i + offset;
+          const lessonRef = doc(collection(db, LESSONS_COLLECTION));
+          const contentRef = doc(collection(db, CONTENTS_COLLECTION));
+
+          const lessonPayload = {
+            moduleId: params.moduleId,
+            subModuleId: params.subModuleId || null,
+            groupId: params.groupId || null,
+            title: item.title,
+            coverUrl: '',
+            order: currentOrder,
+            type: 'video' as const,
+            videoCount: 1,
+            pdfCount: 0,
+            isProduction: false
+          };
+
+          batch.set(lessonRef, lessonPayload);
+
+          batch.set(contentRef, {
+            lessonId: lessonRef.id,
+            title: item.title,
+            type: 'video' as const,
+            order: 1,
+            videoUrl: item.videoUrl,
+            videoPlatform: 'panda' as const,
+            pandaVideoId: item.pandaVideoId || null
+          });
+
+          createdLessons.push({
+            id: lessonRef.id,
+            ...lessonPayload
+          });
+        });
+
+        // No último lote, se houver vínculo de pasta Panda, persiste junto atomicamente
+        if (i + CHUNK_SIZE >= params.items.length && params.linkPandaFolder?.subModuleId) {
+          const folderRef = doc(db, SUBMODULES_COLLECTION, params.linkPandaFolder.subModuleId);
+          batch.update(folderRef, {
+            pandaFolderId: params.linkPandaFolder.pandaFolderId || null,
+            pandaFolderName: params.linkPandaFolder.pandaFolderName || null,
+            pandaFolderPath: params.linkPandaFolder.pandaFolderPath || null
+          });
+        }
+
+        await batch.commit();
+      }
+
+      return createdLessons;
+    } catch (error) {
+      console.error('Erro ao criar aulas em lote do Panda Vídeo:', error);
+      throw error;
+    }
   }
 };
 

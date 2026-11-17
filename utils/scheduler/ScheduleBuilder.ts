@@ -1,7 +1,7 @@
 import { Class } from '../../types/class';
 import { Topic, Module, Subject } from '../../types/curriculum';
 import { Teacher } from '../../types/teacher';
-import { ClassScheduleEvent, ScheduleGap, ScheduleException, ScheduleAlert } from '../../types/schedule';
+import { ClassScheduleEvent, ScheduleGap, ScheduleException, ScheduleAlert, ScheduledModuleLink } from '../../types/schedule';
 import { checkTeacherAvailability, checkGeographicLock, checkClassConflict, isTeacherExclusiveToWeekends } from './ResourceValidator';
 import { generateEmptySlots, TimeSlot } from './TimeSlotGenerator';
 import { addDays, parseISO, isAfter, getDay, differenceInDays } from 'date-fns';
@@ -16,6 +16,7 @@ interface TopicPoolItem {
     module: Module;
     partIndex: number;
     totalParts: number;
+    linkedModules: ScheduledModuleLink[];
   }[];
   lastScheduledDate: string | null;
 }
@@ -35,14 +36,50 @@ export const buildSchedule = (
   // Inject holidays immediately
   holidays.forEach(h => gaps.push({ date: h, reason: 'HOLIDAY', description: 'Feriado / Recesso' }));
 
-  const pool: TopicPoolItem[] = selectedTopics.map(topic => {
-    const remainingModules: { module: Module; partIndex: number; totalParts: number }[] = [];
+  const sortedSelectedTopics = [...selectedTopics]
+    .filter(t => t.isSelected !== false)
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  const lastSlotBySubject = new Map<string, { linkedModules: ScheduledModuleLink[] }>();
+
+  const pool: TopicPoolItem[] = sortedSelectedTopics.map(topic => {
+    const remainingModules: {
+      module: Module;
+      partIndex: number;
+      totalParts: number;
+      linkedModules: ScheduledModuleLink[];
+    }[] = [];
     
     if (topic.modules && topic.modules.length > 0) {
       topic.modules.forEach(module => {
         if (module.isSelected !== false && !module.isOnline) {
-          for (let i = 0; i < module.classesCount; i++) {
-            remainingModules.push({ module, partIndex: i + 1, totalParts: module.classesCount });
+          const isGrouped = Boolean(module.groupedWithPrevious) || Number(module.classesCount) === 0;
+          const prevSubjectSlot = lastSlotBySubject.get(topic.subjectId);
+
+          if (isGrouped && prevSubjectSlot) {
+            prevSubjectSlot.linkedModules.push({
+              topicId: topic.id,
+              moduleId: module.id,
+              moduleIndex: 'Conjunto'
+            });
+          } else {
+            const count = isGrouped ? 1 : Math.max(1, Number(module.classesCount) || 1);
+            for (let i = 0; i < count; i++) {
+              const slotItem = {
+                module,
+                partIndex: i + 1,
+                totalParts: count,
+                linkedModules: [
+                  {
+                    topicId: topic.id,
+                    moduleId: module.id,
+                    moduleIndex: `${i + 1}/${count}`
+                  }
+                ]
+              };
+              remainingModules.push(slotItem);
+              lastSlotBySubject.set(topic.subjectId, slotItem);
+            }
           }
         }
       });
@@ -54,7 +91,20 @@ export const buildSchedule = (
         isSelected: true
       };
       for (let i = 0; i < topic.requiredClasses; i++) {
-        remainingModules.push({ module: dummyModule, partIndex: i + 1, totalParts: topic.requiredClasses });
+        const slotItem = {
+          module: dummyModule,
+          partIndex: i + 1,
+          totalParts: topic.requiredClasses,
+          linkedModules: [
+            {
+              topicId: topic.id,
+              moduleId: dummyModule.id,
+              moduleIndex: `${i + 1}/${topic.requiredClasses}`
+            }
+          ]
+        };
+        remainingModules.push(slotItem);
+        lastSlotBySubject.set(topic.subjectId, slotItem);
       }
     }
 
@@ -383,6 +433,8 @@ export const buildSchedule = (
             subjectId: bestTopic.topic.subjectId,
             topicId: bestTopic.topic.id,
             moduleId: moduleItem.module.id,
+            linkedModules: moduleItem.linkedModules,
+            consumedSlotsCount: 1,
             teacherId: assignedTeacherId,
             isSubstitute: isSubstitute,
             originalTeacherId: isSubstitute ? originalTeacherId : null,

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Folder, Download, Wand2, Layers, FolderTree, ChevronDown, ChevronRight, GripVertical } from 'lucide-react';
+import { Folder, Download, Wand2, Layers, FolderTree, ChevronDown, ChevronRight, PlayCircle } from 'lucide-react';
 import { CourseModule, CourseSubModule, CourseLesson, CourseGroup } from '../../../../types/course';
 import { courseService } from '../../../../services/courseService';
 import { LessonItem } from './items/LessonItem';
@@ -7,6 +7,7 @@ import { SubModuleItem } from './items/SubModuleItem';
 import { FolderModal } from './modals/FolderModal';
 import { LessonModal } from './modals/LessonModal';
 import { GroupModal } from './modals/GroupModal';
+import { PandaBatchImportModal } from './modals/PandaBatchImportModal';
 import { ConfirmationModal } from '../../ui/ConfirmationModal';
 import { LessonContentManager } from '../lessons/LessonContentManager';
 import { PDFTemplate } from '../../../../src/frontend/components/PDFTemplate';
@@ -34,6 +35,10 @@ export function ModuleContentManager({ module, onBack }: ModuleContentManagerPro
   const [isLessonModalOpen, setIsLessonModalOpen] = useState(false);
   const [editingLesson, setEditingLesson] = useState<CourseLesson | null>(null);
   const [targetFolderIdForNewLesson, setTargetFolderIdForNewLesson] = useState<string | null>(null);
+
+  // Estado para Cadastramento em Lote via Panda Vídeo
+  const [isPandaBatchModalOpen, setIsPandaBatchModalOpen] = useState(false);
+  const [pandaBatchTargetFolderId, setPandaBatchTargetFolderId] = useState<string | null>(null);
 
   const [itemToDelete, setItemToDelete] = useState<{ type: 'folder' | 'lesson' | 'group', id: string, title: string } | null>(null);
   const [groupToMigrate, setGroupToMigrate] = useState<CourseGroup | null>(null);
@@ -674,6 +679,7 @@ export function ModuleContentManager({ module, onBack }: ModuleContentManagerPro
         onEdit={() => { setEditingFolder(folder); setIsFolderModalOpen(true); }}
         onDelete={() => setItemToDelete({ type: 'folder', id: folder.id, title: folder.title })}
         onAddLesson={() => { setEditingLesson(null); setTargetFolderIdForNewLesson(folder.id); setIsLessonModalOpen(true); }}
+        onImportPandaBatch={() => { setPandaBatchTargetFolderId(folder.id); setIsPandaBatchModalOpen(true); }}
         onAddSubFolder={() => { setParentIdForNewFolder(folder.id); setEditingFolder(null); setIsFolderModalOpen(true); }}
         onMove={() => setFolderToMove(folder)}
         onCopy={async () => {
@@ -864,14 +870,22 @@ export function ModuleContentManager({ module, onBack }: ModuleContentManagerPro
             </button>
             <button 
                 onClick={() => { setEditingFolder(null); setIsFolderModalOpen(true); }}
-                className="px-4 py-2 bg-[#1a1d24] border border-gray-700 hover:border-gray-500 text-white font-bold uppercase text-xs rounded flex items-center gap-2"
+                className="px-4 py-2 bg-[#1a1d24] border border-gray-700 hover:border-gray-500 text-white font-bold uppercase text-xs rounded flex items-center gap-2 whitespace-nowrap shrink-0"
             >
                 <Folder size={16} className="text-yellow-500" fill="currentColor" />
                 Criar Pasta
             </button>
+            <button
+                onClick={() => { setPandaBatchTargetFolderId(null); setIsPandaBatchModalOpen(true); }}
+                className="px-4 py-2 bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/30 text-emerald-400 hover:text-emerald-300 font-bold uppercase text-xs rounded flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+                title="Cadastrar aulas em lote no módulo a partir de uma pasta do Panda Vídeo"
+            >
+                <PlayCircle size={16} />
+                + Lote Panda
+            </button>
             <button 
                 onClick={() => { setEditingLesson(null); setTargetFolderIdForNewLesson(null); setIsLessonModalOpen(true); }}
-                className="px-6 py-2 bg-red-600 hover:bg-red-500 text-white font-bold uppercase text-xs rounded shadow-lg shadow-red-900/20 flex items-center gap-2"
+                className="px-6 py-2 bg-red-600 hover:bg-red-500 text-white font-bold uppercase text-xs rounded shadow-lg shadow-red-900/20 flex items-center gap-2 whitespace-nowrap shrink-0"
             >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
                 Criar Aula
@@ -1067,6 +1081,71 @@ export function ModuleContentManager({ module, onBack }: ModuleContentManagerPro
         initialGroupId={editingLesson?.groupId}
         initialIsProduction={editingLesson?.isProduction}
         groups={groups}
+      />
+
+      <PandaBatchImportModal
+        isOpen={isPandaBatchModalOpen}
+        onClose={() => {
+          setIsPandaBatchModalOpen(false);
+          setPandaBatchTargetFolderId(null);
+        }}
+        moduleId={module.id}
+        moduleTitle={module.title}
+        targetFolder={
+          pandaBatchTargetFolderId
+            ? subModules.find((s) => s.id === pandaBatchTargetFolderId) || null
+            : null
+        }
+        groups={groups}
+        startingOrder={(() => {
+          if (pandaBatchTargetFolderId) {
+            const siblingFolderOrders = subModules
+              .filter((s) => s.parentId === pandaBatchTargetFolderId)
+              .map((s) => s.order || 0);
+            const siblingLessonOrders = lessons
+              .filter((l) => l.subModuleId === pandaBatchTargetFolderId)
+              .map((l) => l.order || 0);
+            return Math.max(0, ...siblingFolderOrders, ...siblingLessonOrders) + 1;
+          }
+          const rootFolderOrders = subModules
+            .filter((s) => !s.parentId)
+            .map((s) => s.order || 0);
+          const rootLessonOrders = lessons
+            .filter((l) => !l.subModuleId)
+            .map((l) => l.order || 0);
+          return Math.max(0, ...rootFolderOrders, ...rootLessonOrders) + 1;
+        })()}
+        onSuccess={(createdLessons, linkedFolderUpdate) => {
+          if (linkedFolderUpdate) {
+            setSubModules((prev) =>
+              prev.map((s) =>
+                s.id === linkedFolderUpdate.subModuleId
+                  ? {
+                      ...s,
+                      pandaFolderId: linkedFolderUpdate.pandaFolderId,
+                      pandaFolderName: linkedFolderUpdate.pandaFolderName,
+                      pandaFolderPath: linkedFolderUpdate.pandaFolderPath
+                    }
+                  : s
+              )
+            );
+          }
+          if (createdLessons.length > 0) {
+            setLessons((prev) => [...prev, ...createdLessons]);
+            if (pandaBatchTargetFolderId) {
+              setExpandedFolders((prev) => ({ ...prev, [pandaBatchTargetFolderId]: true }));
+              const targetObj = subModules.find((s) => s.id === pandaBatchTargetFolderId);
+              if (targetObj?.groupId) {
+                setExpandedGroups((prev) => ({ ...prev, [targetObj.groupId as string]: true }));
+              }
+            } else if (createdLessons[0]?.groupId) {
+              setExpandedGroups((prev) => ({
+                ...prev,
+                [createdLessons[0].groupId as string]: true
+              }));
+            }
+          }
+        }}
       />
 
       <ConfirmationModal 

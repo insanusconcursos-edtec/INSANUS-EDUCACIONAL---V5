@@ -23,6 +23,7 @@ export interface Module {
   id: string;
   name: string;
   classesCount: number;
+  groupedWithPrevious?: boolean;
   isSelected?: boolean;
   contents?: ModuleContent[];
   isOnline?: boolean;
@@ -31,12 +32,20 @@ export interface Module {
   teachingAreaLink?: TeachingAreaLink;
 }
 
+export interface SubjectGroup {
+  id: string;
+  name: string;
+  order: number;
+  createdAt?: string;
+}
+
 export interface Subject {
   id: string;
   classId: string;
   name: string;
   color: string;
   defaultTeacherId?: string;
+  groupId?: string | null;
   order?: number;
   createdAt?: string;
 }

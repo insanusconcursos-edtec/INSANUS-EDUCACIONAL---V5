@@ -22,19 +22,40 @@ import {
   ChevronDown,
   ChevronUp,
   CheckCircle,
-  Target
+  Target,
+  Radio,
+  MapPin,
+  Trophy,
+  DoorOpen,
+  Lock,
+  Play,
+  Flag,
+  ArrowUpRight,
+  Network
 } from 'lucide-react';
 import { GuidedStudyMeta, GuidedStudyProgress } from '../../../types/guidedStudy';
 import { guidedStudyService } from '../../../services/guidedStudyService';
 import { StudentGuidedStudyModal } from './StudentGuidedStudyModal';
 import { useAuth } from '../../../contexts/AuthContext';
+import { toLocalISODate, formatSafeDateLocal } from '../../../utils/dateUtils';
 
 interface StudentClassScheduleProps {
   classId: string;
   masterClassId?: string;
+  linkedSimulatedId?: string;
 }
 
-export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ classId, masterClassId }) => {
+const formatSimuladoDurationLabel = (minutes?: number): string => {
+  const total = Math.max(0, Math.round(Number(minutes) || 0));
+  if (total === 0) return '';
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (h > 0 && m > 0) return `${h}h ${String(m).padStart(2, '0')}min`;
+  if (h > 0) return `${h}h`;
+  return `${m} min`;
+};
+
+export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ classId, linkedSimulatedId }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [events, setEvents] = useState<ClassScheduleEvent[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -48,6 +69,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
   const [viewMode, setViewMode] = useState<'month' | 'week' | 'weekend'>('week');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const todayString = toLocalISODate();
 
   const { currentUser } = useAuth();
   const [guidedMetas, setGuidedMetas] = useState<GuidedStudyMeta[]>([]);
@@ -132,7 +154,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
 
   useEffect(() => {
     if (weekends.length > 0) {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = toLocalISODate();
       const index = weekends.findIndex(wk => wk.saturday === todayStr || wk.sunday === todayStr);
       if (index !== -1) {
         setSelectedWeekendIndex(index);
@@ -155,7 +177,39 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
     const topic = topics.find(t => t.id === topicId);
     if (!topic) return 'Tópico desconhecido';
     const module = topic.modules?.find(m => m.id === moduleId);
-    return module ? module.name : 'Módulo desconhecido';
+    if (module) return module.name;
+    if (moduleId.startsWith('topic-')) return topic.name;
+    return 'Módulo desconhecido';
+  };
+
+  const getEventModules = (event: ClassScheduleEvent) => {
+    const rawLinks =
+      event.linkedModules && event.linkedModules.length > 0
+        ? event.linkedModules
+        : event.topicId && event.moduleId && event.moduleId !== 'extra'
+          ? [{ topicId: event.topicId, moduleId: event.moduleId, moduleIndex: event.moduleIndex }]
+          : [];
+
+    const seen = new Set<string>();
+    const resolved: { topicId: string; moduleId: string; topicName: string; moduleName: string }[] = [];
+
+    rawLinks.forEach((link) => {
+      if (!link.moduleId || seen.has(link.moduleId)) return;
+      seen.add(link.moduleId);
+      const topic = topics.find((t) => t.id === link.topicId);
+      const mod = topic?.modules?.find((m) => m.id === link.moduleId);
+      const moduleName =
+        mod?.name ||
+        (link.moduleId.startsWith('topic-') && topic?.name ? topic.name : 'Módulo desconhecido');
+      resolved.push({
+        topicId: link.topicId,
+        moduleId: link.moduleId,
+        topicName: topic?.name || 'Assunto',
+        moduleName,
+      });
+    });
+
+    return resolved;
   };
 
   // Calendar Logic
@@ -307,6 +361,8 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
 
           return activeShifts.map((shiftName, shiftIndex) => {
             const shiftEvents = eventsByShift[shiftName];
+            const regularClassEvents = shiftEvents.filter(ev => ev.eventType !== 'SIMULADO');
+            let regularClassCounter = 0;
 
             return (
               <div key={shiftName} className={shiftIndex > 0 ? "mt-4" : ""}>
@@ -325,11 +381,181 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                 </div>
 
                 <div className="space-y-2">
-                  {shiftEvents.map((event: ClassScheduleEvent, index: number) => {
-                    const subject = getSubject(event.subjectId);
+                  {shiftEvents.map((event: ClassScheduleEvent) => {
                     const isExpanded = expandedEventId === event.id;
+
+                    // === CARD PREMIUM BLACK GOLD PARA SIMULADOS (VISÃO DO ALUNO) ===
+                    if (event.eventType === 'SIMULADO') {
+                      const examStart = event.examStartTime || event.startTime;
+                      const examEnd = event.examEndTime || event.endTime;
+                      const gatesOpen = event.gatesOpenTime || examStart;
+                      const gatesClose = event.gatesCloseTime || examStart;
+                      const durationText = formatSimuladoDurationLabel(event.durationMinutes);
+                      const isCompleted = event.status === 'COMPLETED';
+                      const canOpenSimuladosTab = Boolean(
+                        linkedSimulatedId || classData?.linkedSimulatedId || event.simulatedClassId
+                      );
+
+                      return (
+                        <div
+                          key={event.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedEventId(isExpanded ? null : event.id);
+                          }}
+                          className={`relative rounded-lg border transition-all cursor-pointer overflow-hidden bg-gradient-to-br from-[#17130a] via-[#09090b] to-[#211909] ${
+                            isCompleted
+                              ? 'border-emerald-500/50 opacity-85'
+                              : isExpanded
+                                ? 'border-amber-400/80 shadow-lg shadow-amber-500/10 z-20'
+                                : 'border-amber-500/45 hover:border-amber-400/75'
+                          }`}
+                        >
+                          {/* Specular Gold Top Highlight */}
+                          <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/80 to-transparent" />
+
+                          <div className="p-2.5 space-y-1.5">
+                            <div className="flex items-center justify-between gap-1.5">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <div className="w-5 h-5 rounded bg-gradient-to-b from-amber-400/25 to-amber-600/10 border border-amber-400/45 flex items-center justify-center shrink-0">
+                                  <Trophy className="w-3 h-3 text-amber-300" />
+                                </div>
+                                <span className="text-[9px] font-extrabold uppercase tracking-widest text-amber-300 truncate">
+                                  Simulado Oficial
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {isCompleted && (
+                                  <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1 whitespace-nowrap">
+                                    <CheckCircle className="w-2.5 h-2.5 shrink-0" />
+                                    Aplicado
+                                  </span>
+                                )}
+                                <div className="text-amber-300/70">
+                                  {isExpanded ? (
+                                    <ChevronUp className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <ChevronDown className="w-3.5 h-3.5" />
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div
+                              className="font-bold text-xs text-amber-50 leading-snug break-words"
+                              title={event.simulatedTitle || 'Simulado Oficial'}
+                            >
+                              {event.simulatedTitle || 'Simulado Oficial'}
+                            </div>
+
+                            <div className="space-y-0.5 pt-0.5 tabular-nums">
+                              <div className="flex items-center gap-1.5 text-[10px] font-bold text-amber-300 flex-wrap">
+                                <Clock className="w-3 h-3 text-amber-400 shrink-0" />
+                                <span className="whitespace-nowrap">
+                                  Prova: {examStart} - {examEnd}
+                                </span>
+                                {durationText && (
+                                  <span className="text-amber-200/75 font-semibold whitespace-nowrap">
+                                    · {durationText}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-amber-100/65">
+                                Portões: {gatesOpen} às {gatesClose}
+                              </div>
+                            </div>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="px-2.5 pb-2.5 pt-1 space-y-2.5 animate-in fade-in duration-150">
+                              <div className="h-px bg-amber-500/20 w-full" />
+
+                              <div className="space-y-1.5 text-[11px] tabular-nums">
+                                <div className="flex items-center justify-between gap-2 text-zinc-300">
+                                  <span className="flex items-center gap-1.5 text-zinc-400">
+                                    <DoorOpen className="w-3 h-3 text-amber-400/80 shrink-0" />
+                                    Abertura dos Portões
+                                  </span>
+                                  <span className="font-semibold text-amber-100 whitespace-nowrap">
+                                    {gatesOpen}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="flex items-center gap-1.5 text-amber-300 font-semibold">
+                                    <Lock className="w-3 h-3 text-amber-400 shrink-0" />
+                                    Fechamento dos Portões
+                                  </span>
+                                  <span className="font-bold text-amber-300 whitespace-nowrap">
+                                    {gatesClose}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-2 text-zinc-200">
+                                  <span className="flex items-center gap-1.5 text-zinc-300">
+                                    <Play className="w-3 h-3 text-amber-400 shrink-0" />
+                                    Início da Prova
+                                  </span>
+                                  <span className="font-bold text-white whitespace-nowrap">
+                                    {examStart}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-2 text-zinc-200 pt-1 border-t border-amber-500/15">
+                                  <span className="flex items-center gap-1.5 text-amber-200/90">
+                                    <Flag className="w-3 h-3 text-amber-400 shrink-0" />
+                                    Término Previsto
+                                  </span>
+                                  <span className="font-bold text-amber-300 whitespace-nowrap">
+                                    {examEnd}
+                                    {durationText ? ` (${durationText})` : ''}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {(event.simulatedQuestionCount || event.simulatedExamType) && (
+                                <div className="text-[10px] text-amber-200/70 tabular-nums pt-0.5">
+                                  {event.simulatedQuestionCount
+                                    ? `${event.simulatedQuestionCount} questões`
+                                    : ''}
+                                  {event.simulatedQuestionCount && event.simulatedExamType
+                                    ? ' · '
+                                    : ''}
+                                  {event.simulatedExamType
+                                    ? event.simulatedExamType === 'true_false'
+                                      ? 'Certo ou Errado'
+                                      : 'Múltipla Escolha'
+                                    : ''}
+                                </div>
+                              )}
+
+                              {canOpenSimuladosTab && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const newParams = new URLSearchParams(searchParams);
+                                    newParams.set('tab', 'SIMULADOS');
+                                    setSearchParams(newParams);
+                                  }}
+                                  className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded bg-gradient-to-r from-amber-500/20 via-yellow-500/15 to-amber-500/20 hover:from-amber-500/30 hover:to-yellow-500/25 border border-amber-400/40 text-amber-200 text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap shrink-0"
+                                >
+                                  <span>Acessar Área de Simulados</span>
+                                  <ArrowUpRight className="w-3 h-3 shrink-0" />
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    const currentTempoNumber = ++regularClassCounter;
+                    const subject = getSubject(event.subjectId);
                     const borderColor = subject?.color || '#52525b';
                     const isOverflow = event.isOverflow;
+                    const isLive = Boolean(event.isLiveEvent);
+
+                    const eventModules = getEventModules(event);
+                    const hasMultipleModules = eventModules.length > 1;
+                    const spansMultipleTopics = new Set(eventModules.map((m) => m.topicId)).size > 1;
 
                     return (
                       <React.Fragment key={event.id}>
@@ -340,7 +566,11 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                           }}
                           className={`
                             rounded-lg border-l-4 transition-all cursor-pointer overflow-hidden
-                            ${isExpanded ? 'bg-zinc-900 shadow-lg ring-1 ring-zinc-800 z-20 relative' : 'bg-zinc-900/50 hover:bg-zinc-900'}
+                            ${isExpanded
+                              ? 'bg-zinc-900 shadow-lg ring-1 ring-zinc-800 z-20 relative'
+                              : isLive && event.status !== 'COMPLETED' && !isOverflow
+                                ? 'bg-sky-950/20 hover:bg-sky-950/35 ring-1 ring-sky-500/30'
+                                : 'bg-zinc-900/50 hover:bg-zinc-900'}
                             ${isOverflow ? 'border-red-500 bg-red-900/20' : ''}
                             ${event.status === 'COMPLETED' ? 'border-emerald-500 bg-emerald-900/10 opacity-80' : ''}
                           `}
@@ -349,23 +579,37 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                           {/* Card Header */}
                           <div className="p-2">
                             <div className="flex justify-between items-center mb-1 flex-wrap gap-1">
-                              <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
-                                {index + 1}º Tempo
+                              <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider tabular-nums flex items-center gap-1">
+                                <span>{currentTempoNumber}º Tempo</span>
+                                {hasMultipleModules && (
+                                  <span className="text-amber-400/90" title={`${eventModules.length} módulos previstos nesta aula`}>
+                                    • {eventModules.length} Módulos
+                                  </span>
+                                )}
                               </div>
                               <div className="flex gap-1 flex-wrap justify-end">
+                                {isLive && (
+                                  <span
+                                    className="text-[8px] font-bold text-sky-300 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-500/40 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap"
+                                    title="Acompanhe ao vivo pelo Portal"
+                                  >
+                                    <Radio className="w-2.5 h-2.5 shrink-0 text-sky-400" />
+                                    AO VIVO • PORTAL
+                                  </span>
+                                )}
                                 {event.status === 'COMPLETED' && (
-                                  <span className="text-[8px] font-bold text-emerald-500 bg-emerald-950/50 px-1 py-0.5 rounded border border-emerald-900/50 uppercase tracking-wider flex items-center gap-1" title="Concluído">
+                                  <span className="text-[8px] font-bold text-emerald-500 bg-emerald-950/50 px-1 py-0.5 rounded border border-emerald-900/50 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap" title="Concluído">
                                     <CheckCircle className="w-2 h-2 shrink-0" />
                                     <span className="hidden lg:inline">CONCLUÍDO</span>
                                   </span>
                                 )}
                                 {event.isSubstitute && (
-                                  <span className="text-[8px] font-bold text-black bg-yellow-500 px-1 py-0.5 rounded border border-yellow-600 uppercase tracking-wider flex items-center gap-1" title="Substituição">
+                                  <span className="text-[8px] font-bold text-black bg-yellow-500 px-1 py-0.5 rounded border border-yellow-600 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap" title="Substituição">
                                     SUBST.
                                   </span>
                                 )}
                                 {isOverflow && (
-                                  <span className="text-[8px] font-bold text-red-400 bg-red-950/50 px-1 py-0.5 rounded border border-red-900/50 uppercase tracking-wider flex items-center gap-1" title="Aula Extra">
+                                  <span className="text-[8px] font-bold text-red-400 bg-red-950/50 px-1 py-0.5 rounded border border-red-900/50 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap" title="Aula Extra">
                                     <AlertTriangle className="w-2 h-2 shrink-0" />
                                     <span className="hidden lg:inline">EXTRA</span>
                                   </span>
@@ -374,7 +618,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                             </div>
                             <div className="flex justify-between items-start gap-1">
                               <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1 text-[10px] font-bold text-zinc-400 mb-0.5 flex-wrap">
+                                <div className="flex items-center gap-1 text-[10px] font-bold text-zinc-400 mb-0.5 flex-wrap tabular-nums">
                                   <Clock className="w-3 h-3 shrink-0" />
                                   <span className="whitespace-nowrap">{event.startTime} - {event.endTime}</span>
                                 </div>
@@ -389,8 +633,10 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                                     const newParams = new URLSearchParams(searchParams);
                                     newParams.set('tab', 'PLANNING');
                                     if (event.subjectId) newParams.set('subjectId', event.subjectId);
-                                    if (event.topicId) newParams.set('topicId', event.topicId);
-                                    if (event.moduleId) newParams.set('moduleId', event.moduleId);
+                                    if (event.topicId && event.topicId !== 'extra') newParams.set('topicId', event.topicId);
+                                    if (event.moduleId && event.moduleId !== 'extra' && !event.moduleId.startsWith('topic-')) {
+                                      newParams.set('moduleId', event.moduleId);
+                                    }
                                     setSearchParams(newParams);
                                   }}
                                   className="p-1 text-zinc-500 hover:text-brand-red transition-colors"
@@ -409,21 +655,89 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                           {isExpanded && (
                             <div className="px-2 pb-2 pt-0 space-y-2 animate-in slide-in-from-top-1 duration-200">
                               <div className="h-px bg-zinc-800 w-full my-1" />
-                              
-                              <div>
-                                <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Módulo</span>
-                                <p className="text-[11px] text-zinc-300 leading-tight">
-                                  {getModuleName(event.topicId, event.moduleId)}
-                                </p>
-                              </div>
 
                               <div>
-                                <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Assunto</span>
-                                <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
-                                  <BookOpen className="w-3 h-3 text-zinc-500 shrink-0" />
-                                  <span>{getTopicName(event.topicId)}</span>
-                                </div>
+                                <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Modalidade</span>
+                                {isLive ? (
+                                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-sky-300">
+                                    <Radio className="w-3 h-3 text-sky-400 shrink-0" />
+                                    <span>Transmissão Ao Vivo pelo Portal</span>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                                    <MapPin className="w-3 h-3 text-zinc-500 shrink-0" />
+                                    <span>Aula Presencial</span>
+                                  </div>
+                                )}
                               </div>
+                              
+                              {hasMultipleModules ? (
+                                <div>
+                                  <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-1 tabular-nums">
+                                    Módulos desta Aula ({eventModules.length})
+                                  </span>
+                                  <div className="space-y-1 rounded-md bg-zinc-950/70 border border-zinc-800 p-1.5">
+                                    {eventModules.map((modItem, modIdx) => (
+                                      <div
+                                        key={`${event.id}-mod-${modItem.moduleId}`}
+                                        className="flex items-start justify-between gap-1.5 py-1 border-b border-zinc-800/80 last:border-0"
+                                      >
+                                        <div className="min-w-0 flex-1">
+                                          <p className="text-[11px] text-zinc-200 leading-snug break-words">
+                                            <span className="text-amber-400/90 font-bold tabular-nums mr-1">
+                                              {modIdx + 1}.
+                                            </span>
+                                            {modItem.moduleName}
+                                          </p>
+                                          {spansMultipleTopics && (
+                                            <p
+                                              className="text-[9px] text-zinc-500 leading-tight mt-0.5 truncate"
+                                              title={modItem.topicName}
+                                            >
+                                              Assunto: {modItem.topicName}
+                                            </p>
+                                          )}
+                                        </div>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            const newParams = new URLSearchParams(searchParams);
+                                            newParams.set('tab', 'PLANNING');
+                                            if (event.subjectId) newParams.set('subjectId', event.subjectId);
+                                            if (modItem.topicId) newParams.set('topicId', modItem.topicId);
+                                            if (modItem.moduleId && !modItem.moduleId.startsWith('topic-')) {
+                                              newParams.set('moduleId', modItem.moduleId);
+                                            }
+                                            setSearchParams(newParams);
+                                          }}
+                                          className="p-1 text-zinc-500 hover:text-brand-red transition-colors shrink-0"
+                                          title={`Abrir "${modItem.moduleName}" no Planejamento`}
+                                        >
+                                          <BookOpen className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div>
+                                  <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Módulo</span>
+                                  <p className="text-[11px] text-zinc-300 leading-tight">
+                                    {eventModules[0]?.moduleName ||
+                                      (isOverflow ? 'Aula complementar' : getModuleName(event.topicId, event.moduleId))}
+                                  </p>
+                                </div>
+                              )}
+
+                              {!spansMultipleTopics && event.topicId && event.topicId !== 'extra' && (
+                                <div>
+                                  <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Assunto</span>
+                                  <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                                    <BookOpen className="w-3 h-3 text-zinc-500 shrink-0" />
+                                    <span>{getTopicName(event.topicId)}</span>
+                                  </div>
+                                </div>
+                              )}
 
                               <div>
                                 <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Professor</span>
@@ -437,7 +751,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                         </div>
 
                         {/* Interval Divider */}
-                        {index === 0 && shiftEvents.length > 1 && (
+                        {currentTempoNumber === 1 && regularClassEvents.length > 1 && (
                           <div className="flex items-center gap-2 my-2 opacity-50">
                             <div className="h-px bg-zinc-800 border-t border-dashed border-zinc-700 flex-1"></div>
                             <span className="text-[9px] text-zinc-500 font-medium whitespace-nowrap">Intervalo (15 min)</span>
@@ -474,10 +788,12 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
             ) : (
               guidedMetas.filter(m => m.date === dateString).map(meta => {
                 const isMetaDone = !!studentProgress[meta.id!]?.completed;
-                const cardColor = meta.color || '#f59e0b';
+                const isJsonMap = meta.type === 'interactive_map';
+                const cardColor = meta.color || (isJsonMap ? '#6366f1' : '#f59e0b');
                 return (
                   <div
                     key={meta.id}
+                    title={meta.title}
                     onClick={() => setSelectedMetaForModal(meta)}
                     className={`
                       p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between shadow-md group
@@ -492,25 +808,31 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                         className="p-1.5 rounded-lg shrink-0"
                         style={isMetaDone ? undefined : { backgroundColor: `${cardColor}20`, color: cardColor }}
                       >
-                        <Target className={`w-4 h-4 ${isMetaDone ? 'text-emerald-400' : ''}`} />
+                        {isJsonMap ? (
+                          <Network className={`w-4 h-4 ${isMetaDone ? 'text-emerald-400' : ''}`} />
+                        ) : (
+                          <Target className={`w-4 h-4 ${isMetaDone ? 'text-emerald-400' : ''}`} />
+                        )}
                       </div>
                       <div className="min-w-0">
                         <span className="block text-xs font-bold truncate transition-colors" style={!isMetaDone ? { color: 'white' } : undefined}>
                           {meta.title}
                         </span>
-                        <span className="block text-[10px] text-zinc-400">
-                          {meta.disciplineName ? `${meta.disciplineName} • ` : ''}{meta.duration || 30} min
+                        <span className="block text-[10px] text-zinc-400 truncate tabular-nums">
+                          {meta.disciplineName ? `${meta.disciplineName} · ` : ''}
+                          {isJsonMap ? 'Mapa Interativo · ' : ''}
+                          {meta.duration || 30} min
                         </span>
                       </div>
                     </div>
 
                     <div className="shrink-0 ml-2">
                       {isMetaDone ? (
-                        <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                        <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/30 whitespace-nowrap">
                           <CheckCircle className="w-3 h-3" /> Concluído
                         </span>
                       ) : (
-                        <span className="text-[10px] font-bold group-hover:underline flex items-center gap-0.5" style={{ color: cardColor }}>
+                        <span className="text-[10px] font-bold group-hover:underline flex items-center gap-0.5 whitespace-nowrap" style={{ color: cardColor }}>
                           Estudar &rarr;
                         </span>
                       )}
@@ -533,7 +855,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
     );
   }
 
-  if (events.length === 0 && holidays.length === 0) {
+  if (events.length === 0 && holidays.length === 0 && guidedMetas.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-gray-500 bg-gray-900/30 rounded-xl border border-gray-800">
         <CalendarIcon size={48} className="mb-4 opacity-50" />
@@ -636,7 +958,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
               <div className="flex lg:hidden overflow-x-auto gap-2 mb-4 pb-2 scrollbar-none">
                 {weekends.map((wk, index) => {
                   const isSelected = selectedWeekendIndex === index;
-                  const isCurrent = new Date().toISOString().split('T')[0] === wk.saturday || new Date().toISOString().split('T')[0] === wk.sunday;
+                  const isCurrent = todayString === wk.saturday || todayString === wk.sunday;
                   return (
                     <button
                       key={`tab-wk-${wk.number}`}
@@ -658,10 +980,10 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
               {/* On Large Screens (lg): show all weekends side-by-side without overflow */}
               <div className="hidden lg:grid gap-4" style={{ gridTemplateColumns: `repeat(${weekends.length}, minmax(0, 1fr))` }}>
                 {weekends.map((wk) => {
-                  const satDate = new Date(wk.saturday + 'T00:00:00');
-                  const sunDate = new Date(wk.sunday + 'T00:00:00');
-                  const isSatToday = new Date().toISOString().split('T')[0] === wk.saturday;
-                  const isSunToday = new Date().toISOString().split('T')[0] === wk.sunday;
+                  const satDate = new Date(wk.saturday + 'T12:00:00');
+                  const sunDate = new Date(wk.sunday + 'T12:00:00');
+                  const isSatToday = todayString === wk.saturday;
+                  const isSunToday = todayString === wk.sunday;
 
                   const formatCardDate = (date: Date) => {
                     return date.toLocaleDateString('pt-BR', { day: 'numeric', month: 'numeric' });
@@ -712,10 +1034,10 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
               <div className="block lg:hidden">
                 {weekends[selectedWeekendIndex] && (() => {
                   const wk = weekends[selectedWeekendIndex];
-                  const satDate = new Date(wk.saturday + 'T00:00:00');
-                  const sunDate = new Date(wk.sunday + 'T00:00:00');
-                  const isSatToday = new Date().toISOString().split('T')[0] === wk.saturday;
-                  const isSunToday = new Date().toISOString().split('T')[0] === wk.sunday;
+                  const satDate = new Date(wk.saturday + 'T12:00:00');
+                  const sunDate = new Date(wk.sunday + 'T12:00:00');
+                  const isSatToday = todayString === wk.saturday;
+                  const isSunToday = todayString === wk.sunday;
 
                   const formatCardDate = (date: Date) => {
                     return date.toLocaleDateString('pt-BR', { day: 'numeric', month: 'numeric' });
@@ -772,7 +1094,8 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                   return <div key={cell.key} className="hidden md:block min-h-[140px] border-b border-r border-zinc-800/50 bg-black"></div>;
                 }
 
-                const isToday = new Date().toISOString().split('T')[0] === cell.dateString;
+                const isToday = todayString === cell.dateString;
+                const monthPart = cell.dateString.split('-')[1];
                 
                 // Obter o dia da semana abreviado para exibir no mobile
                 const dateObj = new Date(cell.dateString + 'T12:00:00');
@@ -787,20 +1110,38 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({ clas
                       ${isToday ? 'bg-brand-red/5' : 'hover:bg-zinc-900/30'}
                     `}
                   >
-                    <div className="flex justify-between items-start mb-2 sticky top-0 bg-inherit z-10 pb-1">
+                    <div className="flex justify-between items-center mb-2 sticky top-0 bg-inherit z-10 pb-1 gap-1">
                       <div className="flex items-center gap-2">
-                        <span 
-                          className={`
-                            text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full
-                            ${isToday ? 'bg-brand-red text-white' : 'text-zinc-400 group-hover:text-zinc-200'}
-                          `}
-                        >
-                          {cell.day}
-                        </span>
+                        {viewMode === 'week' ? (
+                          <span
+                            className={`
+                              text-xs font-bold px-2 py-1 rounded-md tabular-nums whitespace-nowrap
+                              ${isToday ? 'bg-brand-red text-white' : 'bg-zinc-900 text-zinc-300 group-hover:text-white'}
+                            `}
+                            title={formatSafeDateLocal(cell.dateString)}
+                          >
+                            {`${String(cell.day).padStart(2, '0')}/${monthPart}`}
+                          </span>
+                        ) : (
+                          <span 
+                            className={`
+                              text-sm font-bold w-7 h-7 flex items-center justify-center rounded-md tabular-nums
+                              ${isToday ? 'bg-brand-red text-white' : 'text-zinc-400 group-hover:text-zinc-200'}
+                            `}
+                            title={formatSafeDateLocal(cell.dateString)}
+                          >
+                            {cell.day}
+                          </span>
+                        )}
                         <span className="md:hidden text-xs font-bold text-zinc-500 uppercase tracking-wider">
                           {dayOfWeek}
                         </span>
                       </div>
+                      {isToday && (
+                        <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-brand-red/20 text-brand-red border border-brand-red/30 whitespace-nowrap shrink-0">
+                          Hoje
+                        </span>
+                      )}
                     </div>
 
                     {renderDayContent(cell.dateString)}

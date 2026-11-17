@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, Link, useSearchParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Calendar, Users, DollarSign, BookOpen, Clock, LayoutDashboard, Monitor, FileCheck2 } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, DollarSign, BookOpen, Clock, LayoutDashboard, Monitor, FileCheck2, Trophy } from 'lucide-react';
 import { classService } from '../../services/classService';
 import { curriculumService } from '../../services/curriculumService';
 import { teacherService } from '../../services/teacherService';
@@ -111,8 +111,10 @@ const PresentialClassManager: React.FC = () => {
 
   const overviewMetrics = useMemo(() => {
     const planned = currentClass?.totalMeetings || 0;
-    const scheduled = scheduleEvents?.length || 0;
-    const completed = scheduleEvents?.filter((e: any) => e.status === 'COMPLETED').length || 0;
+    const classOnlyEvents = (scheduleEvents || []).filter((e) => e.eventType !== 'SIMULADO');
+    const simuladosScheduled = (scheduleEvents || []).filter((e) => e.eventType === 'SIMULADO').length;
+    const scheduled = classOnlyEvents.length;
+    const completed = classOnlyEvents.filter((e: any) => e.status === 'COMPLETED').length;
 
     const totalSt = studentsOverview.length;
     const regularSt = studentsOverview.filter(s => !s.classAccess?.isScholarship).length;
@@ -121,7 +123,7 @@ const PresentialClassManager: React.FC = () => {
     const capacity = classroomOverview?.capacity || (currentClass as any)?.capacity || 0;
     const available = Math.max(0, capacity - totalSt);
 
-    return { planned, scheduled, completed, totalSt, regularSt, scholarshipSt, capacity, available };
+    return { planned, scheduled, completed, simuladosScheduled, totalSt, regularSt, scholarshipSt, capacity, available };
   }, [currentClass, scheduleEvents, studentsOverview, classroomOverview]);
 
   if (loading) {
@@ -153,8 +155,19 @@ const PresentialClassManager: React.FC = () => {
                 </div>
                 <div className="flex justify-between items-center border-t border-zinc-800 pt-3">
                   <span className="text-zinc-400 font-medium">Já Ministrados:</span> 
-                  <strong className="text-green-500 text-xl">{overviewMetrics.completed}</strong>
+                  <strong className="text-green-500 text-xl tabular-nums">{overviewMetrics.completed}</strong>
                 </div>
+                {overviewMetrics.simuladosScheduled > 0 && (
+                  <div className="flex justify-between items-center border-t border-amber-500/20 pt-3">
+                    <span className="text-amber-300/90 font-medium flex items-center gap-1.5">
+                      <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      Simulados Agendados:
+                    </span>
+                    <strong className="text-amber-300 text-xl tabular-nums">
+                      {overviewMetrics.simuladosScheduled}
+                    </strong>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -249,6 +262,7 @@ const PresentialClassManager: React.FC = () => {
               events={scheduleEvents} 
               teachers={teachers} 
               totalMeetings={currentClass.totalMeetings}
+              subjectGroups={currentClass.subjectGroups}
             />
           </div>
         );

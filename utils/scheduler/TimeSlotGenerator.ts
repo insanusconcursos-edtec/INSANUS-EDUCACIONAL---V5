@@ -1,4 +1,5 @@
 import { Class } from '../../types/class';
+import { toLocalISODate, parseSafeLocalDate } from '../dateUtils';
 
 export interface TimeSlot {
   date: string;
@@ -18,15 +19,9 @@ const addMinutes = (time: string, minutes: number): string => {
   return `${String(newHours).padStart(2, '0')}:${String(newMins).padStart(2, '0')}`;
 };
 
-const getDayName = (date: Date): string => {
-  const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-  return days[date.getDay()];
-};
-
 export const generateEmptySlots = (classData: Class, holidays: string[]): TimeSlot[] => {
   const slots: TimeSlot[] = [];
-  const startDate = new Date(classData.startDate + 'T00:00:00'); // Ensure local time interpretation
-  const endDate = classData.endDate ? new Date(classData.endDate + 'T00:00:00') : null;
+  const startDate = parseSafeLocalDate(classData.startDate) || new Date(classData.startDate + 'T12:00:00');
   const totalMeetings = classData.totalMeetings;
   
   // Convert meeting duration from hours to minutes
@@ -45,7 +40,7 @@ export const generateEmptySlots = (classData: Class, holidays: string[]): TimeSl
     // We no longer break on endDate to allow overflow scheduling
     // if (endDate && currentDate > endDate) { break; }
 
-    const dateString = currentDate.toISOString().split('T')[0];
+    const dateString = toLocalISODate(currentDate);
     const dayOfWeek = currentDate.getDay(); // 0-6
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
     const isHoliday = holidays.includes(dateString);

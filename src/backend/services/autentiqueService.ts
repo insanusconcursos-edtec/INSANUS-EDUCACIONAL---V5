@@ -1096,11 +1096,12 @@ export const resendAutentiqueContractEmail = async (
   }
 
   const neverSignedIn = !authUser?.metadata?.lastSignInTime;
+  const targetEmail = (authUser?.email || email).trim().toLowerCase();
 
   if (neverSignedIn && logData.actionTaken === 'CREATED_AND_RELEASED') {
     const freshPassword = generateRandomPassword(8);
     await authAdmin.updateUser(authUser.uid, { password: freshPassword });
-    const res = await sendWelcomeEmail(name, email, freshPassword, className);
+    const res = await sendWelcomeEmail(name, targetEmail, freshPassword, className);
 
     await logRef.update({
       emailSent: res.sent,
@@ -1110,7 +1111,7 @@ export const resendAutentiqueContractEmail = async (
 
     return { sent: res.sent, mode: 'WELCOME_NEW_PASSWORD', error: res.error };
   } else {
-    const res = await sendAccessNotificationEmail(name, email, className);
+    const res = await sendAccessNotificationEmail(name, targetEmail, className);
 
     await logRef.update({
       emailSent: res.sent,

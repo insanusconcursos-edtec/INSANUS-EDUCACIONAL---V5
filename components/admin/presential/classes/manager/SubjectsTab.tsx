@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, ChevronDown, ChevronUp, AlertTriangle, BookOpen, User, CheckSquare, Save, Loader2, Link, GitBranch } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Plus, Trash2, Edit2, ChevronDown, ChevronUp, ChevronRight, AlertTriangle, BookOpen, User, CheckSquare, Save, Loader2, Link, Link2, Unlink, GitBranch, FolderPlus, Layers } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 import { Class } from '../../../../../types/class';
-import { Subject, Topic, Module, ModuleContent, OnlineStatus, TeachingAreaLink } from '../../../../../types/curriculum';
+import { Subject, SubjectGroup, Topic, Module, ModuleContent, OnlineStatus, TeachingAreaLink } from '../../../../../types/curriculum';
 import { Teacher } from '../../../../../types/teacher';
 import { curriculumService } from '../../../../../services/curriculumService';
+import { classService } from '../../../../../services/classService';
+import { classScheduleService } from '../../../../../services/classScheduleService';
 import { teacherService } from '../../../../../services/teacherService';
+import { getSubjectEffectiveSlotCount, resolveManualSchedule } from '../../../../../utils/scheduler/ContentResolver';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../../../../../services/firebase';
 import { TeachingAreaSelectorModal } from '../../TeachingAreaSelectorModal';
@@ -16,11 +20,25 @@ interface SubjectsTabProps {
 
 export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [groups, setGroups] = useState<SubjectGroup[]>(() =>
+    [...(cls.subjectGroups || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  );
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<SubjectGroup | null>(null);
+  const [groupNameInput, setGroupNameInput] = useState('');
+  const [groupSelectedSubjectIds, setGroupSelectedSubjectIds] = useState<Set<string>>(new Set());
+  const [isSavingGroup, setIsSavingGroup] = useState(false);
+  const [groupDeleteModal, setGroupDeleteModal] = useState<{ isOpen: boolean; group: SubjectGroup | null }>({
+    isOpen: false,
+    group: null,
+  });
+
   const [topics, setTopics] = useState<Topic[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newSubject, setNewSubject] = useState({ name: '', color: '#EF4444', defaultTeacherId: '' });
+  const [newSubject, setNewSubject] = useState({ name: '', color: '#EF4444', defaultTeacherId: '', groupId: '' });
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
   const [subjectDeleteModal, setSubjectDeleteModal] = useState<{ isOpen: boolean, subjectId: string | null }>({ isOpen: false, subjectId: null });
   const [isDeleting, setIsDeleting] = useState(false);
@@ -37,6 +55,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
   const [newModule, setNewModule] = useState<{ 
     name: string; 
     classesCount: number; 
+    groupedWithPrevious?: boolean;
     contents: ModuleContent[];
     isOnline?: boolean;
     onlineStatus?: OnlineStatus;
@@ -45,6 +64,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
   }>({ 
     name: '', 
     classesCount: 1, 
+    groupedWithPrevious: false,
     contents: [],
     isOnline: false,
     onlineStatus: 'EM_GRAVACAO',
@@ -62,30 +82,35 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
 
   // Fetch Data
   const sanitizeModules = (modules: Module[]): Module[] => {
-    return (modules || []).map(m => ({
-      id: m.id,
-      name: m.name || '',
-      classesCount: Number(m.classesCount) || 1,
-      isSelected: m.isSelected !== false,
-      isOnline: !!m.isOnline,
-      onlineStatus: m.onlineStatus || 'EM_GRAVACAO',
-      publicationDate: m.publicationDate || '',
-      contents: (m.contents || []).map((c: any) => ({
-        id: c.id,
-        type: c.type || 'PDF',
-        title: c.title || '',
-        url: c.url || '',
-        createdAt: c.createdAt || new Date().toISOString(),
-        fileType: c.fileType || 'theory',
-        linkedTheoryId: c.linkedTheoryId || null
-      })),
-      teachingAreaLink: m.teachingAreaLink ? {
-        moduleId: m.teachingAreaLink.moduleId || '',
-        folderId: m.teachingAreaLink.folderId || '',
-        moduleName: m.teachingAreaLink.moduleName || null,
-        folderName: m.teachingAreaLink.folderName || null
-      } : { moduleId: '', folderId: '' }
-    }));
+    return (modules || []).map(m => {
+      const isOnlineMod = !!m.isOnline;
+      const isGrouped = !isOnlineMod && (Boolean(m.groupedWithPrevious) || Number(m.classesCount) === 0);
+      return {
+        id: m.id,
+        name: m.name || '',
+        groupedWithPrevious: isGrouped,
+        classesCount: isGrouped ? 0 : Math.max(1, Number(m.classesCount) || 1),
+        isSelected: m.isSelected !== false,
+        isOnline: isOnlineMod,
+        onlineStatus: m.onlineStatus || 'EM_GRAVACAO',
+        publicationDate: m.publicationDate || '',
+        contents: (m.contents || []).map((c: any) => ({
+          id: c.id,
+          type: c.type || 'PDF',
+          title: c.title || '',
+          url: c.url || '',
+          createdAt: c.createdAt || new Date().toISOString(),
+          fileType: c.fileType || 'theory',
+          linkedTheoryId: c.linkedTheoryId || null
+        })),
+        teachingAreaLink: m.teachingAreaLink ? {
+          moduleId: m.teachingAreaLink.moduleId || '',
+          folderId: m.teachingAreaLink.folderId || '',
+          moduleName: m.teachingAreaLink.moduleName || null,
+          folderName: m.teachingAreaLink.folderName || null
+        } : { moduleId: '', folderId: '' }
+      };
+    });
   };
 
   const fetchData = async (silent: boolean = false) => {
@@ -122,11 +147,16 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
       setIsCloning(true);
       setImportConfirmModal(false);
       await curriculumService.cloneCurriculum(cls.masterClassId!, cls.id);
+      const freshCls = await classService.getClassById(cls.id);
+      if (freshCls?.subjectGroups) {
+        setGroups([...freshCls.subjectGroups].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
+      }
       await fetchData();
       if (onUpdate) await onUpdate(true);
+      toast.success('Currículo importado da Turma Mãe com sucesso.');
     } catch (error) {
       console.error("Error importing curriculum:", error);
-      alert("Erro ao importar disciplinas da Turma Mãe.");
+      toast.error("Erro ao importar disciplinas da Turma Mãe.");
     } finally {
       setIsCloning(false);
     }
@@ -136,48 +166,331 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
     fetchData();
   }, [cls.id]);
 
+  useEffect(() => {
+    setGroups([...(cls.subjectGroups || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
+  }, [cls.subjectGroups]);
+
   // Calculations
-  const totalSelectedClasses = topics
-    .filter(t => t.isSelected)
-    .reduce((acc, topic) => {
-      const topicClasses = topic.modules
-        ?.filter(m => m.isSelected !== false && !m.isOnline)
-        .reduce((sum, mod) => sum + mod.classesCount, 0) || 0;
-      return acc + topicClasses;
-    }, 0);
+  const totalSelectedClasses = useMemo(() => {
+    return subjects.reduce(
+      (sum, subj) => sum + getSubjectEffectiveSlotCount(subj.id, topics, true),
+      0
+    );
+  }, [subjects, topics]);
 
   const meetingsConsumed = Math.ceil(totalSelectedClasses / (cls.classesPerMeeting || 1));
   const meetingsBalance = cls.totalMeetings - meetingsConsumed;
   const isOverLimit = meetingsBalance < 0;
 
+  /**
+   * Localiza o módulo presencial imediatamente anterior na mesma disciplina
+   * (seja dentro do mesmo assunto ou no assunto anterior da disciplina).
+   */
+  const getPrecedingPresencialModule = (
+    subjectId: string,
+    topicId: string,
+    moduleId?: string | null
+  ): { topic: Topic; module: Module } | null => {
+    if (!subjectId || !topicId) return null;
+    const subjTopics = topics
+      .filter(t => t.subjectId === subjectId)
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    let lastValid: { topic: Topic; module: Module } | null = null;
+
+    for (const t of subjTopics) {
+      const mods = t.modules || [];
+      if (t.id === topicId && !moduleId) {
+        // Criando novo módulo ao final deste assunto: pega o último módulo presencial válido até aqui
+        for (const m of mods) {
+          if (!m.isOnline && t.isSelected !== false && m.isSelected !== false) {
+            lastValid = { topic: t, module: m };
+          }
+        }
+        return lastValid;
+      }
+
+      for (const m of mods) {
+        if (t.id === topicId && m.id === moduleId) {
+          return lastValid;
+        }
+        if (!m.isOnline && t.isSelected !== false && m.isSelected !== false) {
+          lastValid = { topic: t, module: m };
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const handleToggleModuleGroupWithPrevious = async (topicId: string, moduleId: string) => {
+    try {
+      const topic = topics.find(t => t.id === topicId);
+      if (!topic || !topic.modules) return;
+
+      const updatedModules = topic.modules.map(m => {
+        if (m.id !== moduleId) return m;
+        const nextGrouped = !m.groupedWithPrevious;
+        return {
+          ...m,
+          groupedWithPrevious: nextGrouped,
+          classesCount: nextGrouped ? 0 : Math.max(1, Number(m.classesCount) || 1),
+        };
+      });
+
+      const updatedTopics = topics.map(t =>
+        t.id === topicId ? { ...t, modules: updatedModules } : t
+      );
+      setTopics(updatedTopics);
+
+      const sanitizedModules = sanitizeModules(updatedModules);
+      await curriculumService.updateTopic(topicId, { modules: sanitizedModules });
+      if (onUpdate) await onUpdate(true);
+
+      const targetMod = updatedModules.find(m => m.id === moduleId);
+      if (targetMod?.groupedWithPrevious) {
+        toast.success('Módulo agrupado na mesma aula do anterior.');
+      } else {
+        toast.success('Módulo separado em aula própria (1 aula).');
+      }
+    } catch (error) {
+      console.error('Error toggling module grouping:', error);
+      toast.error('Erro ao atualizar agrupamento do módulo.');
+      fetchData(true);
+    }
+  };
+
+  const validGroupIdSet = useMemo(() => new Set(groups.map((g) => g.id)), [groups]);
+
+  const getEffectiveGroupId = (groupId?: string | null): string | null => {
+    if (!groupId) return null;
+    return validGroupIdSet.has(groupId) ? groupId : null;
+  };
+
+  const toggleGroupCollapse = (groupKey: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  };
+
+  const handleOpenCreateGroup = () => {
+    setEditingGroup(null);
+    setGroupNameInput('');
+    setGroupSelectedSubjectIds(new Set());
+    setIsGroupModalOpen(true);
+  };
+
+  const handleOpenEditGroup = (group: SubjectGroup) => {
+    setEditingGroup(group);
+    setGroupNameInput(group.name);
+    const linkedIds = subjects
+      .filter((s) => s.groupId === group.id)
+      .map((s) => s.id);
+    setGroupSelectedSubjectIds(new Set(linkedIds));
+    setIsGroupModalOpen(true);
+  };
+
+  const handleToggleSubjectInGroupModal = (subjectId: string) => {
+    setGroupSelectedSubjectIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(subjectId)) {
+        next.delete(subjectId);
+      } else {
+        next.add(subjectId);
+      }
+      return next;
+    });
+  };
+
+  const handleSaveGroup = async () => {
+    const trimmedName = groupNameInput.trim();
+    if (!trimmedName) return;
+
+    setIsSavingGroup(true);
+    try {
+      let targetGroupId: string;
+      let updatedGroups: SubjectGroup[];
+
+      if (editingGroup) {
+        targetGroupId = editingGroup.id;
+        updatedGroups = groups.map((g) =>
+          g.id === editingGroup.id ? { ...g, name: trimmedName } : g
+        );
+      } else {
+        targetGroupId = `grp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const newGrp: SubjectGroup = {
+          id: targetGroupId,
+          name: trimmedName,
+          order: groups.length,
+          createdAt: new Date().toISOString(),
+        };
+        updatedGroups = [...groups, newGrp];
+      }
+
+      // Identifica disciplinas cujo vínculo com este grupo foi alterado no modal
+      const subjectGroupUpdates: { id: string; groupId: string | null }[] = [];
+      subjects.forEach((subj) => {
+        const shouldBeInThisGroup = groupSelectedSubjectIds.has(subj.id);
+        const wasInThisGroup = subj.groupId === targetGroupId;
+
+        if (shouldBeInThisGroup && subj.groupId !== targetGroupId) {
+          subjectGroupUpdates.push({ id: subj.id, groupId: targetGroupId });
+        } else if (!shouldBeInThisGroup && wasInThisGroup) {
+          subjectGroupUpdates.push({ id: subj.id, groupId: null });
+        }
+      });
+
+      setGroups(updatedGroups);
+      if (subjectGroupUpdates.length > 0) {
+        const updateMap = new Map(subjectGroupUpdates.map((u) => [u.id, u.groupId]));
+        setSubjects((prev) =>
+          prev.map((s) => (updateMap.has(s.id) ? { ...s, groupId: updateMap.get(s.id)! } : s))
+        );
+      }
+
+      await Promise.all([
+        classService.updateClass(cls.id, { subjectGroups: updatedGroups }),
+        curriculumService.batchSetSubjectsGroup(subjectGroupUpdates),
+      ]);
+
+      setIsGroupModalOpen(false);
+      setEditingGroup(null);
+      setGroupNameInput('');
+      setGroupSelectedSubjectIds(new Set());
+
+      if (onUpdate) await onUpdate(true);
+      toast.success(editingGroup ? 'Grupo atualizado.' : 'Grupo criado com sucesso.');
+    } catch (error) {
+      console.error('Error saving group:', error);
+      toast.error('Erro ao salvar o grupo de disciplinas.');
+      fetchData(true);
+    } finally {
+      setIsSavingGroup(false);
+    }
+  };
+
+  const handleMoveGroup = async (groupId: string, direction: 'up' | 'down') => {
+    const idx = groups.findIndex((g) => g.id === groupId);
+    if (idx === -1) return;
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= groups.length) return;
+
+    const reordered = [...groups];
+    const temp = reordered[idx];
+    reordered[idx] = reordered[targetIdx];
+    reordered[targetIdx] = temp;
+    const normalized = reordered.map((g, index) => ({ ...g, order: index }));
+
+    setGroups(normalized);
+    try {
+      await classService.updateClass(cls.id, { subjectGroups: normalized });
+      if (onUpdate) await onUpdate(true);
+    } catch (error) {
+      console.error('Error reordering groups:', error);
+      toast.error('Erro ao reordenar grupos.');
+      if (onUpdate) await onUpdate(true);
+    }
+  };
+
+  const handleConfirmDeleteGroup = async () => {
+    const groupToDelete = groupDeleteModal.group;
+    if (!groupToDelete) return;
+
+    setIsDeleting(true);
+    try {
+      const remainingGroups = groups
+        .filter((g) => g.id !== groupToDelete.id)
+        .map((g, index) => ({ ...g, order: index }));
+
+      const affectedSubjects = subjects
+        .filter((s) => s.groupId === groupToDelete.id)
+        .map((s) => ({ id: s.id, groupId: null as string | null }));
+
+      setGroups(remainingGroups);
+      if (affectedSubjects.length > 0) {
+        setSubjects((prev) =>
+          prev.map((s) => (s.groupId === groupToDelete.id ? { ...s, groupId: null } : s))
+        );
+      }
+
+      await Promise.all([
+        classService.updateClass(cls.id, { subjectGroups: remainingGroups }),
+        curriculumService.batchSetSubjectsGroup(affectedSubjects),
+      ]);
+
+      setGroupDeleteModal({ isOpen: false, group: null });
+      if (onUpdate) await onUpdate(true);
+      toast.success('Grupo removido. As disciplinas foram mantidas fora de grupo.');
+    } catch (error) {
+      console.error('Error deleting group:', error);
+      toast.error('Erro ao excluir o grupo.');
+      fetchData(true);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleQuickChangeSubjectGroup = async (subjectId: string, nextGroupId: string | null) => {
+    const normalizedGroupId = nextGroupId || null;
+    setSubjects((prev) =>
+      prev.map((s) => (s.id === subjectId ? { ...s, groupId: normalizedGroupId } : s))
+    );
+    try {
+      await curriculumService.updateSubject(subjectId, { groupId: normalizedGroupId });
+      if (onUpdate) await onUpdate(true);
+    } catch (error) {
+      console.error('Error changing subject group:', error);
+      toast.error('Erro ao mover disciplina de grupo.');
+      fetchData(true);
+    }
+  };
+
   const handleSaveSubject = async () => {
-    if (!newSubject.name) return;
+    if (!newSubject.name.trim()) return;
+
+    const normalizedGroupId = newSubject.groupId ? newSubject.groupId : null;
+    const normalizedTeacherId = newSubject.defaultTeacherId || undefined;
 
     try {
       if (editingSubject) {
-        // Update
-        const updatedSubject = { ...editingSubject, ...newSubject };
-        setSubjects(prev => prev.map(s => s.id === editingSubject.id ? updatedSubject : s));
-        await curriculumService.updateSubject(editingSubject.id, newSubject);
-      } else {
-        // Create
-        const subjectData = {
-          classId: cls.id,
-          name: newSubject.name,
+        const updatePayload: Partial<Subject> = {
+          name: newSubject.name.trim(),
           color: newSubject.color,
-          defaultTeacherId: newSubject.defaultTeacherId || undefined,
-          order: subjects.length
+          defaultTeacherId: normalizedTeacherId,
+          groupId: normalizedGroupId,
+        };
+        const updatedSubject: Subject = {
+          ...editingSubject,
+          ...updatePayload,
+        };
+        setSubjects(prev => prev.map(s => s.id === editingSubject.id ? updatedSubject : s));
+        await curriculumService.updateSubject(editingSubject.id, updatePayload);
+      } else {
+        const subjectData: Omit<Subject, 'id'> = {
+          classId: cls.id,
+          name: newSubject.name.trim(),
+          color: newSubject.color,
+          defaultTeacherId: normalizedTeacherId,
+          groupId: normalizedGroupId,
+          order: subjects.length,
         };
         const id = await curriculumService.createSubject(subjectData);
         setSubjects(prev => [...prev, { ...subjectData, id }]);
       }
       setIsModalOpen(false);
       setEditingSubject(null);
-      setNewSubject({ name: '', color: '#EF4444', defaultTeacherId: '' });
+      setNewSubject({ name: '', color: '#EF4444', defaultTeacherId: '', groupId: '' });
 
       if (onUpdate) await onUpdate(true);
     } catch (error) {
       console.error("Error saving subject:", error);
+      toast.error('Erro ao salvar disciplina.');
       fetchData(true);
     }
   };
@@ -187,7 +500,8 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
     setNewSubject({
       name: subject.name,
       color: subject.color,
-      defaultTeacherId: subject.defaultTeacherId || ''
+      defaultTeacherId: subject.defaultTeacherId || '',
+      groupId: getEffectiveGroupId(subject.groupId) || '',
     });
     setIsModalOpen(true);
   };
@@ -266,23 +580,52 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
   };
 
   const handleMoveSubject = async (subjectId: string, direction: 'up' | 'down') => {
-    const index = subjects.findIndex(s => s.id === subjectId);
-    if (index === -1) return;
-    
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= subjects.length) return;
+    const targetSubject = subjects.find(s => s.id === subjectId);
+    if (!targetSubject) return;
 
-    const newSubjects = [...subjects];
-    const temp = newSubjects[index];
-    newSubjects[index] = newSubjects[targetIndex];
-    newSubjects[targetIndex] = temp;
+    const targetGroupKey = getEffectiveGroupId(targetSubject.groupId);
+    const siblings = subjects
+      .filter(s => getEffectiveGroupId(s.groupId) === targetGroupKey)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
-    // Update orders locally
-    newSubjects.forEach((s, i) => s.order = i);
-    setSubjects(newSubjects);
+    const siblingIdx = siblings.findIndex(s => s.id === subjectId);
+    if (siblingIdx === -1) return;
+
+    const swapIdx = direction === 'up' ? siblingIdx - 1 : siblingIdx + 1;
+    if (swapIdx < 0 || swapIdx >= siblings.length) return;
+
+    const reorderedSiblings = [...siblings];
+    const temp = reorderedSiblings[siblingIdx];
+    reorderedSiblings[siblingIdx] = reorderedSiblings[swapIdx];
+    reorderedSiblings[swapIdx] = temp;
+
+    // Reconstrói lista ordenada por grupo + avulsas preservando ordens globais limpas
+    const rebuilt: Subject[] = [];
+    groups.forEach(grp => {
+      const list =
+        grp.id === targetGroupKey
+          ? reorderedSiblings
+          : subjects
+              .filter(s => getEffectiveGroupId(s.groupId) === grp.id)
+              .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      rebuilt.push(...list);
+    });
+
+    const ungroupedList =
+      targetGroupKey === null
+        ? reorderedSiblings
+        : subjects
+            .filter(s => getEffectiveGroupId(s.groupId) === null)
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    rebuilt.push(...ungroupedList);
+
+    const normalizedSubjects = rebuilt.map((s, index) => ({ ...s, order: index }));
+    setSubjects(normalizedSubjects);
 
     try {
-      await curriculumService.updateSubjectOrders(newSubjects.map(s => ({ id: s.id, order: s.order || 0 })));
+      await curriculumService.updateSubjectOrders(
+        normalizedSubjects.map(s => ({ id: s.id, order: s.order || 0 }))
+      );
       if (onUpdate) await onUpdate(true);
     } catch (error) {
       console.error("Error moving subject:", error);
@@ -432,6 +775,19 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
       const topic = topics.find(t => t.id === activeTopicId);
       if (!topic) return;
 
+      const precedingMod = getPrecedingPresencialModule(
+        topic.subjectId,
+        activeTopicId,
+        editingModule?.id || null
+      );
+      const effectiveGrouped =
+        !newModule.isOnline && Boolean(newModule.groupedWithPrevious) && Boolean(precedingMod);
+      const effectiveClassesCount = newModule.isOnline
+        ? 1
+        : effectiveGrouped
+          ? 0
+          : Math.max(1, Number(newModule.classesCount) || 1);
+
       const currentModules = topic.modules || [];
       let updatedModules: Module[];
 
@@ -441,7 +797,8 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
             ? { 
                 ...m, 
                 name: newModule.name, 
-                classesCount: newModule.classesCount, 
+                groupedWithPrevious: effectiveGrouped,
+                classesCount: effectiveClassesCount, 
                 contents: newModule.contents,
                 isOnline: newModule.isOnline,
                 onlineStatus: newModule.onlineStatus,
@@ -454,7 +811,8 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
         const newMod: Module = {
           id: Date.now().toString(),
           name: newModule.name,
-          classesCount: newModule.classesCount,
+          groupedWithPrevious: effectiveGrouped,
+          classesCount: effectiveClassesCount,
           contents: newModule.contents,
           isOnline: newModule.isOnline,
           onlineStatus: newModule.onlineStatus,
@@ -478,6 +836,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
       setNewModule({ 
         name: '', 
         classesCount: 1, 
+        groupedWithPrevious: false,
         contents: [],
         isOnline: false,
         onlineStatus: 'EM_GRAVACAO',
@@ -650,16 +1009,24 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
 
   const handleSyncGrade = async () => {
     setIsSyncing(true);
-    // Simulate processing time
-    await new Promise(r => setTimeout(r, 800));
-    
-    setIsSyncing(false);
-    setSyncSuccess(true);
-    
-    // Reset success state after 3 seconds
-    setTimeout(() => {
-      setSyncSuccess(false);
-    }, 3000);
+    try {
+      const existingEvents = await classScheduleService.getScheduleEventsByClass(cls.id);
+      if (existingEvents.length > 0) {
+        const reResolved = resolveManualSchedule(existingEvents, subjects, topics);
+        await classScheduleService.saveScheduleEvents(cls.id, reResolved);
+      }
+      if (onUpdate) await onUpdate(true);
+      setSyncSuccess(true);
+      toast.success('Grade e cronograma sincronizados com sucesso.');
+      setTimeout(() => {
+        setSyncSuccess(false);
+      }, 3000);
+    } catch (error) {
+      console.error('Error syncing grade with schedule:', error);
+      toast.error('Erro ao sincronizar a grade.');
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const openTopicModal = (subjectId: string) => {
@@ -680,18 +1047,399 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
     return teachers.find(t => t.id === id)?.name || 'Professor não encontrado';
   };
 
+  const ungroupedSubjects = useMemo(
+    () =>
+      subjects
+        .filter((s) => getEffectiveGroupId(s.groupId) === null)
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+    [subjects, validGroupIdSet]
+  );
+
+  const getSubjectPresencialClassesCount = (subjectId: string) => {
+    return getSubjectEffectiveSlotCount(subjectId, topics, true);
+  };
+
+  const renderSubjectCard = (subject: Subject, indexInScope: number, totalInScope: number) => (
+    <div key={subject.id} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+      <div
+        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 cursor-pointer hover:bg-zinc-800/50 transition-colors"
+        onClick={() => toggleSubject(subject.id)}
+        style={{ borderLeft: `4px solid ${subject.color}` }}
+      >
+        <div className="flex flex-wrap items-center gap-3 min-w-0">
+          <h4 className="font-bold text-white">{subject.name}</h4>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-zinc-500 flex items-center gap-1">
+              <User className="w-3 h-3 shrink-0" />
+              {getTeacherName(subject.defaultTeacherId) || 'Sem Titular'}
+            </span>
+            {subject.defaultTeacherId && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleBulkApplyTeacher(subject.id);
+                }}
+                className="text-[10px] bg-zinc-800 hover:bg-zinc-700 text-zinc-400 px-2 py-0.5 rounded border border-zinc-700 transition-colors whitespace-nowrap shrink-0"
+                title="Vincular Titular a Todos os Assuntos"
+              >
+                Aplicar a todos
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 shrink-0">
+          {groups.length > 0 && (
+            <div onClick={(e) => e.stopPropagation()}>
+              <select
+                value={getEffectiveGroupId(subject.groupId) || ''}
+                onChange={(e) => handleQuickChangeSubjectGroup(subject.id, e.target.value || null)}
+                className="bg-zinc-950 border border-zinc-800 hover:border-zinc-700 rounded-md px-2 py-1 text-[11px] text-zinc-300 focus:outline-none focus:border-brand-red transition-colors cursor-pointer max-w-[180px] truncate"
+                title="Vincular ou alterar grupo desta disciplina"
+              >
+                <option value="">Fora de grupo</option>
+                {groups.map((grp) => (
+                  <option key={grp.id} value={grp.id}>
+                    {grp.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1 mr-1">
+            <div className="flex flex-col mr-1">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleMoveSubject(subject.id, 'up');
+                }}
+                disabled={indexInScope === 0}
+                className="p-0.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded disabled:opacity-25 disabled:pointer-events-none"
+                title="Mover para cima"
+              >
+                <ChevronUp className="w-3 h-3" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleMoveSubject(subject.id, 'down');
+                }}
+                disabled={indexInScope === totalInScope - 1}
+                className="p-0.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded disabled:opacity-25 disabled:pointer-events-none"
+                title="Mover para baixo"
+              >
+                <ChevronDown className="w-3 h-3" />
+              </button>
+            </div>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleEditSubject(subject);
+              }}
+              className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors"
+              title="Editar Disciplina"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setSubjectDeleteModal({ isOpen: true, subjectId: subject.id });
+              }}
+              className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-zinc-800 rounded transition-colors"
+              title="Excluir Disciplina"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <span className="text-xs text-zinc-500 tabular-nums whitespace-nowrap">
+            {topics.filter((t) => t.subjectId === subject.id).length} assuntos
+          </span>
+          {expandedSubjects.includes(subject.id) ? (
+            <ChevronUp className="w-4 h-4 text-zinc-500 shrink-0" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-zinc-500 shrink-0" />
+          )}
+        </div>
+      </div>
+
+      {expandedSubjects.includes(subject.id) && (
+        <div className="p-4 bg-zinc-950/50 border-t border-zinc-800 space-y-3">
+          {topics
+            .filter((t) => t.subjectId === subject.id)
+            .sort((a, b) => (a.order || 0) - (b.order || 0))
+            .map((topic) => {
+              const topicPresencialModules = (topic.modules || []).filter((m) => !m.isOnline);
+              const topicOwnClasses = topicPresencialModules.reduce((acc, mod) => {
+                const prec = getPrecedingPresencialModule(subject.id, topic.id, mod.id);
+                const isEffGrouped = (Boolean(mod.groupedWithPrevious) || Number(mod.classesCount) === 0) && Boolean(prec);
+                return acc + (isEffGrouped ? 0 : Math.max(1, Number(mod.classesCount) || 1));
+              }, 0);
+              const allGroupedInPrevious =
+                topicPresencialModules.length > 0 && topicOwnClasses === 0;
+
+              return (
+            <div key={topic.id} className="bg-zinc-900 border border-zinc-800 p-3 rounded-lg hover:border-zinc-700 transition-colors">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => handleToggleTopicSelection(topic)}
+                    className={`w-5 h-5 rounded flex items-center justify-center transition-colors ${
+                      topic.isSelected
+                        ? 'bg-brand-red text-white'
+                        : 'bg-zinc-800 text-transparent border border-zinc-700 hover:border-zinc-500'
+                    }`}
+                  >
+                    <CheckSquare className="w-3.5 h-3.5" />
+                  </button>
+                  <div>
+                    <p className={`text-sm font-medium ${topic.isSelected ? 'text-white' : 'text-zinc-500'}`}>
+                      {topic.name}
+                    </p>
+                    <div className="mt-2">
+                      <select
+                        value={topic.teacherId || ''}
+                        onChange={(e) => handleUpdateTopicTeacher(topic.id, e.target.value || null)}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-[10px] text-zinc-400 focus:outline-none focus:border-brand-red transition-colors appearance-none cursor-pointer hover:border-zinc-700"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <option value="">Herda da Disciplina ({getTeacherName(subject.defaultTeacherId) || 'Sem Titular'})</option>
+                        {teachers.map((teacher) => (
+                          <option key={teacher.id} value={teacher.id}>{teacher.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="text-right tabular-nums">
+                    {allGroupedInPrevious ? (
+                      <>
+                        <span className="block text-[11px] font-bold text-amber-400 whitespace-nowrap">
+                          Aula conjunta
+                        </span>
+                        <span className="text-[10px] text-zinc-500 uppercase whitespace-nowrap">Na anterior</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="block text-xs font-bold text-white whitespace-nowrap">
+                          {topicOwnClasses} {topicOwnClasses === 1 ? 'aula' : 'aulas'}
+                        </span>
+                        <span className="text-[10px] text-zinc-600 uppercase">Total</span>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1 pl-2 border-l border-zinc-800">
+                    <div className="flex flex-col">
+                      <button
+                        onClick={() => handleMoveTopic(topic.id, 'up')}
+                        className="p-0.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded"
+                        title="Mover para cima"
+                      >
+                        <ChevronUp className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => handleMoveTopic(topic.id, 'down')}
+                        className="p-0.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded"
+                        title="Mover para baixo"
+                      >
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => handleEditTopic(topic)}
+                      className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded transition-colors"
+                      title="Editar Assunto"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => setTopicDeleteModal({ isOpen: true, topicId: topic.id })}
+                      className="p-1.5 text-zinc-500 hover:text-red-500 hover:bg-zinc-800 rounded transition-colors"
+                      title="Excluir Assunto"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modules List */}
+              <div className="mt-3 pl-4 border-l-2 border-zinc-800 space-y-2">
+                {topic.modules?.map((module, index) => {
+                  const precedingMod = !module.isOnline
+                    ? getPrecedingPresencialModule(subject.id, topic.id, module.id)
+                    : null;
+                  const isGroupedWithPrev =
+                    !module.isOnline &&
+                    (Boolean(module.groupedWithPrevious) || Number(module.classesCount) === 0) &&
+                    Boolean(precedingMod);
+                  const displayClassesCount = Math.max(1, Number(module.classesCount) || 1);
+
+                  return (
+                  <div key={module.id} className="flex items-center justify-between gap-2 bg-zinc-950/50 p-2 rounded border border-zinc-800/50 hover:border-zinc-700 transition-colors group">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={module.isSelected !== false}
+                        onChange={() => handleToggleModuleSelection(topic.id, module.id)}
+                        className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-brand-red focus:ring-brand-red focus:ring-offset-zinc-900 cursor-pointer shrink-0"
+                      />
+                      <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                        <div className={`w-1.5 h-1.5 rounded-full transition-colors shrink-0 ${module.isSelected !== false ? (isGroupedWithPrev ? 'bg-amber-400' : 'bg-brand-red') : 'bg-zinc-700'}`} />
+                        <span className={`text-xs ${module.isSelected !== false ? 'text-zinc-300' : 'text-zinc-600 line-through'}`}>
+                          {module.name}
+                        </span>
+                        {module.isOnline && (
+                          <span className="text-[8px] font-bold uppercase px-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 whitespace-nowrap shrink-0">
+                            Online
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {module.isOnline ? (
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${module.onlineStatus === 'PUBLICADO' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
+                          {module.onlineStatus === 'PUBLICADO' ? 'Publicado' : 'Em Gravação'}
+                        </span>
+                      ) : isGroupedWithPrev ? (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleModuleGroupWithPrevious(topic.id, module.id)}
+                          title={`Ministrado na mesma aula de "${precedingMod?.module.name}". Clique para separar em aula própria.`}
+                          className="flex items-center gap-1 text-[10px] font-bold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/30 transition-colors whitespace-nowrap shrink-0"
+                        >
+                          <Link2 className="w-3 h-3 text-amber-400 shrink-0" />
+                          <span>Mesma aula ant.</span>
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          {precedingMod && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleModuleGroupWithPrevious(topic.id, module.id)}
+                              title={`Agrupar na mesma aula de "${precedingMod.module.name}" (0 aulas extras)`}
+                              className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-[10px] font-semibold text-zinc-400 hover:text-amber-300 bg-zinc-900 hover:bg-amber-500/10 px-1.5 py-0.5 rounded border border-zinc-800 hover:border-amber-500/30 transition-all whitespace-nowrap shrink-0"
+                            >
+                              <Link2 className="w-2.5 h-2.5 shrink-0" />
+                              <span>Agrupar na ant.</span>
+                            </button>
+                          )}
+                          <span className="text-[10px] font-bold text-zinc-500 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800 tabular-nums whitespace-nowrap">
+                            {displayClassesCount} {displayClassesCount === 1 ? 'aula' : 'aulas'}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex flex-col mr-1">
+                          <button
+                            onClick={() => handleMoveModule(topic.id, module.id, 'up')}
+                            className="p-0.5 text-zinc-600 hover:text-white hover:bg-zinc-800 rounded"
+                            disabled={index === 0}
+                          >
+                            <ChevronUp className="w-2.5 h-2.5" />
+                          </button>
+                          <button
+                            onClick={() => handleMoveModule(topic.id, module.id, 'down')}
+                            className="p-0.5 text-zinc-600 hover:text-white hover:bg-zinc-800 rounded"
+                            disabled={index === (topic.modules?.length || 0) - 1}
+                          >
+                            <ChevronDown className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setEditingModule(module);
+                            setNewModule({
+                              name: module.name,
+                              classesCount: module.groupedWithPrevious ? 0 : Math.max(1, Number(module.classesCount) || 1),
+                              groupedWithPrevious: Boolean(module.groupedWithPrevious) || (!module.isOnline && Number(module.classesCount) === 0),
+                              contents: module.contents || [],
+                              isOnline: module.isOnline || false,
+                              onlineStatus: module.onlineStatus || 'EM_GRAVACAO',
+                              publicationDate: module.publicationDate || '',
+                              teachingAreaLink: module.teachingAreaLink || { moduleId: '', folderId: '' }
+                            });
+                            setActiveTopicId(topic.id);
+                            setIsModuleModalOpen(true);
+                          }}
+                          className="p-1 text-zinc-600 hover:text-white hover:bg-zinc-800 rounded"
+                          title="Editar Módulo"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => setModuleDeleteModal({ isOpen: true, topicId: topic.id, moduleId: module.id })}
+                          className="p-1 text-zinc-600 hover:text-red-500 hover:bg-zinc-800 rounded"
+                          title="Excluir Módulo"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  );
+                })}
+
+                <button
+                  onClick={() => {
+                    setEditingModule(null);
+                    setNewModule({
+                      name: '',
+                      classesCount: 1,
+                      groupedWithPrevious: false,
+                      contents: [],
+                      isOnline: false,
+                      onlineStatus: 'EM_GRAVACAO',
+                      publicationDate: '',
+                      teachingAreaLink: { moduleId: '', folderId: '' }
+                    });
+                    setActiveTopicId(topic.id);
+                    setIsModuleModalOpen(true);
+                  }}
+                  className="text-[10px] font-bold uppercase text-zinc-600 hover:text-brand-red flex items-center gap-1 mt-2 transition-colors"
+                >
+                  <Plus className="w-3 h-3" />
+                  Adicionar Módulo
+                </button>
+              </div>
+            </div>
+              );
+            })}
+
+          <button
+            onClick={() => openTopicModal(subject.id)}
+            className="w-full py-2 border border-dashed border-zinc-800 rounded-lg text-zinc-500 text-xs font-bold uppercase hover:text-brand-red hover:border-brand-red/30 transition-colors flex items-center justify-center gap-2"
+          >
+            <Plus className="w-3 h-3" />
+            Adicionar Assunto
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex flex-col lg:flex-row gap-6 h-full animate-in fade-in duration-500">
-      {/* Left Column: Subjects List */}
+      {/* Left Column: Subjects & Groups List */}
       <div className="flex-1 space-y-6">
-        <div className="flex justify-between items-center">
-          <h3 className="text-xl font-bold text-white">Disciplinas e Assuntos</h3>
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap justify-between items-center gap-3">
+          <div>
+            <h3 className="text-xl font-bold text-white">Disciplinas e Assuntos</h3>
+            {groups.length > 0 && (
+              <p className="text-xs text-zinc-500 mt-0.5 tabular-nums">
+                {groups.length} {groups.length === 1 ? 'grupo organizado' : 'grupos organizados'} · {subjects.length} {subjects.length === 1 ? 'disciplina' : 'disciplinas'}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             {cls.masterClassId && (
               <button
                 onClick={handleImportFromMaster}
                 disabled={isCloning}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-lg font-bold uppercase text-xs tracking-wider transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 px-3.5 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-lg font-bold uppercase text-xs tracking-wider transition-colors disabled:opacity-50 whitespace-nowrap shrink-0"
               >
                 {isCloning ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -702,12 +1450,19 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
               </button>
             )}
             <button
+              onClick={handleOpenCreateGroup}
+              className="flex items-center gap-2 px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-700 hover:border-zinc-600 rounded-lg font-bold uppercase text-xs tracking-wider transition-colors whitespace-nowrap shrink-0"
+            >
+              <FolderPlus className="w-4 h-4 text-brand-red" />
+              Novo Grupo
+            </button>
+            <button
               onClick={() => {
                 setEditingSubject(null);
-                setNewSubject({ name: '', color: '#EF4444', defaultTeacherId: '' });
+                setNewSubject({ name: '', color: '#EF4444', defaultTeacherId: '', groupId: '' });
                 setIsModalOpen(true);
               }}
-              className="flex items-center gap-2 px-4 py-2 bg-brand-red hover:bg-red-600 text-white rounded-lg font-bold uppercase text-xs tracking-wider transition-colors shadow-lg shadow-brand-red/20"
+              className="flex items-center gap-2 px-4 py-2 bg-brand-red hover:bg-red-600 text-white rounded-lg font-bold uppercase text-xs tracking-wider transition-colors shadow-lg shadow-brand-red/20 whitespace-nowrap shrink-0"
             >
               <Plus className="w-4 h-4" />
               Nova Disciplina
@@ -715,288 +1470,186 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
           </div>
         </div>
 
-        <div className="space-y-4">
-          {subjects.map(subject => (
-            <div key={subject.id} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-              <div 
-                className="flex items-center justify-between p-4 cursor-pointer hover:bg-zinc-800/50 transition-colors"
-                onClick={() => toggleSubject(subject.id)}
-                style={{ borderLeft: `4px solid ${subject.color}` }}
+        <div className="space-y-6">
+          {/* Grupos Cadastrados */}
+          {groups.map((group, grpIndex) => {
+            const groupSubjects = subjects
+              .filter((s) => s.groupId === group.id)
+              .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+            const groupSubjectIds = new Set(groupSubjects.map((s) => s.id));
+            const groupTopicsCount = topics.filter((t) => groupSubjectIds.has(t.subjectId)).length;
+            const groupClassesCount = groupSubjects.reduce(
+              (sum, s) => sum + getSubjectPresencialClassesCount(s.id),
+              0
+            );
+            const isGroupCollapsed = collapsedGroups.has(group.id);
+
+            return (
+              <div
+                key={group.id}
+                className="border border-zinc-800 rounded-xl bg-zinc-950/60 overflow-hidden"
               >
-                <div className="flex items-center gap-4">
-                  <h4 className="font-bold text-white">{subject.name}</h4>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-zinc-500 flex items-center gap-1">
-                      <User className="w-3 h-3" />
-                      {getTeacherName(subject.defaultTeacherId) || 'Sem Titular'}
-                    </span>
-                    {subject.defaultTeacherId && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleBulkApplyTeacher(subject.id);
-                        }}
-                        className="text-[10px] bg-zinc-800 hover:bg-zinc-700 text-zinc-400 px-2 py-0.5 rounded border border-zinc-700 transition-colors"
-                        title="Vincular Titular a Todos os Assuntos"
-                      >
-                        Aplicar a todos
-                      </button>
+                <div
+                  onClick={() => toggleGroupCollapse(group.id)}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3.5 bg-zinc-900/80 hover:bg-zinc-900 cursor-pointer transition-colors border-b border-zinc-800/80"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {isGroupCollapsed ? (
+                      <ChevronRight className="w-4 h-4 text-zinc-400 shrink-0" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-zinc-400 shrink-0" />
                     )}
+                    <Layers className="w-4 h-4 text-brand-red shrink-0" />
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-bold uppercase tracking-wider text-white truncate">
+                        {group.name}
+                      </h4>
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500 tabular-nums">
+                        <span>
+                          {groupSubjects.length}{' '}
+                          {groupSubjects.length === 1 ? 'disciplina' : 'disciplinas'}
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span>
+                          {groupTopicsCount} {groupTopicsCount === 1 ? 'assunto' : 'assuntos'}
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span>{groupClassesCount} aulas selecionadas</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-1 mr-2">
-                    <div className="flex flex-col mr-1">
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleMoveSubject(subject.id, 'up');
-                        }}
-                        className="p-0.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded"
-                        title="Mover para cima"
+
+                  <div
+                    className="flex items-center justify-end gap-1.5 shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingSubject(null);
+                        setNewSubject({
+                          name: '',
+                          color: '#EF4444',
+                          defaultTeacherId: '',
+                          groupId: group.id,
+                        });
+                        setIsModalOpen(true);
+                      }}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-[10px] font-bold uppercase tracking-wider transition-colors whitespace-nowrap shrink-0 mr-1"
+                      title="Cadastrar nova disciplina diretamente neste grupo"
+                    >
+                      <Plus className="w-3 h-3 text-brand-red" />
+                      Disciplina
+                    </button>
+
+                    <div className="flex flex-col">
+                      <button
+                        type="button"
+                        onClick={() => handleMoveGroup(group.id, 'up')}
+                        disabled={grpIndex === 0}
+                        className="p-0.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded disabled:opacity-25 disabled:pointer-events-none"
+                        title="Mover grupo para cima"
                       >
                         <ChevronUp className="w-3 h-3" />
                       </button>
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleMoveSubject(subject.id, 'down');
-                        }}
-                        className="p-0.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded"
-                        title="Mover para baixo"
+                      <button
+                        type="button"
+                        onClick={() => handleMoveGroup(group.id, 'down')}
+                        disabled={grpIndex === groups.length - 1}
+                        className="p-0.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded disabled:opacity-25 disabled:pointer-events-none"
+                        title="Mover grupo para baixo"
                       >
                         <ChevronDown className="w-3 h-3" />
                       </button>
                     </div>
+
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleEditSubject(subject);
-                      }}
+                      type="button"
+                      onClick={() => handleOpenEditGroup(group)}
                       className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors"
-                      title="Editar Disciplina"
+                      title="Editar nome ou disciplinas do grupo"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
+
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSubjectDeleteModal({ isOpen: true, subjectId: subject.id });
-                      }}
+                      type="button"
+                      onClick={() => setGroupDeleteModal({ isOpen: true, group })}
                       className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-zinc-800 rounded transition-colors"
-                      title="Excluir Disciplina"
+                      title="Excluir grupo (mantém as disciplinas)"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <span className="text-xs text-zinc-500">
-                    {topics.filter(t => t.subjectId === subject.id).length} assuntos
-                  </span>
-                  {expandedSubjects.includes(subject.id) ? (
-                    <ChevronUp className="w-4 h-4 text-zinc-500" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-zinc-500" />
-                  )}
                 </div>
-              </div>
 
-              {expandedSubjects.includes(subject.id) && (
-                <div className="p-4 bg-zinc-950/50 border-t border-zinc-800 space-y-3">
-                  {topics.filter(t => t.subjectId === subject.id).map(topic => (
-                    <div key={topic.id} className="bg-zinc-900 border border-zinc-800 p-3 rounded-lg hover:border-zinc-700 transition-colors">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <button
-                            onClick={() => handleToggleTopicSelection(topic)}
-                            className={`w-5 h-5 rounded flex items-center justify-center transition-colors ${
-                              topic.isSelected 
-                                ? 'bg-brand-red text-white' 
-                                : 'bg-zinc-800 text-transparent border border-zinc-700 hover:border-zinc-500'
-                            }`}
-                          >
-                            <CheckSquare className="w-3.5 h-3.5" />
-                          </button>
-                          <div>
-                            <p className={`text-sm font-medium ${topic.isSelected ? 'text-white' : 'text-zinc-500'}`}>
-                              {topic.name}
-                            </p>
-                            <div className="mt-2">
-                              <select
-                                value={topic.teacherId || ''}
-                                onChange={(e) => handleUpdateTopicTeacher(topic.id, e.target.value || null)}
-                                className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-[10px] text-zinc-400 focus:outline-none focus:border-brand-red transition-colors appearance-none cursor-pointer hover:border-zinc-700"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <option value="">Herda da Disciplina ({getTeacherName(subject.defaultTeacherId) || 'Sem Titular'})</option>
-                                {teachers.map(teacher => (
-                                  <option key={teacher.id} value={teacher.id}>{teacher.name}</option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <span className="block text-xs font-bold text-white">
-                              {topic.modules?.reduce((acc, mod) => acc + mod.classesCount, 0) || 0} aulas
-                            </span>
-                            <span className="text-[10px] text-zinc-600 uppercase">Total</span>
-                          </div>
-                          
-                          <div className="flex items-center gap-1 pl-2 border-l border-zinc-800">
-                            <div className="flex flex-col">
-                              <button 
-                                onClick={() => handleMoveTopic(topic.id, 'up')}
-                                className="p-0.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded"
-                                title="Mover para cima"
-                              >
-                                <ChevronUp className="w-3 h-3" />
-                              </button>
-                              <button 
-                                onClick={() => handleMoveTopic(topic.id, 'down')}
-                                className="p-0.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded"
-                                title="Mover para baixo"
-                              >
-                                <ChevronDown className="w-3 h-3" />
-                              </button>
-                            </div>
-                            <button
-                              onClick={() => handleEditTopic(topic)}
-                              className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded transition-colors"
-                              title="Editar Assunto"
-                            >
-                              <Edit2 className="w-3 h-3" />
-                            </button>
-                            <button
-                              onClick={() => setTopicDeleteModal({ isOpen: true, topicId: topic.id })}
-                              className="p-1.5 text-zinc-500 hover:text-red-500 hover:bg-zinc-800 rounded transition-colors"
-                              title="Excluir Assunto"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Modules List */}
-                      <div className="mt-3 pl-4 border-l-2 border-zinc-800 space-y-2">
-                        {topic.modules?.map((module, index) => (
-                          <div key={module.id} className="flex items-center justify-between bg-zinc-950/50 p-2 rounded border border-zinc-800/50 hover:border-zinc-700 transition-colors group">
-                            <div className="flex items-center gap-3">
-                              <input 
-                                type="checkbox"
-                                checked={module.isSelected !== false}
-                                onChange={() => handleToggleModuleSelection(topic.id, module.id)}
-                                className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-brand-red focus:ring-brand-red focus:ring-offset-zinc-900 cursor-pointer"
-                              />
-                              <div className="flex items-center gap-2">
-                                <div className={`w-1.5 h-1.5 rounded-full transition-colors ${module.isSelected !== false ? 'bg-brand-red' : 'bg-zinc-700'}`} />
-                                <span className={`text-xs ${module.isSelected !== false ? 'text-zinc-300' : 'text-zinc-600 line-through'}`}>
-                                  {module.name}
-                                </span>
-                                {module.isOnline && (
-                                  <span className="text-[8px] font-bold uppercase px-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20">
-                                    Online
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              {module.isOnline ? (
-                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${module.onlineStatus === 'PUBLICADO' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
-                                  {module.onlineStatus === 'PUBLICADO' ? 'Publicado' : 'Em Gravação'}
-                                </span>
-                              ) : (
-                                <span className="text-[10px] font-bold text-zinc-500 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">
-                                  {module.classesCount} aulas
-                                </span>
-                              )}
-                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <div className="flex flex-col mr-1">
-                                  <button 
-                                    onClick={() => handleMoveModule(topic.id, module.id, 'up')}
-                                    className="p-0.5 text-zinc-600 hover:text-white hover:bg-zinc-800 rounded"
-                                    disabled={index === 0}
-                                  >
-                                    <ChevronUp className="w-2.5 h-2.5" />
-                                  </button>
-                                  <button 
-                                    onClick={() => handleMoveModule(topic.id, module.id, 'down')}
-                                    className="p-0.5 text-zinc-600 hover:text-white hover:bg-zinc-800 rounded"
-                                    disabled={index === (topic.modules?.length || 0) - 1}
-                                  >
-                                    <ChevronDown className="w-2.5 h-2.5" />
-                                  </button>
-                                </div>
-                                <button
-                                  onClick={() => {
-                                    setEditingModule(module);
-                                    setNewModule({ 
-                                      name: module.name, 
-                                      classesCount: module.classesCount, 
-                                      contents: module.contents || [],
-                                      isOnline: module.isOnline || false,
-                                      onlineStatus: module.onlineStatus || 'EM_GRAVACAO',
-                                      publicationDate: module.publicationDate || '',
-                                      teachingAreaLink: module.teachingAreaLink || { moduleId: '', folderId: '' }
-                                    });
-                                    setActiveTopicId(topic.id);
-                                    setIsModuleModalOpen(true);
-                                  }}
-                                  className="p-1 text-zinc-600 hover:text-white hover:bg-zinc-800 rounded"
-                                >
-                                  <Edit2 className="w-3 h-3" />
-                                </button>
-                                <button
-                                  onClick={() => setModuleDeleteModal({ isOpen: true, topicId: topic.id, moduleId: module.id })}
-                                  className="p-1 text-zinc-600 hover:text-red-500 hover:bg-zinc-800 rounded"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                        
+                {!isGroupCollapsed && (
+                  <div className="p-4 space-y-3">
+                    {groupSubjects.length > 0 ? (
+                      groupSubjects.map((subject, idx) =>
+                        renderSubjectCard(subject, idx, groupSubjects.length)
+                      )
+                    ) : (
+                      <div className="py-6 px-4 text-center border border-dashed border-zinc-800 rounded-lg text-xs text-zinc-500 flex flex-col sm:flex-row items-center justify-center gap-2">
+                        <span>Nenhuma disciplina vinculada a este grupo ainda.</span>
                         <button
-                          onClick={() => {
-                            setEditingModule(null);
-                            setNewModule({ 
-                              name: '', 
-                              classesCount: 1, 
-                              contents: [],
-                              isOnline: false,
-                              onlineStatus: 'EM_GRAVACAO',
-                              publicationDate: '',
-                              teachingAreaLink: { moduleId: '', folderId: '' }
-                            });
-                            setActiveTopicId(topic.id);
-                            setIsModuleModalOpen(true);
-                          }}
-                          className="text-[10px] font-bold uppercase text-zinc-600 hover:text-brand-red flex items-center gap-1 mt-2 transition-colors"
+                          type="button"
+                          onClick={() => handleOpenEditGroup(group)}
+                          className="text-brand-red hover:underline font-semibold whitespace-nowrap"
                         >
-                          <Plus className="w-3 h-3" />
-                          Adicionar Módulo
+                          Vincular disciplinas existentes
                         </button>
                       </div>
-                    </div>
-                  ))}
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
-                  <button 
-                    onClick={() => openTopicModal(subject.id)}
-                    className="w-full py-2 border border-dashed border-zinc-800 rounded-lg text-zinc-500 text-xs font-bold uppercase hover:text-brand-red hover:border-brand-red/30 transition-colors flex items-center justify-center gap-2"
-                  >
-                    <Plus className="w-3 h-3" />
-                    Adicionar Assunto
-                  </button>
+          {/* Disciplinas Fora de Grupo (Avulsas) */}
+          {groups.length > 0 ? (
+            ungroupedSubjects.length > 0 && (
+              <div className="border border-zinc-800/80 rounded-xl bg-zinc-950/40 overflow-hidden">
+                <div
+                  onClick={() => toggleGroupCollapse('__UNGROUPED__')}
+                  className="flex items-center justify-between px-4 py-3 bg-zinc-900/40 hover:bg-zinc-900/70 cursor-pointer transition-colors border-b border-zinc-800/60"
+                >
+                  <div className="flex items-center gap-2.5">
+                    {collapsedGroups.has('__UNGROUPED__') ? (
+                      <ChevronRight className="w-4 h-4 text-zinc-500" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-zinc-500" />
+                    )}
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                      Disciplinas Fora de Grupo
+                    </h4>
+                    <span className="text-xs text-zinc-600 tabular-nums">
+                      · {ungroupedSubjects.length}{' '}
+                      {ungroupedSubjects.length === 1 ? 'disciplina' : 'disciplinas'}
+                    </span>
+                  </div>
                 </div>
+                {!collapsedGroups.has('__UNGROUPED__') && (
+                  <div className="p-4 space-y-3">
+                    {ungroupedSubjects.map((subject, idx) =>
+                      renderSubjectCard(subject, idx, ungroupedSubjects.length)
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          ) : (
+            <div className="space-y-4">
+              {ungroupedSubjects.map((subject, idx) =>
+                renderSubjectCard(subject, idx, ungroupedSubjects.length)
               )}
             </div>
-          ))}
-          
-          {subjects.length === 0 && !loading && (
+          )}
+
+          {subjects.length === 0 && groups.length === 0 && !loading && (
             <div className="text-center py-12 text-zinc-500 border border-dashed border-zinc-800 rounded-xl">
-              Nenhuma disciplina cadastrada. Comece adicionando uma disciplina.
+              Nenhuma disciplina cadastrada. Comece criando um grupo ou adicionando uma disciplina.
             </div>
           )}
         </div>
@@ -1086,6 +1739,169 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
         </div>
       </div>
 
+      {/* Create/Edit SubjectGroup Modal */}
+      {isGroupModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-lg rounded-xl shadow-2xl p-6 animate-in zoom-in-95 duration-200 space-y-5">
+            <div className="flex items-center gap-2.5">
+              <Layers className="w-5 h-5 text-brand-red shrink-0" />
+              <h3 className="text-lg font-bold text-white">
+                {editingGroup ? 'Editar Grupo de Disciplinas' : 'Novo Grupo de Disciplinas'}
+              </h3>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">
+                  Nome do Grupo
+                </label>
+                <input
+                  type="text"
+                  value={groupNameInput}
+                  onChange={(e) => setGroupNameInput(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-brand-red transition-colors"
+                  placeholder="Ex: CONHECIMENTOS BÁSICOS"
+                  autoFocus
+                />
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  <span className="text-[10px] text-zinc-500 mr-1">Sugestões rápidas:</span>
+                  {[
+                    'CONHECIMENTOS BÁSICOS',
+                    'CONHECIMENTOS JURÍDICOS',
+                    'CONHECIMENTOS ESPECÍFICOS',
+                    'LEGISLAÇÃO ESPECIAL',
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setGroupNameInput(preset)}
+                      className="px-2 py-0.5 rounded bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-[10px] text-zinc-400 hover:text-white transition-colors whitespace-nowrap"
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {subjects.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-bold text-zinc-400 uppercase">
+                      Disciplinas vinculadas a este grupo (Opcional)
+                    </label>
+                    <span className="text-[11px] text-zinc-500 tabular-nums">
+                      {groupSelectedSubjectIds.size} selecionada(s)
+                    </span>
+                  </div>
+                  <div className="max-h-52 overflow-y-auto bg-zinc-950 border border-zinc-800 rounded-lg divide-y divide-zinc-800/70">
+                    {subjects.map((subj) => {
+                      const isChecked = groupSelectedSubjectIds.has(subj.id);
+                      const currentGrp = groups.find(
+                        (g) => g.id === subj.groupId && g.id !== editingGroup?.id
+                      );
+                      return (
+                        <label
+                          key={subj.id}
+                          className="flex items-center justify-between gap-3 px-3.5 py-2.5 hover:bg-zinc-900/70 cursor-pointer transition-colors"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => handleToggleSubjectInGroupModal(subj.id)}
+                              className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-brand-red focus:ring-brand-red cursor-pointer shrink-0"
+                            />
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: subj.color }}
+                            />
+                            <span className="text-xs font-medium text-zinc-200 truncate">
+                              {subj.name}
+                            </span>
+                          </div>
+                          {currentGrp && (
+                            <span className="text-[10px] text-zinc-500 truncate max-w-[150px]">
+                              Atual: {currentGrp.name}
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-zinc-500 mt-1.5">
+                    Disciplinas não marcadas permanecem fora deste grupo. Você também pode alterar o grupo a qualquer momento na própria disciplina.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsGroupModalOpen(false);
+                  setEditingGroup(null);
+                }}
+                disabled={isSavingGroup}
+                className="px-4 py-2 rounded-lg font-bold uppercase text-xs tracking-wider text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveGroup}
+                disabled={!groupNameInput.trim() || isSavingGroup}
+                className="flex items-center gap-2 px-6 py-2 bg-brand-red hover:bg-red-600 text-white rounded-lg font-bold uppercase text-xs tracking-wider shadow-lg shadow-brand-red/20 transition-colors disabled:opacity-50"
+              >
+                {isSavingGroup && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {editingGroup ? 'Salvar Grupo' : 'Criar Grupo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete SubjectGroup Confirmation Modal */}
+      {groupDeleteModal.isOpen && groupDeleteModal.group && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-md rounded-xl shadow-2xl p-6 animate-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center text-center space-y-4">
+              <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center">
+                <Trash2 className="w-6 h-6 text-red-500" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white">Excluir Grupo</h3>
+                <p className="text-zinc-300 text-sm mt-2">
+                  Deseja remover o grupo{' '}
+                  <strong className="text-white">{groupDeleteModal.group.name}</strong>?
+                </p>
+                <p className="text-zinc-500 text-xs mt-2 leading-relaxed">
+                  Fique tranquilo: <strong className="text-zinc-300">nenhuma disciplina ou assunto será excluído</strong>. As disciplinas vinculadas passarão apenas a ficar fora de grupo.
+                </p>
+              </div>
+              <div className="flex gap-3 w-full pt-2">
+                <button
+                  type="button"
+                  onClick={() => setGroupDeleteModal({ isOpen: false, group: null })}
+                  disabled={isDeleting}
+                  className="flex-1 px-4 py-2 rounded-lg font-bold uppercase text-xs tracking-wider text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteGroup}
+                  disabled={isDeleting}
+                  className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold uppercase text-xs tracking-wider shadow-lg shadow-red-600/20 transition-colors disabled:opacity-50"
+                >
+                  {isDeleting ? 'Removendo...' : 'Remover Grupo'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Create/Edit Subject Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
@@ -1107,6 +1923,24 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
               </div>
 
               <div>
+                <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">
+                  Grupo de Disciplinas (Opcional)
+                </label>
+                <select
+                  value={newSubject.groupId}
+                  onChange={(e) => setNewSubject({ ...newSubject, groupId: e.target.value })}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-red transition-colors appearance-none"
+                >
+                  <option value="">Fora de grupo (Disciplina avulsa)</option>
+                  {groups.map((grp) => (
+                    <option key={grp.id} value={grp.id}>
+                      {grp.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
                 <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">Cor de Identificação</label>
                 <div className="flex items-center gap-3">
                   <input
@@ -1115,7 +1949,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
                     onChange={(e) => setNewSubject({ ...newSubject, color: e.target.value })}
                     className="w-12 h-12 rounded cursor-pointer bg-transparent border-0 p-0"
                   />
-                  <span className="text-zinc-500 text-xs uppercase">{newSubject.color}</span>
+                  <span className="text-zinc-500 text-xs uppercase font-mono">{newSubject.color}</span>
                 </div>
               </div>
 
@@ -1143,7 +1977,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
               </button>
               <button
                 onClick={handleSaveSubject}
-                disabled={!newSubject.name}
+                disabled={!newSubject.name.trim()}
                 className="px-6 py-2 bg-brand-red hover:bg-red-600 text-white rounded-lg font-bold uppercase text-xs tracking-wider shadow-lg shadow-brand-red/20 transition-colors disabled:opacity-50"
               >
                 {editingSubject ? 'Salvar Alterações' : 'Criar Disciplina'}
@@ -1297,18 +2131,102 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
               </div>
 
               {!newModule.isOnline ? (
-                <div>
-                  <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">Quantidade de Aulas</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={newModule.classesCount}
-                    onChange={(e) => setNewModule({ ...newModule, classesCount: Number(e.target.value) })}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-red transition-colors"
-                  />
-                  <p className="text-[10px] text-zinc-600 mt-1">
-                    Quantas aulas são necessárias para este módulo?
-                  </p>
+                <div className="space-y-3">
+                  {(() => {
+                    const activeTopicObj = topics.find(t => t.id === activeTopicId);
+                    const modalPrecedingMod = activeTopicObj
+                      ? getPrecedingPresencialModule(
+                          activeTopicObj.subjectId,
+                          activeTopicObj.id,
+                          editingModule?.id || null
+                        )
+                      : null;
+
+                    return (
+                      <>
+                        {modalPrecedingMod && (
+                          <div>
+                            <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">
+                              Alocação na Aula
+                            </label>
+                            <div className="grid grid-cols-2 gap-2 p-1 bg-zinc-950 rounded-lg border border-zinc-800">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setNewModule({
+                                    ...newModule,
+                                    groupedWithPrevious: false,
+                                    classesCount: Math.max(1, Number(newModule.classesCount) || 1),
+                                  })
+                                }
+                                className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                                  !newModule.groupedWithPrevious
+                                    ? 'bg-zinc-800 text-white border border-zinc-700'
+                                    : 'text-zinc-500 hover:text-zinc-300'
+                                }`}
+                              >
+                                <Unlink className="w-3 h-3 shrink-0" />
+                                Aula Própria
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setNewModule({
+                                    ...newModule,
+                                    groupedWithPrevious: true,
+                                    classesCount: 0,
+                                  })
+                                }
+                                className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                                  newModule.groupedWithPrevious
+                                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/40'
+                                    : 'text-zinc-500 hover:text-zinc-300'
+                                }`}
+                              >
+                                <Link2 className="w-3 h-3 shrink-0" />
+                                Mesma Aula Anterior
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {modalPrecedingMod && newModule.groupedWithPrevious ? (
+                          <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/25 space-y-1">
+                            <p className="text-[11px] font-semibold text-amber-300 flex items-center gap-1.5">
+                              <Link2 className="w-3.5 h-3.5 shrink-0" />
+                              Agrupado no mesmo tempo de aula (0 aulas extras)
+                            </p>
+                            <p className="text-[11px] text-zinc-300 leading-relaxed">
+                              Este tópico será ministrado junto com{' '}
+                              <strong className="text-white">&ldquo;{modalPrecedingMod.module.name}&rdquo;</strong> sem consumir um novo encontro na carga horária.
+                            </p>
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">
+                              Quantidade de Aulas
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={Math.max(1, Number(newModule.classesCount) || 1)}
+                              onChange={(e) =>
+                                setNewModule({
+                                  ...newModule,
+                                  groupedWithPrevious: false,
+                                  classesCount: Math.max(1, Number(e.target.value) || 1),
+                                })
+                              }
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-red transition-colors tabular-nums"
+                            />
+                            <p className="text-[10px] text-zinc-600 mt-1">
+                              Quantos tempos de aula são necessários para este módulo?
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="space-y-4 animate-in slide-in-from-top-2 duration-200">

@@ -194,20 +194,30 @@ const StudentManager: React.FC = () => {
     if (editingStudent) {
         // Se o e-mail mudou, realiza a atualização síncrona usando o Admin SDK primeiro
         if (editingStudent.email && data.email && editingStudent.email.trim().toLowerCase() !== data.email.trim().toLowerCase()) {
-            await updateStudentEmailAdmin(editingStudent.uid, data.email);
+            await updateStudentEmailAdmin(editingStudent.uid, data.email.trim().toLowerCase());
         }
         
-        // Atualiza os demais campos cadastrais
-        await updateStudent(editingStudent.uid, {
+        // Atualiza os demais campos cadastrais (incluindo CPF caso estivesse em branco)
+        const updatePayload: Partial<Student> = {
             name: data.name.toUpperCase(),
             whatsapp: data.whatsapp || '',
-        });
+        };
+        if (!editingStudent.cpf && data.cpf) {
+            updatePayload.cpf = data.cpf.replace(/\D/g, '');
+        }
+        await updateStudent(editingStudent.uid, updatePayload);
         toast.success("Aluno atualizado com sucesso!");
     } else {
         await createStudent(data);
         toast.success("Aluno cadastrado com sucesso!");
     }
-    await fetchData();
+
+    if (searchTerm.trim().length > 0) {
+        const results = await searchStudentsGlobal(searchTerm.trim());
+        setStudents(results);
+    } else {
+        await fetchData();
+    }
   };
 
   const handleEdit = (student: Student) => {

@@ -33,15 +33,43 @@ export function sanitizeInteractiveHtml(rawHtml: string | undefined | null): str
             const textNode = doc.createTextNode(el.textContent || '');
             node.replaceChild(textNode, el);
           } else {
-            // Limpa atributos proibidos (mantendo apenas class)
+            // Limpa atributos proibidos (mantendo apenas class e style tipográfico seguro)
             const attrs = Array.from(el.attributes);
             for (const attr of attrs) {
-              if (attr.name.toLowerCase() !== 'class') {
-                el.removeAttribute(attr.name);
-              } else {
+              const attrName = attr.name.toLowerCase();
+              if (attrName === 'class') {
                 // Sanitiza valor da classe para evitar injeções
                 const safeClass = attr.value.replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
-                el.setAttribute('class', safeClass);
+                if (safeClass) {
+                  el.setAttribute('class', safeClass);
+                } else {
+                  el.removeAttribute('class');
+                }
+              } else if (attrName === 'style') {
+                // Permite apenas propriedades tipográficas estritamente seguras (color e font-weight)
+                const safeDeclarations: string[] = [];
+                const declarations = attr.value.split(';');
+                for (const decl of declarations) {
+                  const colonIdx = decl.indexOf(':');
+                  if (colonIdx === -1) continue;
+                  const prop = decl.slice(0, colonIdx).trim().toLowerCase();
+                  const val = decl.slice(colonIdx + 1).trim();
+                  if (
+                    prop === 'color' &&
+                    /^(#[0-9a-fA-F]{3,8}|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\))$/.test(val)
+                  ) {
+                    safeDeclarations.push(`color: ${val}`);
+                  } else if (prop === 'font-weight' && /^(bold|normal|bolder|[1-9]00)$/i.test(val)) {
+                    safeDeclarations.push(`font-weight: ${val.toLowerCase()}`);
+                  }
+                }
+                if (safeDeclarations.length > 0) {
+                  el.setAttribute('style', `${safeDeclarations.join('; ')};`);
+                } else {
+                  el.removeAttribute('style');
+                }
+              } else {
+                el.removeAttribute(attr.name);
               }
             }
             cleanNode(el);

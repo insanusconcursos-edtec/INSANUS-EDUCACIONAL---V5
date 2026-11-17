@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ChevronDown, ChevronRight, FileText, Link as LinkIcon, CheckCircle, Clock, AlertCircle, BookOpen, Video, CheckCircle2, Calendar, PlayCircle, ClipboardList } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileText, Link as LinkIcon, CheckCircle, Clock, AlertCircle, BookOpen, Video, CheckCircle2, Calendar, PlayCircle, ClipboardList, Layers, Link2, Radio } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Subject, Topic } from '../../../types/curriculum';
+import { Subject, SubjectGroup, Topic } from '../../../types/curriculum';
 import { ClassScheduleEvent } from '../../../types/schedule';
 import { Teacher } from '../../../types/teacher';
 import { format } from 'date-fns';
@@ -11,36 +11,72 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { openWatermarkedPdf } from '../../../utils/pdfSecurityService';
 import { classScheduleService } from '../../../services/classScheduleService';
 import { curriculumService } from '../../../services/curriculumService';
+import { classService } from '../../../services/classService';
 import { teacherService } from '../../../services/teacherService';
+import { getSubjectEffectiveSlotCount } from '../../../utils/scheduler/ContentResolver';
 
 interface StudentPedagogicalPlanningProps {
   classId: string;
   masterClassId?: string;
   totalMeetings?: number;
+  subjectGroups?: SubjectGroup[];
 }
 
-export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetings = 0 }: StudentPedagogicalPlanningProps) {
+export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClassId, totalMeetings = 0, subjectGroups: initialSubjectGroups }: StudentPedagogicalPlanningProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { currentUser, userData } = useAuth();
   const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [subjectGroups, setSubjectGroups] = useState<SubjectGroup[]>(initialSubjectGroups || []);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [events, setEvents] = useState<ClassScheduleEvent[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(new Set());
   const [expandedTopics, setExpandedTopics] = useState<Set<string>>(new Set());
   const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
 
-  // Deep Linking: Auto-expand and scroll
+  useEffect(() => {
+    if (initialSubjectGroups) {
+      setSubjectGroups(initialSubjectGroups);
+    }
+  }, [initialSubjectGroups]);
+
+  const sortedGroups = useMemo(
+    () => [...(subjectGroups || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+    [subjectGroups]
+  );
+
+  const validGroupIds = useMemo(() => new Set(sortedGroups.map((g) => g.id)), [sortedGroups]);
+
+  // Deep Linking: Auto-expand group, subject, topic, module and scroll
   useEffect(() => {
     const urlSubjectId = searchParams.get('subjectId');
     const urlTopicId = searchParams.get('topicId');
     const urlModuleId = searchParams.get('moduleId');
 
     if (urlSubjectId || urlTopicId || urlModuleId) {
-      if (urlSubjectId) setExpandedSubjects(prev => new Set([...prev, urlSubjectId]));
+      const resolvedSubjectId =
+        urlSubjectId ||
+        topics.find((t) => t.id === urlTopicId)?.subjectId ||
+        topics.find((t) => (t.modules || []).some((m) => m.id === urlModuleId))?.subjectId;
+
+      if (resolvedSubjectId) {
+        const targetSubj = subjects.find((s) => s.id === resolvedSubjectId);
+        const grpKey =
+          targetSubj?.groupId && validGroupIds.has(targetSubj.groupId)
+            ? targetSubj.groupId
+            : '__UNGROUPED__';
+        setCollapsedGroups((prev) => {
+          if (!prev.has(grpKey)) return prev;
+          const next = new Set(prev);
+          next.delete(grpKey);
+          return next;
+        });
+        setExpandedSubjects((prev) => new Set([...prev, resolvedSubjectId]));
+      }
       if (urlTopicId) setExpandedTopics(prev => new Set([...prev, urlTopicId]));
       if (urlModuleId) setExpandedModules(prev => new Set([...prev, urlModuleId]));
 
@@ -56,22 +92,26 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
         }, 500);
       }
     }
-  }, [searchParams]);
+  }, [searchParams, subjects, topics, validGroupIds]);
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [eventsData, subjectsData, topicsData, teachersData] = await Promise.all([
+        const [eventsData, subjectsData, topicsData, teachersData, classDoc] = await Promise.all([
           classScheduleService.getScheduleEventsByClass(classId),
           curriculumService.getSubjectsByClass(classId),
           curriculumService.getTopicsByClass(classId),
-          teacherService.getTeachers()
+          teacherService.getTeachers(),
+          initialSubjectGroups === undefined ? classService.getClassById(classId).catch(() => null) : Promise.resolve(null),
         ]);
 
         setEvents(eventsData);
         setSubjects(subjectsData);
         setTopics(topicsData);
         setTeachers(teachersData);
+        if (classDoc?.subjectGroups) {
+          setSubjectGroups(classDoc.subjectGroups);
+        }
       } catch (error) {
         console.error("Error loading planning data:", error);
       } finally {
@@ -138,9 +178,22 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
     }
   };
 
+  const toggleGroup = (groupKey: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  };
+
   // Filter subjects that have topics
-  const activeSubjects = subjects.filter(subject => 
-    topics.some(topic => topic.subjectId === subject.id)
+  const activeSubjects = useMemo(
+    () => subjects.filter(subject => topics.some(topic => topic.subjectId === subject.id)),
+    [subjects, topics]
   );
 
   const onlineModuleIds = React.useMemo(() => {
@@ -151,30 +204,65 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
     );
   }, [topics]);
 
+  const getSubjectMetrics = (subjectId: string) => {
+    const subjectTopics = topics.filter(t => t.subjectId === subjectId);
+    const totalRequiredClasses = getSubjectEffectiveSlotCount(subjectId, topics, false);
+
+    const completedEvents = events.filter(
+      e =>
+        e.subjectId === subjectId &&
+        e.status === 'COMPLETED' &&
+        !onlineModuleIds.has(e.moduleId)
+    );
+
+    const rawCompletedSlots = completedEvents.reduce((sum, e) => {
+      if (e.isOverflow) return sum;
+      return sum + (e.consumedSlotsCount !== undefined ? e.consumedSlotsCount : 1);
+    }, 0);
+
+    const completedClassesCount =
+      totalRequiredClasses > 0 ? Math.min(totalRequiredClasses, rawCompletedSlots) : rawCompletedSlots;
+
+    return { subjectTopics, totalRequiredClasses, completedEvents, completedClassesCount };
+  };
+
+  const populatedGroups = useMemo(
+    () =>
+      sortedGroups
+        .map((group) => ({
+          group,
+          subjects: activeSubjects.filter((s) => s.groupId === group.id),
+        }))
+        .filter((entry) => entry.subjects.length > 0),
+    [sortedGroups, activeSubjects]
+  );
+
+  const ungroupedActiveSubjects = useMemo(
+    () => activeSubjects.filter((s) => !s.groupId || !validGroupIds.has(s.groupId)),
+    [activeSubjects, validGroupIds]
+  );
+
   // Calculate global progression
   const globalStats = React.useMemo(() => {
     let totalRequired = 0;
     let totalCompleted = 0;
 
     subjects.forEach(subject => {
-      const subjectTopics = topics.filter(t => t.subjectId === subject.id);
-      const subjectRequired = subjectTopics.reduce((acc, topic) => {
-        const topicPresentialClasses = (topic.modules || []).reduce((mAcc, m) => {
-          if (!m.isOnline) return mAcc + (m.classesCount || 0);
-          return mAcc;
-        }, 0);
-        
-        if (topicPresentialClasses === 0 && (!topic.modules || topic.modules.length === 0)) {
-          return acc + (topic.requiredClasses || 0);
-        }
-        return acc + topicPresentialClasses;
-      }, 0);
+      const subjectRequired = getSubjectEffectiveSlotCount(subject.id, topics, false);
 
-      const subjectCompleted = events.filter(e => 
+      const subjectCompletedEvents = events.filter(e => 
         e.subjectId === subject.id && 
         e.status === 'COMPLETED' && 
         !onlineModuleIds.has(e.moduleId)
-      ).length;
+      );
+
+      const rawSubjectCompleted = subjectCompletedEvents.reduce((sum, e) => {
+        if (e.isOverflow) return sum;
+        return sum + (e.consumedSlotsCount !== undefined ? e.consumedSlotsCount : 1);
+      }, 0);
+
+      const subjectCompleted =
+        subjectRequired > 0 ? Math.min(subjectRequired, rawSubjectCompleted) : rawSubjectCompleted;
 
       totalRequired += subjectRequired;
       totalCompleted += subjectCompleted;
@@ -183,6 +271,7 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
     // Calculate completed meetings
     const meetingsMap = new Map<number, ClassScheduleEvent[]>();
     events.forEach(e => {
+      if (e.eventType === 'SIMULADO') return;
       if (e.meetingNumber) {
         if (!meetingsMap.has(e.meetingNumber)) {
           meetingsMap.set(e.meetingNumber, []);
@@ -255,37 +344,14 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
         <h2 className="text-xl font-bold text-white">Planejamento Pedagógico</h2>
       </div>
 
-      {activeSubjects.map(subject => {
-        const subjectTopics = topics.filter(t => t.subjectId === subject.id);
-        
-        // Calcular o total de aulas presenciais exigidas no currículo
-        const totalRequiredClasses = subjectTopics.reduce((acc, topic) => {
-          const topicPresentialClasses = (topic.modules || []).reduce((mAcc, m) => {
-            if (!m.isOnline) return mAcc + (m.classesCount || 0);
-            return mAcc;
-          }, 0);
-          
-          // Se não houver módulos definidos, usar requiredClasses do tópico (assumindo que são presenciais)
-          if (topicPresentialClasses === 0 && (!topic.modules || topic.modules.length === 0)) {
-            return acc + (topic.requiredClasses || 0);
-          }
-          
-          return acc + topicPresentialClasses;
-        }, 0);
+      {(() => {
+        const renderSubjectAccordion = (subject: Subject) => {
+          const { subjectTopics, totalRequiredClasses, completedClassesCount } = getSubjectMetrics(subject.id);
+          const isExpanded = expandedSubjects.has(subject.id);
+          const sortedTopics = [...subjectTopics].sort((a, b) => (a.order || 0) - (b.order || 0));
 
-        const completedEvents = events.filter(e => 
-          e.subjectId === subject.id && 
-          e.status === 'COMPLETED' && 
-          !onlineModuleIds.has(e.moduleId)
-        );
-
-        const isExpanded = expandedSubjects.has(subject.id);
-
-        // Ordenar tópicos para esta disciplina
-        const sortedTopics = [...subjectTopics].sort((a, b) => (a.order || 0) - (b.order || 0));
-
-        return (
-          <div key={subject.id} className="border border-zinc-800 rounded-lg overflow-hidden bg-black">
+          return (
+            <div key={subject.id} className="border border-zinc-800 rounded-lg overflow-hidden bg-black">
             {/* Subject Header */}
             <button
               onClick={() => toggleSubject(subject.id)}
@@ -299,15 +365,15 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
                 />
                 <span className="font-medium text-zinc-100 text-left">{subject.name}</span>
               </div>
-              <div className="flex items-center justify-between md:justify-end gap-4 text-sm w-full md:w-auto pl-11 md:pl-0">
+              <div className="flex items-center justify-between md:justify-end gap-4 text-sm w-full md:w-auto pl-11 md:pl-0 tabular-nums">
                 <span className="text-zinc-400 text-xs md:text-sm whitespace-nowrap">
-                  {completedEvents.length} / {totalRequiredClasses} aulas concluídas
+                  {completedClassesCount} / {totalRequiredClasses} aulas concluídas
                 </span>
                 <div className="w-20 md:w-24 h-2 bg-zinc-800 rounded-full overflow-hidden shrink-0">
                   <div 
                     className="h-full bg-emerald-500 transition-all duration-500"
                     style={{ 
-                      width: `${totalRequiredClasses > 0 ? (completedEvents.length / totalRequiredClasses) * 100 : 0}%` 
+                      width: `${totalRequiredClasses > 0 ? Math.min(100, (completedClassesCount / totalRequiredClasses) * 100) : 0}%` 
                     }}
                   />
                 </div>
@@ -332,7 +398,7 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
                           {isTopicExpanded ? <ChevronDown className="w-4 h-4 text-zinc-500 shrink-0" /> : <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" />}
                           <span className="text-sm font-medium text-zinc-300 text-left">{topic.name}</span>
                         </div>
-                        <span className="text-xs text-zinc-500 text-left pl-7 md:pl-0 shrink-0">
+                        <span className="text-xs text-zinc-500 text-left pl-7 md:pl-0 shrink-0 tabular-nums">
                           {topicModules.length} módulos
                         </span>
                       </button>
@@ -342,8 +408,28 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
                         <div className="bg-black pl-12 pr-4 py-2 space-y-2">
                           {topicModules.map(module => {
                             const isModuleExpanded = expandedModules.has(module.id);
-                            const moduleEvents = events.filter(e => e.moduleId === module.id)
-                              .sort((a, b) => new Date(`${a.date}T${a.startTime}`).getTime() - new Date(`${b.date}T${b.startTime}`).getTime());
+                            const moduleEvents = events
+                              .filter(
+                                e =>
+                                  e.moduleId === module.id ||
+                                  e.linkedModules?.some(lm => lm.moduleId === module.id)
+                              )
+                              .sort(
+                                (a, b) =>
+                                  new Date(`${a.date}T${a.startTime}`).getTime() -
+                                  new Date(`${b.date}T${b.startTime}`).getTime()
+                              );
+
+                            const isGroupedModule =
+                              !module.isOnline &&
+                              (Boolean(module.groupedWithPrevious) || Number(module.classesCount) === 0);
+
+                            const completedModuleEvents = moduleEvents.filter(e => e.status === 'COMPLETED');
+                            const completedModuleParts = completedModuleEvents.reduce((sum, e) => {
+                              const matchedLinks =
+                                e.linkedModules?.filter(lm => lm.moduleId === module.id).length || 0;
+                              return sum + Math.max(1, matchedLinks);
+                            }, 0);
                             
                             const moduleContents = module.contents || [];
 
@@ -369,7 +455,7 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
                                       )}
                                     </div>
                                   </div>
-                                  <div className="flex items-center justify-between md:justify-end gap-3 text-xs text-zinc-500 w-full md:w-auto pl-7 md:pl-0">
+                                  <div className="flex items-center justify-between md:justify-end gap-3 text-xs text-zinc-500 w-full md:w-auto pl-7 md:pl-0 tabular-nums">
                                     <span className="flex items-center gap-1 shrink-0">
                                       <FileText className="w-3 h-3" />
                                       {moduleContents.length}
@@ -379,10 +465,24 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
                                         {module.onlineStatus === 'PUBLICADO' ? <CheckCircle2 size={14} /> : <Video size={14} />}
                                         <span className="font-medium whitespace-nowrap">{module.onlineStatus === 'PUBLICADO' ? 'Publicado' : 'Em Gravação'}</span>
                                       </div>
+                                    ) : isGroupedModule ? (
+                                      <span
+                                        className={twMerge(
+                                          "flex items-center gap-1 shrink-0 whitespace-nowrap",
+                                          completedModuleEvents.length > 0 ? "text-emerald-400" : "text-amber-400/90"
+                                        )}
+                                      >
+                                        <Link2 className="w-3 h-3 shrink-0" />
+                                        {completedModuleEvents.length > 0
+                                          ? 'Concluído · Aula conjunta'
+                                          : moduleEvents.length > 0
+                                            ? 'Agendado · Aula conjunta'
+                                            : 'Aula conjunta'}
+                                      </span>
                                     ) : (
-                                      <span className="flex items-center gap-1 shrink-0">
-                                        <Clock className="w-3 h-3" />
-                                        {moduleEvents.filter(e => e.status === 'COMPLETED').length} / {module.classesCount} aulas
+                                      <span className="flex items-center gap-1 shrink-0 whitespace-nowrap">
+                                        <Clock className="w-3 h-3 shrink-0" />
+                                        {Math.min(module.classesCount || 1, completedModuleParts)} / {module.classesCount} aulas
                                       </span>
                                     )}
                                   </div>
@@ -542,6 +642,9 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
                                           {moduleEvents.map(event => {
                                             const teacher = teachers.find(t => t.id === event.teacherId);
                                             const isCompleted = event.status === 'COMPLETED';
+                                            const uniqueEventModuleCount = new Set(
+                                              (event.linkedModules || []).map(lm => lm.moduleId)
+                                            ).size;
                                             
                                             return (
                                               <div 
@@ -555,7 +658,7 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
                                               >
                                                 <div className="flex items-center gap-4">
                                                   <div className={twMerge(
-                                                    "w-10 h-10 rounded-full flex items-center justify-center border",
+                                                    "w-10 h-10 rounded-full flex items-center justify-center border shrink-0",
                                                     isCompleted
                                                       ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-500"
                                                       : "bg-zinc-800 border-zinc-700 text-zinc-400"
@@ -563,19 +666,29 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
                                                     {isCompleted ? <CheckCircle className="w-5 h-5" /> : <Clock className="w-5 h-5" />}
                                                   </div>
                                                   <div>
-                                                    <div className="flex items-center gap-2 mb-1">
+                                                    <div className="flex items-center gap-2 mb-1 flex-wrap">
                                                       <span className={twMerge(
                                                         "text-sm font-medium",
                                                         isCompleted ? "text-emerald-400" : "text-zinc-200"
                                                       )}>
                                                         {format(new Date(event.date + 'T00:00:00'), "dd 'de' MMMM", { locale: ptBR })}
                                                       </span>
-                                                      <span className="text-xs text-zinc-500">
+                                                      <span className="text-xs text-zinc-500 tabular-nums">
                                                         {event.startTime} - {event.endTime}
                                                       </span>
+                                                      {event.isLiveEvent && (
+                                                        <span className="text-xs text-sky-400 flex items-center gap-1 whitespace-nowrap">
+                                                          · <Radio className="w-3 h-3" /> Ao Vivo no Portal
+                                                        </span>
+                                                      )}
                                                     </div>
-                                                    <div className="flex items-center gap-2 text-xs text-zinc-500">
+                                                    <div className="flex items-center gap-2 text-xs text-zinc-500 flex-wrap">
                                                       <span>Prof. {teacher?.name || 'Não definido'}</span>
+                                                      {uniqueEventModuleCount > 1 && (
+                                                        <span className="text-amber-400/90 tabular-nums">
+                                                          · Aula conjunta ({uniqueEventModuleCount} módulos)
+                                                        </span>
+                                                      )}
                                                       {event.isSubstitute && (
                                                         <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20">
                                                           Substituto
@@ -585,9 +698,9 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
                                                   </div>
                                                 </div>
 
-                                                <div className="flex items-center gap-2">
+                                                <div className="flex items-center gap-2 shrink-0">
                                                   <span className={twMerge(
-                                                    "text-xs px-2 py-1 rounded-full border",
+                                                    "text-xs px-2 py-1 rounded-full border whitespace-nowrap",
                                                     event.status === 'COMPLETED' && "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
                                                     event.status === 'SCHEDULED' && "bg-blue-500/10 text-blue-500 border-blue-500/20",
                                                     event.status === 'CANCELED' && "bg-red-500/10 text-red-500 border-red-500/20",
@@ -617,17 +730,131 @@ export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetin
                 })}
               </div>
             )}
+            </div>
+          );
+        };
+
+        return (
+          <div className="space-y-6">
+            {populatedGroups.length > 0 ? (
+              <>
+                {populatedGroups.map(({ group, subjects: grpSubjects }) => {
+                  const isCollapsed = collapsedGroups.has(group.id);
+                  const groupTotals = grpSubjects.reduce(
+                    (acc, s) => {
+                      const m = getSubjectMetrics(s.id);
+                      return {
+                        required: acc.required + m.totalRequiredClasses,
+                        completed: acc.completed + m.completedClassesCount,
+                      };
+                    },
+                    { required: 0, completed: 0 }
+                  );
+
+                  return (
+                    <div
+                      key={group.id}
+                      className="border border-zinc-800 rounded-xl overflow-hidden bg-zinc-950/60"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleGroup(group.id)}
+                        className="w-full flex flex-col md:flex-row md:items-center justify-between gap-3 px-4 py-3.5 bg-zinc-900/80 hover:bg-zinc-900 transition-colors border-b border-zinc-800/80"
+                      >
+                        <div className="flex items-center gap-3 w-full md:w-auto min-w-0">
+                          {isCollapsed ? (
+                            <ChevronRight className="w-4 h-4 text-zinc-400 shrink-0" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-zinc-400 shrink-0" />
+                          )}
+                          <Layers className="w-4 h-4 text-brand-red shrink-0" />
+                          <span className="text-sm font-bold uppercase tracking-wider text-white text-left truncate">
+                            {group.name}
+                          </span>
+                          <span className="text-xs text-zinc-500 tabular-nums whitespace-nowrap shrink-0">
+                            · {grpSubjects.length}{' '}
+                            {grpSubjects.length === 1 ? 'disciplina' : 'disciplinas'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between md:justify-end gap-4 text-xs md:text-sm w-full md:w-auto pl-7 md:pl-0 shrink-0 tabular-nums">
+                          <span className="text-zinc-400 whitespace-nowrap">
+                            {groupTotals.completed} / {groupTotals.required} aulas concluídas
+                          </span>
+                          <div className="w-20 md:w-24 h-2 bg-zinc-800 rounded-full overflow-hidden shrink-0">
+                            <div
+                              className="h-full bg-brand-red transition-all duration-500"
+                              style={{
+                                width: `${
+                                  groupTotals.required > 0
+                                    ? Math.min(
+                                        100,
+                                        (groupTotals.completed / groupTotals.required) * 100
+                                      )
+                                    : 0
+                                }%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </button>
+
+                      {!isCollapsed && (
+                        <div className="p-3 md:p-4 space-y-3">
+                          {grpSubjects.map((subject) => renderSubjectAccordion(subject))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {ungroupedActiveSubjects.length > 0 && (
+                  <div className="border border-zinc-800/80 rounded-xl overflow-hidden bg-zinc-950/40">
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup('__UNGROUPED__')}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-zinc-900/50 hover:bg-zinc-900/80 transition-colors border-b border-zinc-800/60"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        {collapsedGroups.has('__UNGROUPED__') ? (
+                          <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4 text-zinc-500 shrink-0" />
+                        )}
+                        <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                          Demais Disciplinas
+                        </span>
+                        <span className="text-xs text-zinc-600 tabular-nums">
+                          · {ungroupedActiveSubjects.length}{' '}
+                          {ungroupedActiveSubjects.length === 1 ? 'disciplina' : 'disciplinas'}
+                        </span>
+                      </div>
+                    </button>
+
+                    {!collapsedGroups.has('__UNGROUPED__') && (
+                      <div className="p-3 md:p-4 space-y-3">
+                        {ungroupedActiveSubjects.map((subject) => renderSubjectAccordion(subject))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="space-y-4">
+                {activeSubjects.map((subject) => renderSubjectAccordion(subject))}
+              </div>
+            )}
+
+            {activeSubjects.length === 0 && (
+              <div className="text-center py-12 border border-dashed border-zinc-800 rounded-lg bg-zinc-900/30">
+                <AlertCircle className="w-8 h-8 text-zinc-600 mx-auto mb-3" />
+                <h3 className="text-zinc-400 font-medium">Nenhuma disciplina encontrada</h3>
+                <p className="text-zinc-500 text-sm mt-1">O planejamento pedagógico será disponibilizado em breve.</p>
+              </div>
+            )}
           </div>
         );
-      })}
-      
-      {activeSubjects.length === 0 && (
-        <div className="text-center py-12 border border-dashed border-zinc-800 rounded-lg bg-zinc-900/30">
-          <AlertCircle className="w-8 h-8 text-zinc-600 mx-auto mb-3" />
-          <h3 className="text-zinc-400 font-medium">Nenhuma disciplina encontrada</h3>
-          <p className="text-zinc-500 text-sm mt-1">O planejamento pedagógico será disponibilizado em breve.</p>
-        </div>
-      )}
+      })()}
     </div>
   );
 }

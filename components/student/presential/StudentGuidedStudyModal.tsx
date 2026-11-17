@@ -1,7 +1,24 @@
-import React, { useState, useEffect } from 'react';
-import { X, Play, FileText, CheckCircle, Clock, RotateCcw, ExternalLink, HelpCircle, Scale, Zap, BookOpen, Download, Award, ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  X,
+  Play,
+  FileText,
+  CheckCircle,
+  Clock,
+  ExternalLink,
+  HelpCircle,
+  Scale,
+  Download,
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  Loader2,
+  AlertCircle
+} from 'lucide-react';
 import { GuidedStudyMeta, GuidedStudyProgress } from '../../../types/guidedStudy';
+import { CourseContent } from '../../../types/course';
 import { guidedStudyService } from '../../../services/guidedStudyService';
+import { InteractiveLessonPlayer } from '../courses/player/InteractiveLessonPlayer';
 
 interface StudentGuidedStudyModalProps {
   isOpen: boolean;
@@ -34,6 +51,33 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
   const [isFlipped, setIsFlipped] = useState<boolean>(false);
   const [cardsMastered, setCardsMastered] = useState<number>(0);
 
+  // Interactive Map (.JSON) state
+  const [resolvedMapJson, setResolvedMapJson] = useState<string | null>(null);
+  const [isLoadingMap, setIsLoadingMap] = useState<boolean>(false);
+  const [mapLoadError, setMapLoadError] = useState<string | null>(null);
+
+  const loadRemoteInteractiveMap = useCallback(async (url: string) => {
+    try {
+      setIsLoadingMap(true);
+      setMapLoadError(null);
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error('Não foi possível baixar o conteúdo interativo desta meta.');
+      }
+      const text = await response.text();
+      setResolvedMapJson(text);
+    } catch (err: unknown) {
+      console.error('Erro ao carregar arquivo .JSON da meta:', err);
+      setMapLoadError(
+        err instanceof Error
+          ? err.message
+          : 'Erro ao carregar o mapa interativo. Verifique sua conexão e tente novamente.'
+      );
+    } finally {
+      setIsLoadingMap(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (isOpen && meta) {
       setIsCompleted(!!progress?.completed);
@@ -42,12 +86,29 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
       setCurrentCardIndex(0);
       setIsFlipped(false);
       setCardsMastered(0);
+      setMapLoadError(null);
+
+      if (meta.type === 'interactive_map') {
+        if (meta.interactiveMapJson) {
+          setResolvedMapJson(meta.interactiveMapJson);
+          setIsLoadingMap(false);
+        } else if (meta.interactiveMapUrl) {
+          setResolvedMapJson(null);
+          loadRemoteInteractiveMap(meta.interactiveMapUrl);
+        } else {
+          setResolvedMapJson(null);
+          setIsLoadingMap(false);
+        }
+      } else {
+        setResolvedMapJson(null);
+        setIsLoadingMap(false);
+      }
     }
-  }, [isOpen, meta, progress]);
+  }, [isOpen, meta, progress, loadRemoteInteractiveMap]);
 
   // Stopwatch effect
   useEffect(() => {
-    let interval: any = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
     if (isOpen && isTimerRunning && !isCompleted) {
       interval = setInterval(() => {
         setSecondsElapsed(prev => prev + 1);
@@ -87,42 +148,68 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
     questoes: { label: 'Questões', bg: 'bg-emerald-500/10 border-emerald-500/30', text: 'text-emerald-400' },
     lei_seca: { label: 'Lei Seca', bg: 'bg-purple-500/10 border-purple-500/30', text: 'text-purple-400' },
     flashcards: { label: 'Flashcards', bg: 'bg-pink-500/10 border-pink-500/30', text: 'text-pink-400' },
-    resumo: { label: 'Resumo', bg: 'bg-cyan-500/10 border-cyan-500/30', text: 'text-cyan-400' }
+    resumo: { label: 'Resumo', bg: 'bg-cyan-500/10 border-cyan-500/30', text: 'text-cyan-400' },
+    interactive_map: {
+      label: 'Mapa / Revisão (.JSON)',
+      bg: 'bg-indigo-500/15 border-indigo-500/35',
+      text: 'text-indigo-300'
+    }
   };
 
   const badge = META_BADGES[meta.type] || META_BADGES.material;
+  const isInteractiveMap = meta.type === 'interactive_map';
 
   const cards = meta.cards || [];
   const currentCard = cards[currentCardIndex];
 
+  const lessonScopeId = `guided_${classId}`;
+  const interactiveCourseContent: CourseContent = {
+    id: meta.id || `guided_map_${meta.date}`,
+    lessonId: lessonScopeId,
+    title: meta.title,
+    type: 'interactive_map',
+    order: 0,
+    interactiveMapJson: resolvedMapJson
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
-        
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+      <div
+        className={`bg-zinc-900 border border-zinc-800 rounded-2xl w-full flex flex-col shadow-2xl overflow-hidden ${
+          isInteractiveMap ? 'max-w-7xl h-[92vh]' : 'max-w-4xl max-h-[92vh]'
+        }`}
+      >
         {/* Modal Header */}
-        <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-950/60">
-          <div className="flex items-center gap-3">
-            <span className={`px-3 py-1 rounded-full text-xs font-bold border ${badge.bg} ${badge.text}`}>
+        <div className="px-4 sm:px-6 py-3.5 border-b border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950/60 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className={`px-2.5 py-1 rounded-lg text-xs font-bold border whitespace-nowrap shrink-0 ${badge.bg} ${badge.text}`}>
               {badge.label}
             </span>
-            <div>
-              <h2 className="text-lg font-bold text-white truncate max-w-lg">{meta.title}</h2>
-              <div className="flex items-center gap-3 text-xs text-zinc-400 mt-0.5">
-                {meta.disciplineName && <span>{meta.disciplineName}</span>}
-                <span>•</span>
+            <div className="min-w-0">
+              <h2 className="text-base sm:text-lg font-bold text-white truncate max-w-2xl" title={meta.title}>
+                {meta.title}
+              </h2>
+              <div className="flex items-center gap-2 text-xs text-zinc-400 mt-0.5 tabular-nums flex-wrap">
+                {meta.disciplineName && (
+                  <>
+                    <span className="truncate max-w-xs">{meta.disciplineName}</span>
+                    <span aria-hidden="true">·</span>
+                  </>
+                )}
                 <span>Tempo previsto: {meta.duration || 30} min</span>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 shrink-0">
             {/* Stopwatch */}
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800/80 border border-zinc-700/80 rounded-xl text-xs text-zinc-300">
-              <Clock className="w-4 h-4 text-amber-400" />
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800/80 border border-zinc-700/80 rounded-xl text-xs text-zinc-300 tabular-nums">
+              <Clock className="w-4 h-4 text-amber-400 shrink-0" />
               <span className="font-mono font-bold text-white">{formatTimer(secondsElapsed)}</span>
             </div>
 
             <button
+              type="button"
               onClick={onClose}
               className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors"
             >
@@ -132,13 +219,50 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-zinc-900">
-
+        <div
+          className={`overflow-y-auto flex-1 bg-zinc-900 ${
+            isInteractiveMap ? 'p-3 sm:p-4 space-y-3' : 'p-6 space-y-6'
+          }`}
+        >
           {/* Description */}
           {meta.description && (
-            <div className="p-4 bg-zinc-950/50 border border-zinc-800 rounded-xl text-sm text-zinc-300 leading-relaxed">
-              <strong className="text-amber-400 block mb-1 text-xs uppercase tracking-wider">Orientação do Administrador:</strong>
+            <div className="p-3.5 bg-zinc-950/50 border border-zinc-800 rounded-xl text-sm text-zinc-300 leading-relaxed">
+              <strong className="text-amber-400 block mb-1 text-xs uppercase tracking-wider">
+                Orientação do Administrador:
+              </strong>
               {meta.description}
+            </div>
+          )}
+
+          {/* 0. TYPE: INTERACTIVE MAP (.JSON) */}
+          {isInteractiveMap && (
+            <div className="w-full">
+              {isLoadingMap ? (
+                <div className="w-full min-h-[420px] rounded-xl bg-zinc-950/60 border border-zinc-800 flex flex-col items-center justify-center gap-3 text-zinc-300">
+                  <Loader2 className="w-7 h-7 animate-spin text-indigo-400" />
+                  <span className="text-xs font-semibold">Carregando Mapa Mental, Quadros, Questões e Flashcards...</span>
+                </div>
+              ) : mapLoadError ? (
+                <div className="w-full min-h-[320px] rounded-xl bg-red-950/25 border border-red-800/50 p-6 flex flex-col items-center justify-center text-center gap-3">
+                  <AlertCircle className="w-8 h-8 text-red-400" />
+                  <p className="text-sm font-semibold text-red-200 max-w-md">{mapLoadError}</p>
+                  {meta.interactiveMapUrl && (
+                    <button
+                      type="button"
+                      onClick={() => loadRemoteInteractiveMap(meta.interactiveMapUrl!)}
+                      className="px-4 py-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-xs font-bold text-red-200 transition-colors"
+                    >
+                      Tentar Novamente
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <InteractiveLessonPlayer
+                  content={interactiveCourseContent}
+                  lessonId={lessonScopeId}
+                  embeddedInModal
+                />
+              )}
             </div>
           )}
 
@@ -156,6 +280,7 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
                     className="w-full h-full border-0"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                     allowFullScreen
+                    title={meta.title}
                   />
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 gap-2">
@@ -178,7 +303,7 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
               )}
 
               {meta.questionCount && meta.questionCount > 0 ? (
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex items-center gap-2 tabular-nums">
                   <HelpCircle className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span><strong>Meta de Exercícios:</strong> Resolver {meta.questionCount} questões propostas.</span>
                 </div>
@@ -189,14 +314,14 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between p-3 bg-zinc-800/80 border border-zinc-700 rounded-xl">
                     <div className="flex items-center gap-2 text-xs text-amber-400 font-bold truncate">
-                      <FileText className="w-4 h-4" />
+                      <FileText className="w-4 h-4 shrink-0" />
                       <span className="truncate">{meta.pdfName || 'Material em PDF'}</span>
                     </div>
                     <a
                       href={meta.pdfUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors"
+                      className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
                     >
                       <Download className="w-3.5 h-3.5" />
                       <span>Baixar PDF</span>
@@ -242,7 +367,7 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
                 </div>
               ) : (
                 <div className="space-y-4 max-w-xl mx-auto">
-                  <div className="flex items-center justify-between text-xs font-bold text-zinc-400">
+                  <div className="flex items-center justify-between text-xs font-bold text-zinc-400 tabular-nums">
                     <span>Card {currentCardIndex + 1} de {cards.length}</span>
                     <span className="text-pink-400">{cardsMastered} Dominados</span>
                   </div>
@@ -268,17 +393,19 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
                   {/* Controls */}
                   <div className="flex items-center justify-between gap-3 pt-2">
                     <button
+                      type="button"
                       onClick={() => {
                         setIsFlipped(false);
                         setCurrentCardIndex(prev => Math.max(0, prev - 1));
                       }}
                       disabled={currentCardIndex === 0}
-                      className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-xs font-bold text-zinc-300 rounded-xl flex items-center gap-1 transition-colors"
+                      className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-xs font-bold text-zinc-300 rounded-xl flex items-center gap-1 transition-colors whitespace-nowrap"
                     >
                       <ChevronLeft className="w-4 h-4" /> Anterior
                     </button>
 
                     <button
+                      type="button"
                       onClick={() => {
                         setCardsMastered(prev => prev + 1);
                         setIsFlipped(false);
@@ -286,12 +413,13 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
                           setCurrentCardIndex(prev => prev + 1);
                         }
                       }}
-                      className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors"
+                      className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors whitespace-nowrap"
                     >
                       <Check className="w-4 h-4" /> Sabia Esta!
                     </button>
 
                     <button
+                      type="button"
                       onClick={() => {
                         setIsFlipped(false);
                         if (currentCardIndex < cards.length - 1) {
@@ -299,7 +427,7 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
                         }
                       }}
                       disabled={currentCardIndex === cards.length - 1}
-                      className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-xs font-bold text-zinc-300 rounded-xl flex items-center gap-1 transition-colors"
+                      className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-xs font-bold text-zinc-300 rounded-xl flex items-center gap-1 transition-colors whitespace-nowrap"
                     >
                       Próximo <ChevronRight className="w-4 h-4" />
                     </button>
@@ -312,28 +440,32 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
         </div>
 
         {/* Modal Footer */}
-        <div className="px-6 py-4 border-t border-zinc-800 flex items-center justify-between bg-zinc-950/60">
-          <div className="text-xs text-zinc-400">
+        <div className="px-4 sm:px-6 py-3.5 border-t border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950/60 shrink-0">
+          <div className="text-xs text-zinc-400 tabular-nums">
             {isCompleted ? (
               <span className="text-emerald-400 font-bold flex items-center gap-1.5">
-                <CheckCircle className="w-4 h-4" /> Meta Concluída com sucesso!
+                <CheckCircle className="w-4 h-4 shrink-0" /> Meta Concluída com sucesso!
               </span>
             ) : (
-              <span>Tempo de estudo registrado: <strong className="text-white">{Math.max(1, Math.round(secondsElapsed / 60))} min</strong></span>
+              <span>
+                Tempo de estudo registrado:{' '}
+                <strong className="text-white">{Math.max(1, Math.round(secondsElapsed / 60))} min</strong>
+              </span>
             )}
           </div>
 
           <button
+            type="button"
             onClick={handleToggleCompletion}
             disabled={isSaving}
             className={`
-              px-6 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-lg transition-all flex items-center gap-2
+              px-5 sm:px-6 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-lg transition-all flex items-center gap-2 whitespace-nowrap shrink-0
               ${isCompleted 
                 ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700' 
                 : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-black hover:brightness-110'}
             `}
           >
-            <CheckCircle className="w-4 h-4" />
+            <CheckCircle className="w-4 h-4 shrink-0" />
             <span>{isCompleted ? 'Desmarcar Conclusão' : 'Concluir Meta (Estudo Guiado)'}</span>
           </button>
         </div>
@@ -342,3 +474,4 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
     </div>
   );
 };
+

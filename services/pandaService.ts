@@ -3,7 +3,7 @@
  * Handles API calls to Panda Video via the Backend routes (/api/panda-videos, /api/panda-explorer)
  */
 
-import { PandaVideo } from '../utils/pandaUtils';
+import { PandaVideo, PandaExplorerFolder, PandaExplorerBreadcrumb } from '../utils/pandaUtils';
 
 export const pandaService = {
   /**
@@ -37,13 +37,19 @@ export const pandaService = {
   /**
    * List folders and videos from Panda Video (Explorer via Backend)
    * @param folderId Optional folder ID
-   * @returns Folders and videos
+   * @returns Folders, videos, breadcrumbs and currentFolder metadata
    */
-  async explorer(folderId: string | null = null): Promise<{ folders: any[], videos: PandaVideo[] }> {
+  async explorer(folderId: string | null = null): Promise<{
+    folders: PandaExplorerFolder[];
+    videos: PandaVideo[];
+    breadcrumbs: PandaExplorerBreadcrumb[];
+    currentFolder: PandaExplorerFolder | null;
+    folderNotFound?: boolean;
+  }> {
     try {
       let url = '/api/panda-explorer';
       if (folderId && folderId !== 'root' && folderId !== 'null') {
-        url += `?folderId=${folderId}`;
+        url += `?folderId=${encodeURIComponent(folderId)}`;
       }
 
       const response = await fetch(url, {
@@ -60,7 +66,10 @@ export const pandaService = {
       const data = await response.json();
       return {
         folders: data.folders || [],
-        videos: data.videos || []
+        videos: data.videos || [],
+        breadcrumbs: data.breadcrumbs || [],
+        currentFolder: data.currentFolder || null,
+        folderNotFound: Boolean(data.folderNotFound)
       };
     } catch (error) {
       console.error("Erro no Explorer do Panda:", error);

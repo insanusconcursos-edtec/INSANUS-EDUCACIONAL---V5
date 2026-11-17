@@ -6,8 +6,7 @@ import {
   where, 
   setDoc, 
   deleteDoc, 
-  getDoc,
-  serverTimestamp 
+  getDoc
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { GuidedStudyMeta, GuidedStudyProgress } from '../types/guidedStudy';
@@ -43,15 +42,19 @@ export const guidedStudyService = {
       const collectionRef = collection(db, COLLECTION_METAS);
       const docRef = meta.id ? doc(db, COLLECTION_METAS, meta.id) : doc(collectionRef);
       
-      const payload: GuidedStudyMeta = {
+      const rawPayload: GuidedStudyMeta = {
         ...meta,
         id: docRef.id,
         updatedAt: new Date().toISOString(),
         createdAt: meta.createdAt || new Date().toISOString()
       };
 
-      await setDoc(docRef, payload, { merge: true });
-      return payload;
+      const sanitizedPayload = Object.fromEntries(
+        Object.entries(rawPayload).filter(([, value]) => value !== undefined)
+      ) as unknown as GuidedStudyMeta;
+
+      await setDoc(docRef, sanitizedPayload, { merge: true });
+      return sanitizedPayload;
     } catch (error) {
       console.error('Erro ao salvar meta do estudo guiado:', error);
       throw error;

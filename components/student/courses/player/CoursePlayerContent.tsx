@@ -99,7 +99,7 @@ export function CoursePlayerContent({ lesson }: CoursePlayerContentProps) {
             // --- BLOCO DE MAPA / REVISÃO (FULL WIDTH ATÉ A SIDEBAR) ---
             if (item.type === 'interactive_map') {
                 return (
-                    <div key={item.id} className="w-full h-[calc(100vh-176px)] lg:h-[calc(100vh-112px)] min-h-[560px] md:min-h-[640px] flex flex-col">
+                    <div key={item.id} className="w-full min-h-[560px] md:min-h-[640px] flex flex-col">
                         <InteractiveLessonPlayer content={item} lessonId={lesson.id} />
                     </div>
                 );

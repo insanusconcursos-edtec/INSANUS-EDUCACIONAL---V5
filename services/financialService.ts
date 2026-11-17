@@ -84,7 +84,7 @@ export const calculateFinancialReport = (
   };
 
   events.forEach(event => {
-    if (event.status === 'CANCELED') return;
+    if (event.status === 'CANCELED' || event.eventType === 'SIMULADO') return;
 
     const duration = calculateDurationInHours(event.startTime, event.endTime);
     const monthKey = format(parseISO(event.date), 'yyyy-MM');

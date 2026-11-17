@@ -1,9 +1,25 @@
-export type GuidedStudyMetaType = 'aula' | 'material' | 'questoes' | 'lei_seca' | 'flashcards' | 'resumo';
+export type GuidedStudyMetaType =
+  | 'aula'
+  | 'material'
+  | 'questoes'
+  | 'lei_seca'
+  | 'flashcards'
+  | 'resumo'
+  | 'interactive_map';
 
 export interface GuidedStudyFlashcard {
   id: string;
   front: string;
   back: string;
+}
+
+export interface GuidedStudyInteractiveMapSummary {
+  disciplina: string;
+  assunto: string;
+  nodeCount: number;
+  matrixCount: number;
+  questionCount: number;
+  flashcardCount: number;
 }
 
 export interface GuidedStudyMeta {
@@ -31,12 +47,18 @@ export interface GuidedStudyMeta {
   articles?: string;
   cards?: GuidedStudyFlashcard[];
 
-  createdAt?: any;
-  updatedAt?: any;
+  // Mapa / Revisão Interativa (.JSON)
+  interactiveMapJson?: string | null;
+  interactiveMapUrl?: string | null;
+  interactiveMapFileName?: string | null;
+  interactiveMapSummary?: GuidedStudyInteractiveMapSummary | null;
+
+  createdAt?: unknown;
+  updatedAt?: unknown;
 }
 
 export interface GuidedStudyProgress {
   completed: boolean;
-  completedAt?: string;
+  completedAt?: string | null;
   recordedMinutes?: number;
 }

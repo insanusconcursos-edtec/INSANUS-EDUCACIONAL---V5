@@ -292,7 +292,7 @@ export const StudentPresentialDetails: React.FC = () => {
     fetchModules();
   }, [activeTab, teachingClassId]);
 
-  // Deep Linking: Switch to Teaching tab if module param is present, or Planning if tab param is present
+  // Deep Linking: Switch to Teaching tab if module param is present, or Planning/Simulados if tab param is present
   useEffect(() => {
     if (moduleIdParam) {
       setActiveTab('TEACHING');
@@ -300,6 +300,8 @@ export const StudentPresentialDetails: React.FC = () => {
     const tabParam = searchParams.get('tab');
     if (tabParam?.toUpperCase() === 'PLANNING') {
       setActiveTab('PLANNING');
+    } else if (tabParam?.toUpperCase() === 'SIMULADOS') {
+      setActiveTab('SIMULADOS');
     }
   }, [moduleIdParam, searchParams]);
 
@@ -629,7 +631,8 @@ export const StudentPresentialDetails: React.FC = () => {
         {activeTab === 'SCHEDULE' && (
           <StudentClassSchedule 
             classId={currentClass.id} 
-            masterClassId={currentClass.masterClassId} 
+            masterClassId={currentClass.masterClassId}
+            linkedSimulatedId={currentClass.linkedSimulatedId}
           />
         )}
 
@@ -638,6 +641,7 @@ export const StudentPresentialDetails: React.FC = () => {
             classId={currentClass.id}
             masterClassId={currentClass.masterClassId}
             totalMeetings={currentClass.totalMeetings}
+            subjectGroups={currentClass.subjectGroups}
           />
         )}
 

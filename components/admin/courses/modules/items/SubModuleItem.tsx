@@ -1,7 +1,6 @@
 import React from 'react';
 import { CourseSubModule, CourseLesson } from '../../../../../types/course';
-import { LessonItem } from './LessonItem';
-import { Folder, Move } from 'lucide-react';
+import { Folder, Move, PlayCircle, Link2 } from 'lucide-react';
 
 interface SubModuleItemProps {
   subModule: CourseSubModule;
@@ -9,6 +8,7 @@ interface SubModuleItemProps {
   onEdit: () => void;
   onDelete: () => void;
   onAddLesson: () => void;
+  onImportPandaBatch?: () => void;
   onAddSubFolder?: () => void;
   onMove?: () => void;
   onCopy?: () => void;
@@ -36,22 +36,20 @@ interface SubModuleItemProps {
 }
 
 export const SubModuleItem: React.FC<SubModuleItemProps> = ({ 
-  subModule, lessons, onEdit, onDelete, onAddLesson, onAddSubFolder, onMove, onCopy, children,
+  subModule, lessons, onEdit, onDelete, onAddLesson, onImportPandaBatch, onAddSubFolder, onMove, onCopy, children,
   isOpen, onToggle,
-  onEditLesson, onDeleteLesson, onMoveLesson, onManageLesson,
-  selectedLessonIds = [], onToggleLessonSelection,
-  onMoveUp, onMoveDown, onReorderLesson, isFirst, isLast
+  onMoveUp, onMoveDown, isFirst, isLast
 }) => {
   
   // Ícones de Seta
   const ArrowUp = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>;
-  const ArrowDown = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7 7" /></svg>;
+  const ArrowDown = () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>;
 
   return (
     <div className="border border-gray-800 rounded-lg bg-[#1a1d24] overflow-hidden transition-all">
       
       {/* Cabeçalho da Pasta */}
-      <div className="flex items-center justify-between p-4 hover:bg-[#202329] transition-colors">
+      <div className="flex items-center justify-between gap-3 p-4 hover:bg-[#202329] transition-colors">
         
         {/* Área clicável para abrir/fechar */}
         <div 
@@ -66,7 +64,9 @@ export const SubModuleItem: React.FC<SubModuleItemProps> = ({
             {/* Ícone de Pasta (LUCIDE) */}
             <Folder size={20} className="text-yellow-600 shrink-0" fill="currentColor" />
             
-            <h4 className="text-white font-bold text-sm uppercase">{subModule.title}</h4>
+            <h4 className="text-white font-bold text-sm uppercase truncate" title={subModule.title}>
+              {subModule.title}
+            </h4>
             {subModule.isRecording && (
                 <span className="text-[10px] text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded border border-blue-400/20 font-black uppercase tracking-wider animate-pulse shrink-0">
                     Em Gravação
@@ -77,15 +77,24 @@ export const SubModuleItem: React.FC<SubModuleItemProps> = ({
                     Agendado: {new Date(subModule.publishDate).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
                 </span>
             )}
-            <span className="text-[10px] text-gray-500 bg-black/30 px-2 py-0.5 rounded border border-gray-700 shrink-0">
+            <span className="text-[10px] text-gray-500 bg-black/30 px-2 py-0.5 rounded border border-gray-700 tabular-nums shrink-0">
                 {lessons.length} aulas
             </span>
+            {subModule.pandaFolderId && (
+                <span
+                    className="hidden md:inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/50 font-bold shrink-0"
+                    title={`Pasta Panda vinculada: ${subModule.pandaFolderPath || subModule.pandaFolderName || 'Panda Vídeo'}`}
+                >
+                    <Link2 size={10} />
+                    Panda
+                </span>
+            )}
         </div>
  
-        {/* Ações da Pasta (Editar/Excluir/Add Aula) */}
-        <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+        {/* Ações da Pasta (Editar/Excluir/Add Aula/Lote Panda) */}
+        <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
             {/* BOTÕES DE ORDENAÇÃO */}
-            <div className="flex items-center bg-black/40 rounded mr-2 border border-gray-800">
+            <div className="flex items-center bg-black/40 rounded mr-1 border border-gray-800">
                 <button 
                     onClick={onMoveUp} 
                     disabled={isFirst}
@@ -105,12 +114,26 @@ export const SubModuleItem: React.FC<SubModuleItemProps> = ({
                 </button>
             </div>
 
-            <button onClick={onAddSubFolder} className="px-3 py-1.5 bg-yellow-600/10 hover:bg-yellow-600/20 text-yellow-500 text-[10px] uppercase font-bold rounded border border-yellow-600/20 transition-colors" title="Adicionar Subpasta">
+            <button onClick={onAddSubFolder} className="px-3 py-1.5 bg-yellow-600/10 hover:bg-yellow-600/20 text-yellow-500 text-[10px] uppercase font-bold rounded border border-yellow-600/20 transition-colors whitespace-nowrap shrink-0" title="Adicionar Subpasta">
                 + Subpasta
             </button>
-            <button onClick={onAddLesson} className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-white text-[10px] uppercase font-bold rounded border border-gray-700 transition-colors" title="Adicionar Aula na Pasta">
+            <button onClick={onAddLesson} className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-white text-[10px] uppercase font-bold rounded border border-gray-700 transition-colors whitespace-nowrap shrink-0" title="Adicionar Aula Manual na Pasta">
                 + Aula
             </button>
+            {onImportPandaBatch && (
+                <button
+                    onClick={onImportPandaBatch}
+                    className="px-3 py-1.5 bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-400 hover:text-emerald-300 text-[10px] uppercase font-bold rounded border border-emerald-500/30 transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
+                    title={
+                        subModule.pandaFolderId
+                            ? `Sincronizar / Importar em Lote da pasta Panda vinculada (${subModule.pandaFolderPath || subModule.pandaFolderName})`
+                            : 'Cadastrar aulas em lote a partir de uma pasta do Panda Vídeo'
+                    }
+                >
+                    <PlayCircle size={12} />
+                    + Lote Panda
+                </button>
+            )}
             <button onClick={onMove} className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded" title="Mover Pasta">
                 <Move size={16} />
             </button>

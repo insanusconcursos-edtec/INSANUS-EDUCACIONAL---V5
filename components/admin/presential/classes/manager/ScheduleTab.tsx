@@ -117,6 +117,16 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
           const updated = [...prev];
           if (newException.type === 'CANCELLATION') {
             updated.splice(eventIndex, 1);
+          } else if (newException.type === 'MODALITY_CHANGE') {
+            updated[eventIndex] = {
+              ...updated[eventIndex],
+              isLiveEvent: Boolean(newException.isLiveEvent)
+            };
+          } else if (newException.type === 'ADJUST_MODULES') {
+            updated[eventIndex] = {
+              ...updated[eventIndex],
+              extraModulesCount: Math.max(0, Number(newException.extraModulesCount) || 0)
+            };
           } else {
             updated[eventIndex] = {
               ...updated[eventIndex],
@@ -130,13 +140,65 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
         return prev;
       }
 
-      if (newException.type === 'CANCELLATION') {
-        // Remove all events that match the same date, shift, and subject
-        return prev.filter(e => !(e.date === originalEvent.date && e.shift === originalEvent.shift && e.subjectId === originalEvent.subjectId));
-      } else {
-        // Update all events that match the same date, shift, and subject
+      // Ajuste de módulos atua especificamente no tempo (aula) selecionado, deslizando a fila dos demais tempos
+      if (newException.type === 'ADJUST_MODULES') {
+        const nextExtra = Math.max(0, Number(newException.extraModulesCount) || 0);
+        let matchedById = false;
+        const updatedById = prev.map(e => {
+          if (e.id && e.id === originalEvent.id) {
+            matchedById = true;
+            return {
+              ...e,
+              extraModulesCount: nextExtra
+            };
+          }
+          return e;
+        });
+
+        if (matchedById) return updatedById;
+
+        // Fallback por data + horário + disciplina caso o item bruto não tenha id idêntico
+        let matchedFallback = false;
         return prev.map(e => {
-          if (e.date === originalEvent.date && e.shift === originalEvent.shift && e.subjectId === originalEvent.subjectId) {
+          if (
+            !matchedFallback &&
+            e.date === originalEvent.date &&
+            e.startTime === originalEvent.startTime &&
+            e.subjectId === originalEvent.subjectId
+          ) {
+            matchedFallback = true;
+            return {
+              ...e,
+              extraModulesCount: nextExtra
+            };
+          }
+          return e;
+        });
+      }
+
+      const matchesGroup = (e: any) =>
+        e.date === originalEvent.date &&
+        e.shift === originalEvent.shift &&
+        e.subjectId === originalEvent.subjectId &&
+        Boolean(e.isLiveEvent) === Boolean(originalEvent.isLiveEvent);
+
+      if (newException.type === 'CANCELLATION') {
+        // Remove all events that match the same date, shift, subject, and modality
+        return prev.filter(e => !matchesGroup(e));
+      } else if (newException.type === 'MODALITY_CHANGE') {
+        return prev.map(e => {
+          if (matchesGroup(e)) {
+            return {
+              ...e,
+              isLiveEvent: Boolean(newException.isLiveEvent)
+            };
+          }
+          return e;
+        });
+      } else {
+        // Update all events that match the same date, shift, subject, and modality
+        return prev.map(e => {
+          if (matchesGroup(e)) {
             return {
               ...e,
               teacherId: newException.substituteTeacherId || e.teacherId,
@@ -150,15 +212,32 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
     });
   };
 
+  const handleUpdateManualAppointment = (updatedAppointment: Partial<ClassScheduleEvent>) => {
+    if (!updatedAppointment.id) return;
+    setManualAppointments(prev =>
+      prev.map(e => (e.id === updatedAppointment.id ? { ...e, ...updatedAppointment } : e))
+    );
+  };
+
   const handleDeleteAppointment = (eventId: string) => {
     setManualAppointments(prev => {
       // Encontra o evento na lista resolvida para pegar os metadados
       const eventToDelete = generatedEvents.find(ge => ge.id === eventId);
+
+      if (eventToDelete?.eventType === 'SIMULADO') {
+        return prev.filter(e => e.id !== eventId);
+      }
       
       if (eventToDelete) {
-        // Remove todos os eventos que compartilham a mesma data, turno e disciplina
+        // Remove todos os eventos que compartilham a mesma data, turno, disciplina e modalidade
         return prev.filter(e => 
-          !(e.date === eventToDelete.date && e.shift === eventToDelete.shift && e.subjectId === eventToDelete.subjectId)
+          !(
+            e.eventType !== 'SIMULADO' &&
+            e.date === eventToDelete.date &&
+            e.shift === eventToDelete.shift &&
+            e.subjectId === eventToDelete.subjectId &&
+            Boolean(e.isLiveEvent) === Boolean(eventToDelete.isLiveEvent)
+          )
         );
       }
 
@@ -287,8 +366,27 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-zinc-900 p-4 rounded-xl border border-zinc-800 shadow-sm">
             <div>
               <h3 className="text-lg font-semibold text-white">Configuração do Cronograma</h3>
-              <p className="text-sm text-zinc-400">
-                {generatedEvents.length} aulas agendadas. Verifique os detalhes abaixo antes de salvar.
+              <p className="text-sm text-zinc-400 tabular-nums">
+                {(() => {
+                  const classEvents = generatedEvents.filter(e => e.eventType !== 'SIMULADO');
+                  const simuladoEvents = generatedEvents.filter(e => e.eventType === 'SIMULADO');
+                  return (
+                    <>
+                      {classEvents.length} {classEvents.length === 1 ? 'aula agendada' : 'aulas agendadas'}
+                      {classEvents.some(e => e.isLiveEvent) && (
+                        <span className="text-zinc-500">
+                          {' '}({classEvents.filter(e => !e.isLiveEvent).length} presenciais · {classEvents.filter(e => e.isLiveEvent).length} ao vivo no portal)
+                        </span>
+                      )}
+                      {simuladoEvents.length > 0 && (
+                        <span className="text-amber-300 font-medium">
+                          {' '}· {simuladoEvents.length} {simuladoEvents.length === 1 ? 'simulado oficial' : 'simulados oficiais'}
+                        </span>
+                      )}
+                      . Verifique os detalhes abaixo antes de salvar.
+                    </>
+                  );
+                })()}
               </p>
             </div>
             
@@ -396,6 +494,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
                 console.log('Manual appointment added:', appointmentOrArray);
               }
             }}
+            onUpdateManualAppointment={handleUpdateManualAppointment}
             onDeleteAppointment={handleDeleteAppointment}
             onUpdateEventStatus={isPreviewMode ? undefined : handleUpdateEventStatus}
           />
