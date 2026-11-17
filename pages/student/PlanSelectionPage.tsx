@@ -10,6 +10,10 @@ import { userService } from '../../services/userService';
 import { Plan } from '../../types/plan';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import {
+  shouldBypassPlanRoutineOnboarding,
+  getDefaultPlanLandingPath
+} from '../../utils/planNavigation';
 
 export const PlanSelectionPage: React.FC = () => {
   const { currentUser, userData, refreshUserData } = useAuth();
@@ -54,14 +58,14 @@ export const PlanSelectionPage: React.FC = () => {
       toast.success(`Plano "${selectedPlan.title}" ativado com sucesso!`);
       setIsConfirming(false);
       
-      // Check if routine is empty
+      // Check if routine is empty (only redirect to mentorship if native routine onboarding applies)
       const routine = userData?.routine || {};
       const totalMinutes = Object.values(routine).reduce((acc: number, val: any) => acc + (Number(val) || 0), 0);
       
-      if (totalMinutes === 0) {
+      if (totalMinutes === 0 && !shouldBypassPlanRoutineOnboarding(selectedPlan)) {
         navigate('/app/dashboard?tab=mentorship');
       } else {
-        navigate('/app/dashboard');
+        navigate(getDefaultPlanLandingPath(selectedPlan));
       }
     } catch (error) {
       console.error('Error activating plan:', error);

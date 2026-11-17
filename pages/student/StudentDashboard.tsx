@@ -18,7 +18,7 @@ import { NoteType } from '../../services/notebookService';
 import { useAuth } from '../../contexts/AuthContext';
 import { getEdict, EdictStructure } from '../../services/edictService';
 import { SimuladoDashboardCard, ComputedSimulado } from '../../components/student/SimuladoDashboardCard';
-import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, getDocs, onSnapshot, doc } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { getExams } from '../../services/simulatedService';
 import { SimuladoFocusMode } from '../../components/student/goals/SimuladoFocusMode';
@@ -26,6 +26,7 @@ import StudentMentorshipViewer from '../../components/student/mentorship/Student
 import StudentChatView from '../../components/student/chat/StudentChatView';
 import { SimuladosTabContent } from '../../components/student/dashboard/SimuladosTabContent';
 import { LiveEventsTabContent } from '../../components/student/dashboard/LiveEventsTabContent';
+import { PlanPresentialTabContent } from '../../components/student/dashboard/PlanPresentialTabContent';
 import { CourseReviewDashboard } from '../../components/student/courses/reviews/CourseReviewDashboard';
 import { TopicCompletionModal } from '../../components/student/dashboard/TopicCompletionModal';
 import { courseReviewService } from '../../services/courseReviewService';
@@ -40,6 +41,12 @@ import { Smartphone, Download, MessageSquare } from 'lucide-react';
 
 import { useEdictData } from '../../contexts/EdictDataContext';
 import { getPlanById } from '../../services/planService';
+import { Plan } from '../../types/plan';
+import {
+  shouldBypassPlanRoutineOnboarding,
+  getPresentialKeyFromQueryTab,
+  getDefaultPlanLandingPath
+} from '../../utils/planNavigation';
 import { toPlainObject } from '../../services/firestoreUtils';
 import { subscribeToAnnouncements, Announcement } from '../../services/announcementService';
 import { AnnouncementPopUp } from '../../components/student/announcements/AnnouncementPopUp';
@@ -132,6 +139,8 @@ const StudentDashboard: React.FC = () => {
   const [isGeneratingNext, setIsGeneratingNext] = useState(false);
   const [completedMetaIds, setCompletedMetaIds] = useState<Set<string>>(cachedData?.completedMetaIds || new Set());
   const [fullPlanData, setFullPlanData] = useState<any>(cachedData?.fullPlanData || null);
+  const [livePlanConfig, setLivePlanConfig] = useState<Plan | null>(null);
+  const [livePlanLoadedForId, setLivePlanLoadedForId] = useState<string | null>(null);
   const [metaLookup, setMetaLookup] = useState<Record<string, Meta>>(cachedData?.metaLookup || {});
   const [isEdictLoading, setIsEdictLoading] = useState(false);
   const [pendingTopicReview, setPendingTopicReview] = useState<any>(null);
@@ -141,33 +150,65 @@ const StudentDashboard: React.FC = () => {
   const closedTopicModalsRef = React.useRef<Set<string>>(new Set());
   const prefetchPromiseRef = React.useRef<Promise<void> | null>(null);
 
+  // Listener leve e em tempo real das configurações de abas/presencial do Plano ativo
+  useEffect(() => {
+    const activeId = userData?.activePlanId || userData?.currentPlanId || currentPlanId;
+    if (!activeId) {
+      setLivePlanConfig(null);
+      setLivePlanLoadedForId(null);
+      return;
+    }
+
+    const unsub = onSnapshot(doc(db, 'plans', activeId), (snap) => {
+      if (snap.exists()) {
+        setLivePlanConfig({ id: snap.id, ...(snap.data() as Plan) });
+      } else {
+        setLivePlanConfig(null);
+      }
+      setLivePlanLoadedForId(activeId);
+    });
+
+    return () => unsub();
+  }, [userData?.activePlanId, userData?.currentPlanId, currentPlanId]);
+
   useEffect(() => {
     if (!currentUser || !userData) return;
     
     // Se o aluno não tem plano ativo e não tem curso ativo, redireciona para seleção de planos
-    if (!userData?.activePlanId && !userData?.currentPlanId && !userData?.activeCourseId) {
+    const activeId = userData?.activePlanId || userData?.currentPlanId;
+    if (!activeId && !userData?.activeCourseId) {
       navigate('/app/dashboard/planos');
       return;
     }
 
     // REGRA DE REDIRECIONAMENTO ONBOARDING (PRD 9.2)
-    // O redirecionamento forçado para a aba 'MENTORIA' deve ocorrer estritamente no 
-    // primeiro carregamento pós-login (Onboarding inicial) se a rotina estiver zerada.
-    // Uma vez que o usuário está no Dash, permitimos que ele navegue livremente.
-    const routine = userData?.routine || {};
-    const totalMinutes = Object.values(routine).reduce((acc: number, val: any) => acc + (Number(val) || 0), 0);
-    
-    if (!hasAutoRedirectedRef.current && (userData?.activePlanId || userData?.currentPlanId) && totalMinutes === 0 && !currentTab) {
-        hasAutoRedirectedRef.current = true;
-        navigate('/app/dashboard?tab=mentorship', { replace: true });
-        return;
+    // Aguarda o carregamento da configuração do plano para respeitar ocultação de abas ou Turma Presencial
+    if (activeId && livePlanLoadedForId !== activeId) {
+      return;
     }
 
-    // Se o usuário já estiver em alguma aba ou tiver rotina, marcamos que o onboarding inicial já passou
-    if (currentTab || totalMinutes > 0) {
+    const routine = userData?.routine || {};
+    const totalMinutes = Object.values(routine).reduce((acc: number, val: any) => acc + (Number(val) || 0), 0);
+    const effectivePlan = livePlanConfig || fullPlanData;
+    const bypassRoutineOnboarding = shouldBypassPlanRoutineOnboarding(effectivePlan);
+    
+    if (
+      !hasAutoRedirectedRef.current &&
+      activeId &&
+      totalMinutes === 0 &&
+      !currentTab &&
+      !bypassRoutineOnboarding
+    ) {
+      hasAutoRedirectedRef.current = true;
+      navigate('/app/dashboard?tab=mentorship', { replace: true });
+      return;
+    }
+
+    // Se o usuário já estiver em alguma aba, tiver rotina ou o plano dispensar rotina nativa, marcamos concluído
+    if (currentTab || totalMinutes > 0 || bypassRoutineOnboarding) {
       hasAutoRedirectedRef.current = true;
     }
-  }, [userData, navigate, currentUser, currentTab]);
+  }, [userData, navigate, currentUser, currentTab, livePlanLoadedForId, livePlanConfig, fullPlanData]);
 
   useEffect(() => {
     if (pendingTopicReview) {
@@ -1360,15 +1401,45 @@ const StudentDashboard: React.FC = () => {
   const totalTodayCount = todayGoals.length;
   const progress = totalTodayCount > 0 ? (completedTodayCount / totalTodayCount) * 100 : 0;
 
+  // --- RENDERIZAÇÃO DE ABAS COMPARTILHADAS DA TURMA PRESENCIAL ---
+  if (currentTab && currentTab.startsWith('presential_')) {
+      const presentialKey = getPresentialKeyFromQueryTab(currentTab);
+      const effectivePlan = (livePlanConfig || fullPlanData) as Plan | null;
+      const activeId = userData?.activePlanId || userData?.currentPlanId || currentPlanId;
+
+      if (!effectivePlan && activeId && livePlanLoadedForId !== activeId) {
+          return (
+              <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 bg-zinc-950">
+                <Loader2 size={40} className="animate-spin text-red-600" />
+                <p className="text-zinc-500 text-xs font-bold uppercase tracking-widest">
+                  Carregando configuração do plano...
+                </p>
+              </div>
+          );
+      }
+
+      if (presentialKey && effectivePlan?.linkedPresentialConfig?.classId) {
+          return (
+              <PlanPresentialTabContent
+                planId={activeId || ''}
+                planData={effectivePlan}
+                classId={effectivePlan.linkedPresentialConfig.classId}
+                activePresentialTab={presentialKey}
+              />
+          );
+      }
+  }
+
   // --- RENDERIZAÇÃO DE CURSOS VINCULADOS DINAMICAMENTE ---
   if (currentTab && currentTab.startsWith('course_')) {
       const targetCourseId = currentTab.replace('course_', '');
+      const fallbackPath = getDefaultPlanLandingPath(livePlanConfig || fullPlanData);
       
       return (
           <div className="relative w-full min-h-screen bg-zinc-950 flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-700">
             <LinkedCourseTabContent 
               courseId={targetCourseId} 
-              onBack={() => navigate('/app/dashboard')}
+              onBack={() => navigate(fallbackPath)}
             />
           </div>
       );

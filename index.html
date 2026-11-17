@@ -173,14 +173,250 @@
         border-radius: 4px;
       }
 
+      /* =====================================================================
+         CORREÇÃO DE ROLAGEM INTEGRAL E REMOÇÃO DE OVERFLOW INTERNO EM QUESTÕES
+         ===================================================================== */
+
+      /* 1. Remove scroll interno e altura máxima do comando da questão */
+      .q-enunciation,
+      .question-statement,
+      .enunciado-box {
+        max-height: none !important;
+        overflow-y: visible !important;
+        white-space: pre-line !important;
+        margin-bottom: 20px !important;
+      }
+
+      /* 2. Remove scroll interno e altura fixa das alternativas */
+      .q-options,
+      .question-options-container,
+      .alternativas-box,
       .alternatives-container {
         max-height: none !important;
         height: auto !important;
         overflow-y: visible !important;
-        overflow-x: hidden;
+        flex: none !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 12px !important;
+      }
+
+      /* 3. A rolagem lateral passa a ser exclusiva da página/área de visualização */
+      #view-questions,
+      .questions-view-container {
+        overflow-y: auto !important;
+        height: 100% !important;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .interactive-player-light #view-questions::-webkit-scrollbar-track,
+      .interactive-player-light .questions-view-container::-webkit-scrollbar-track {
+        background: #e2e8f0;
+      }
+      .interactive-player-light #view-questions::-webkit-scrollbar-thumb,
+      .interactive-player-light .questions-view-container::-webkit-scrollbar-thumb {
+        background: #94a3b8;
+        border-radius: 4px;
+      }
+      .interactive-player-light #view-questions::-webkit-scrollbar-thumb:hover,
+      .interactive-player-light .questions-view-container::-webkit-scrollbar-thumb:hover {
+        background: #002060;
+      }
+
+      /* 4. Coluna da questão com altura natural e coluna de gabarito fixa */
+      .q-left-col {
+        height: auto !important;
+        min-height: auto !important;
+        overflow: visible !important;
+      }
+
+      .q-right-col {
+        height: auto !important;
+        position: sticky !important;
+        top: 10px !important;
+      }
+
+      /* =====================================================================
+         INSPETOR DO MAPA MENTAL (CARDS DIDÁTICOS) & CHIPS DE QUESTÕES
+         ===================================================================== */
+
+      /* Card Teórico Pega a Visão no Inspetor Lateral */
+      .insp-visao-box {
+        background: #f0f7ff;
+        border: 2px solid #0070c0;
+        border-left: 6px solid #002060;
+        border-radius: calc(12px * var(--insp-zoom, 1));
+        padding: calc(14px * var(--insp-zoom, 1)) calc(18px * var(--insp-zoom, 1));
+        margin-bottom: 12px;
+      }
+      .insp-visao-box .insp-card-title {
+        color: #002060;
+        font-weight: 800;
+      }
+      .interactive-player-dark .insp-visao-box {
+        background: linear-gradient(135deg, rgba(23, 37, 84, 0.55), rgba(30, 27, 75, 0.35));
+        border: 2px solid rgba(59, 130, 246, 0.5);
+        border-left: 6px solid #3b82f6;
+        color: #e5e7eb;
+      }
+      .interactive-player-dark .insp-visao-box .insp-card-title {
+        color: #60a5fa;
+      }
+
+      /* Demais blocos semânticos do Inspetor Lateral */
+      .insp-law-box {
+        background: transparent;
+        border: 2px dashed #7f7f7f;
+        border-radius: calc(12px * var(--insp-zoom, 1));
+        padding: calc(14px * var(--insp-zoom, 1)) calc(18px * var(--insp-zoom, 1));
+        margin-bottom: 12px;
+        font-style: italic;
+      }
+      .insp-law-box .insp-card-title {
+        color: #002060;
+        font-weight: 800;
+        font-style: normal;
+      }
+      .interactive-player-dark .insp-law-box {
+        background: #0b0e14;
+        border: 1px dashed #374151;
+        color: #e5e7eb;
+      }
+      .interactive-player-dark .insp-law-box .insp-card-title {
+        color: #38bdf8;
+      }
+
+      .insp-list-box {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-left: 5px solid #10b981;
+        border-radius: calc(12px * var(--insp-zoom, 1));
+        padding: calc(14px * var(--insp-zoom, 1)) calc(18px * var(--insp-zoom, 1));
+        margin-bottom: 12px;
+      }
+      .insp-list-box .insp-card-title {
+        color: #047857;
+        font-weight: 800;
+      }
+      .interactive-player-dark .insp-list-box {
+        background: #121620;
+        border: 1px solid #1f2937;
+        border-left: 5px solid #10b981;
+        color: #d1d5db;
+      }
+      .interactive-player-dark .insp-list-box .insp-card-title {
+        color: #34d399;
+      }
+
+      .insp-example-box {
+        background: #f0f9ff;
+        border: 2px dashed #0070c0;
+        border-radius: calc(12px * var(--insp-zoom, 1));
+        padding: calc(14px * var(--insp-zoom, 1)) calc(18px * var(--insp-zoom, 1));
+        margin-bottom: 12px;
+      }
+      .insp-example-box .insp-card-title {
+        color: #0070c0;
+        font-weight: 800;
+      }
+      .interactive-player-dark .insp-example-box {
+        background: #12151c;
+        border: 1px dashed rgba(147, 51, 234, 0.5);
+        color: #d1d5db;
+      }
+      .interactive-player-dark .insp-example-box .insp-card-title {
+        color: #c084fc;
+      }
+
+      .insp-alert-box {
+        background: #fef2f2;
+        border: 2px solid #c00000;
+        border-radius: calc(12px * var(--insp-zoom, 1));
+        padding: calc(14px * var(--insp-zoom, 1)) calc(18px * var(--insp-zoom, 1));
+        margin-bottom: 12px;
+      }
+      .insp-alert-box .insp-card-title {
+        color: #c00000;
+        font-weight: 800;
+      }
+      .interactive-player-dark .insp-alert-box {
+        background: rgba(69, 26, 3, 0.25);
+        border: 1px solid rgba(180, 83, 9, 0.5);
+        color: #fde68a;
+      }
+      .interactive-player-dark .insp-alert-box .insp-card-title {
+        color: #fbbf24;
+      }
+
+      .insp-custom-box {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: calc(12px * var(--insp-zoom, 1));
+        padding: calc(14px * var(--insp-zoom, 1)) calc(18px * var(--insp-zoom, 1));
+        margin-bottom: 12px;
+      }
+      .insp-custom-box .insp-card-title {
+        color: #002060;
+        font-weight: 800;
+      }
+      .interactive-player-dark .insp-custom-box {
+        background: #131620;
+        border: 1px solid #1f2937;
+        color: #d1d5db;
+      }
+      .interactive-player-dark .insp-custom-box .insp-card-title {
+        color: #e5e7eb;
+      }
+
+      .insp-card-body p + p {
+        margin-top: 8px;
+      }
+      .insp-card-body ul {
+        list-style-type: disc;
+        padding-left: 1.25rem;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 6px;
+      }
+      .insp-card-body ol {
+        list-style-type: decimal;
+        padding-left: 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      /* Chips de Órgão, Cargo e Ano na Barra de Questões */
+      .q-badge-chip {
+        background: rgba(0, 112, 192, 0.08);
+        color: #0070c0;
+        border: 1px solid rgba(0, 112, 192, 0.25);
+        font-size: 12px;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: 7px;
+        letter-spacing: 0.03em;
+      }
+      .interactive-player-dark .q-badge-chip {
+        background: rgba(56, 189, 248, 0.12);
+        color: #38bdf8;
+        border-color: rgba(56, 189, 248, 0.3);
+      }
+
+      .q-badge-art {
+        background: #fffbeb;
+        color: #b45309;
+        border: 1px solid #fde68a;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: 7px;
+        letter-spacing: 0.02em;
+      }
+      .interactive-player-dark .q-badge-art {
+        background: rgba(120, 53, 15, 0.4);
+        color: #fbbf24;
+        border-color: rgba(180, 83, 9, 0.6);
       }
     </style>
 </head>

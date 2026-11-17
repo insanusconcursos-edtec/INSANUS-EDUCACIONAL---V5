@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { ClassScheduleEvent, ScheduleGap, ScheduleException, ExceptionType } from '../../../../../../types/schedule';
 import { Teacher } from '../../../../../../types/teacher';
 import { Subject, Topic } from '../../../../../../types/curriculum';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertTriangle, ChevronDown, ChevronUp, LayoutGrid, List, Edit2, X, Check, CheckCircle, Loader2, BookOpen, Target, Trash2, Radio, MapPin, Plus, Minus, Layers, Trophy, DoorOpen, Lock, Play, Flag, Network } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertTriangle, ChevronDown, ChevronUp, LayoutGrid, List, Edit2, X, Check, CheckCircle, Loader2, BookOpen, Target, Trash2, Radio, MapPin, Plus, Minus, Layers, Trophy, DoorOpen, Lock, Play, Flag, FileJson, FileText, Video, HelpCircle, Scale, Zap, Maximize2, ExternalLink } from 'lucide-react';
 
 import { checkTeacherAvailability } from '../../../../../../utils/scheduler/ResourceValidator';
 import { buildSubjectSlotUnits, mergeConsumedSlotModules } from '../../../../../../utils/scheduler/ContentResolver';
@@ -16,6 +16,7 @@ import { guidedStudyService } from '../../../../../../services/guidedStudyServic
 import { AddManualAppointmentModal } from './AddManualAppointmentModal';
 import { AddSimuladoAppointmentModal, formatSimuladoDuration } from './AddSimuladoAppointmentModal';
 import { AddGuidedStudyMetaModal } from './AddGuidedStudyMetaModal';
+import { StudentGuidedStudyModal } from '../../../../../student/presential/StudentGuidedStudyModal';
 import { toLocalISODate, parseSafeLocalDate, formatSafeDateLocal } from '../../../../../../utils/dateUtils';
 
 interface SchedulePreviewProps {
@@ -93,6 +94,9 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
   const [isGuidedModalOpen, setIsGuidedModalOpen] = useState(false);
   const [selectedDateForGuided, setSelectedDateForGuided] = useState<string | null>(null);
   const [editingGuidedMeta, setEditingGuidedMeta] = useState<GuidedStudyMeta | null>(null);
+  const [expandedGuidedMetaId, setExpandedGuidedMetaId] = useState<string | null>(null);
+  const [previewGuidedMeta, setPreviewGuidedMeta] = useState<GuidedStudyMeta | null>(null);
+  const [deletingGuidedMetaId, setDeletingGuidedMetaId] = useState<string | null>(null);
 
   const fetchGuidedMetas = async () => {
     if (classData?.id) {
@@ -1004,78 +1008,358 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
         })}
         
         {/* Metas do Estudo Guiado */}
-        {classData?.isGuidedStudyEnabled && (
-          <div className="mt-3 pt-2 border-t border-amber-500/20 space-y-1.5">
-            <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wider block">🎯 Estudo Guiado</span>
-            {guidedMetas.filter(m => m.date === dateString).map(meta => {
-              const cardColor = meta.color || (meta.type === 'interactive_map' ? '#6366f1' : '#f59e0b');
-              const isJsonMap = meta.type === 'interactive_map';
-              return (
-                <div
-                  key={meta.id}
-                  title={meta.title}
-                  className="p-2 rounded-lg flex items-center justify-between text-xs group border transition-all"
-                  style={{
-                    backgroundColor: `${cardColor}18`,
-                    borderColor: `${cardColor}40`
-                  }}
-                >
-                  <div className="flex items-center gap-1.5 min-w-0 flex-1 pr-1">
-                    {isJsonMap ? (
-                      <Network className="w-3.5 h-3.5 shrink-0" style={{ color: cardColor }} />
-                    ) : (
-                      <Target className="w-3.5 h-3.5 shrink-0" style={{ color: cardColor }} />
-                    )}
-                    <span className="truncate font-bold text-[11px] text-white">{meta.title}</span>
-                    {isJsonMap && (
-                      <span className="text-[9px] font-semibold text-indigo-300/90 shrink-0">
-                        · .JSON
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0 opacity-80 group-hover:opacity-100">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedDateForGuided(dateString);
-                        setEditingGuidedMeta(meta);
-                        setIsGuidedModalOpen(true);
-                      }}
-                      className="text-zinc-400 hover:text-white p-0.5"
-                      title="Editar Meta"
-                    >
-                      <Edit2 className="w-3 h-3" />
-                    </button>
-                    <button
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        if (window.confirm('Excluir esta meta do Estudo Guiado?')) {
-                          await guidedStudyService.deleteMeta(meta.id!);
-                          fetchGuidedMetas();
-                        }
-                      }}
-                      className="text-zinc-400 hover:text-red-400 p-0.5"
-                      title="Excluir Meta"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+        {classData?.isGuidedStudyEnabled && (() => {
+          const dayGuidedMetas = guidedMetas.filter(m => m.date === dateString);
 
-            <button
-              onClick={() => {
-                setSelectedDateForGuided(dateString);
-                setEditingGuidedMeta(null);
-                setIsGuidedModalOpen(true);
-              }}
-              className="w-full mt-1 flex items-center justify-center gap-1 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-bold uppercase rounded transition-colors"
-            >
-              + Meta (Estudo Guiado)
-            </button>
-          </div>
-        )}
+          const getAdminMetaTypeInfo = (type: GuidedStudyMeta['type']) => {
+            switch (type) {
+              case 'interactive_map':
+                return { label: 'Mapa .JSON', Icon: FileJson };
+              case 'aula':
+                return { label: 'Videoaula', Icon: Video };
+              case 'material':
+                return { label: 'Material PDF', Icon: FileText };
+              case 'questoes':
+                return { label: 'Questões', Icon: HelpCircle };
+              case 'lei_seca':
+                return { label: 'Lei Seca', Icon: Scale };
+              case 'flashcards':
+                return { label: 'Flashcards', Icon: Zap };
+              case 'resumo':
+                return { label: 'Resumo', Icon: BookOpen };
+              default:
+                return { label: 'Meta', Icon: Target };
+            }
+          };
+
+          return (
+            <div className="mt-3 pt-2.5 border-t border-amber-500/20 space-y-2">
+              <div className="flex items-center justify-between gap-1.5">
+                <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap">
+                  <Target className="w-3 h-3 shrink-0" /> Estudo Guiado
+                </span>
+                {dayGuidedMetas.length > 0 && (
+                  <span className="text-[10px] font-semibold text-amber-400/80 tabular-nums whitespace-nowrap">
+                    {dayGuidedMetas.length} {dayGuidedMetas.length === 1 ? 'meta' : 'metas'}
+                  </span>
+                )}
+              </div>
+
+              {dayGuidedMetas.map(meta => {
+                const metaKey = meta.id || `${meta.date}_${meta.title}`;
+                const isJsonMap = meta.type === 'interactive_map';
+                const cardColor = meta.color || (isJsonMap ? '#6366f1' : '#f59e0b');
+                const isMetaExpanded = expandedGuidedMetaId === metaKey;
+                const isConfirmingDelete = deletingGuidedMetaId === metaKey;
+                const { label: typeLabel, Icon: TypeIcon } = getAdminMetaTypeInfo(meta.type);
+                const summary = meta.interactiveMapSummary;
+
+                return (
+                  <div
+                    key={metaKey}
+                    onClick={e => {
+                      e.stopPropagation();
+                      setExpandedGuidedMetaId(isMetaExpanded ? null : metaKey);
+                      if (isMetaExpanded) setDeletingGuidedMetaId(null);
+                    }}
+                    className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
+                      isMetaExpanded
+                        ? 'bg-zinc-900 shadow-lg z-20 relative'
+                        : 'bg-zinc-900/80 hover:bg-zinc-800/90'
+                    }`}
+                    style={{
+                      borderColor: isMetaExpanded ? cardColor : `${cardColor}50`
+                    }}
+                  >
+                    {/* Header do Card */}
+                    <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <div
+                          className="w-5 h-5 rounded-md flex items-center justify-center shrink-0"
+                          style={{ backgroundColor: `${cardColor}22`, color: cardColor }}
+                        >
+                          <TypeIcon className="w-3 h-3" />
+                        </div>
+                        <span
+                          className="text-[9px] font-bold uppercase tracking-wider truncate"
+                          style={{ color: cardColor }}
+                        >
+                          {typeLabel}
+                        </span>
+                      </div>
+
+                      <div className="text-zinc-400 shrink-0">
+                        {isMetaExpanded ? (
+                          <ChevronUp className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Título legível */}
+                    <div
+                      className={`font-bold text-xs text-white leading-snug break-words ${
+                        isMetaExpanded ? '' : 'line-clamp-2'
+                      }`}
+                      title={meta.title}
+                    >
+                      {meta.title}
+                    </div>
+
+                    {/* Metadados base */}
+                    <div className="mt-1 text-[10px] text-zinc-400 leading-tight break-words tabular-nums">
+                      {meta.disciplineName ? `${meta.disciplineName} · ` : ''}
+                      {meta.duration || 30} min
+                    </div>
+
+                    {/* Painel Expandido do Admin */}
+                    {isMetaExpanded && (
+                      <div className="mt-2.5 pt-2.5 border-t border-zinc-800 space-y-2.5 animate-in fade-in duration-150">
+                        {meta.disciplineName && (
+                          <div>
+                            <span className="text-[9px] font-bold text-zinc-500 uppercase block mb-0.5">
+                              Disciplina
+                            </span>
+                            <span className="text-[11px] font-semibold text-zinc-200 break-words block">
+                              {meta.disciplineName}
+                            </span>
+                          </div>
+                        )}
+
+                        {meta.description && (
+                          <div>
+                            <span className="text-[9px] font-bold text-amber-400/90 uppercase block mb-0.5">
+                              Orientação de Estudo
+                            </span>
+                            <p className="text-[11px] text-zinc-300 leading-relaxed whitespace-pre-line bg-zinc-950/70 border border-zinc-800/80 rounded-lg p-2">
+                              {meta.description}
+                            </p>
+                          </div>
+                        )}
+
+                        {isJsonMap && summary && (
+                          <div className="grid grid-cols-2 gap-1.5 text-[10px] tabular-nums">
+                            <div className="px-2 py-1.5 rounded-lg bg-zinc-950/70 border border-zinc-800/80">
+                              <span className="text-zinc-500 block text-[9px] uppercase font-semibold">Mapa Mental</span>
+                              <strong className="text-zinc-200 font-bold">{summary.nodeCount} nós</strong>
+                            </div>
+                            <div className="px-2 py-1.5 rounded-lg bg-zinc-950/70 border border-zinc-800/80">
+                              <span className="text-zinc-500 block text-[9px] uppercase font-semibold">Quadros</span>
+                              <strong className="text-zinc-200 font-bold">{summary.matrixCount} quadros</strong>
+                            </div>
+                            <div className="px-2 py-1.5 rounded-lg bg-zinc-950/70 border border-zinc-800/80">
+                              <span className="text-zinc-500 block text-[9px] uppercase font-semibold">Questões</span>
+                              <strong className="text-zinc-200 font-bold">{summary.questionCount} questões</strong>
+                            </div>
+                            <div className="px-2 py-1.5 rounded-lg bg-zinc-950/70 border border-zinc-800/80">
+                              <span className="text-zinc-500 block text-[9px] uppercase font-semibold">Flashcards</span>
+                              <strong className="text-zinc-200 font-bold">{summary.flashcardCount} cards</strong>
+                            </div>
+                          </div>
+                        )}
+
+                        {meta.articles && (
+                          <div className="text-[11px] text-purple-200 bg-purple-950/30 border border-purple-500/20 rounded-lg p-2">
+                            <span className="text-[9px] font-bold uppercase text-purple-400 block mb-0.5">
+                              Artigos Recomendados
+                            </span>
+                            {meta.articles}
+                          </div>
+                        )}
+
+                        {meta.type === 'questoes' && meta.questionCount && meta.questionCount > 0 ? (
+                          <div className="text-[11px] text-emerald-200 bg-emerald-950/30 border border-emerald-500/20 rounded-lg p-2 tabular-nums">
+                            Meta programada: <strong>{meta.questionCount} questões</strong>
+                          </div>
+                        ) : null}
+
+                        {/* Arquivo / Conteúdo Inserido -> Clique abre o Modal Expandido */}
+                        {isJsonMap ? (
+                          <button
+                            type="button"
+                            onClick={e => {
+                              e.stopPropagation();
+                              setPreviewGuidedMeta(meta);
+                            }}
+                            className="w-full p-2.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/40 text-left transition-all flex items-center justify-between gap-2 group"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <FileJson className="w-4 h-4 text-indigo-300 shrink-0" />
+                              <div className="min-w-0">
+                                <span className="block text-[11px] font-bold text-indigo-100 truncate">
+                                  {meta.interactiveMapFileName || 'Modelo Interativo (.JSON)'}
+                                </span>
+                                <span className="block text-[9px] text-indigo-300/90">
+                                  Clique para abrir em tela ampla
+                                </span>
+                              </div>
+                            </div>
+                            <Maximize2 className="w-3.5 h-3.5 text-indigo-300 group-hover:scale-110 transition-transform shrink-0" />
+                          </button>
+                        ) : meta.pdfUrl ? (
+                          <button
+                            type="button"
+                            onClick={e => {
+                              e.stopPropagation();
+                              setPreviewGuidedMeta(meta);
+                            }}
+                            className="w-full p-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-left transition-all flex items-center justify-between gap-2 group"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <FileText className="w-4 h-4 text-amber-300 shrink-0" />
+                              <div className="min-w-0">
+                                <span className="block text-[11px] font-bold text-amber-100 truncate">
+                                  {meta.pdfName || 'Material em PDF'}
+                                </span>
+                                <span className="block text-[9px] text-amber-300/90">
+                                  Clique para visualizar PDF
+                                </span>
+                              </div>
+                            </div>
+                            <Maximize2 className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                          </button>
+                        ) : meta.type === 'aula' && (meta.pandaVideoId || meta.pandaVideoUrl) ? (
+                          <button
+                            type="button"
+                            onClick={e => {
+                              e.stopPropagation();
+                              setPreviewGuidedMeta(meta);
+                            }}
+                            className="w-full p-2.5 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/40 text-left transition-all flex items-center justify-between gap-2 group"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Video className="w-4 h-4 text-blue-300 shrink-0" />
+                              <div className="min-w-0">
+                                <span className="block text-[11px] font-bold text-blue-100 truncate">
+                                  Videoaula Vinculada
+                                </span>
+                                <span className="block text-[9px] text-blue-300/90">
+                                  Clique para pré-visualizar
+                                </span>
+                              </div>
+                            </div>
+                            <Maximize2 className="w-3.5 h-3.5 text-blue-300 shrink-0" />
+                          </button>
+                        ) : meta.type === 'flashcards' && meta.cards && meta.cards.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={e => {
+                              e.stopPropagation();
+                              setPreviewGuidedMeta(meta);
+                            }}
+                            className="w-full p-2.5 rounded-xl bg-pink-500/15 hover:bg-pink-500/25 border border-pink-500/40 text-left transition-all flex items-center justify-between gap-2 group"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Zap className="w-4 h-4 text-pink-300 shrink-0" />
+                              <div className="min-w-0">
+                                <span className="block text-[11px] font-bold text-pink-100 truncate">
+                                  Baralho ({meta.cards.length} cards)
+                                </span>
+                                <span className="block text-[9px] text-pink-300/90">
+                                  Clique para pré-visualizar
+                                </span>
+                              </div>
+                            </div>
+                            <Maximize2 className="w-3.5 h-3.5 text-pink-300 shrink-0" />
+                          </button>
+                        ) : meta.externalLink ? (
+                          <button
+                            type="button"
+                            onClick={e => {
+                              e.stopPropagation();
+                              setPreviewGuidedMeta(meta);
+                            }}
+                            className="w-full py-2 px-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-[11px] font-bold text-white transition-colors flex items-center justify-between gap-2"
+                          >
+                            <span className="truncate">Visualizar Link Externo</span>
+                            <ExternalLink className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          </button>
+                        ) : null}
+
+                        {/* Botões Administrativos: Editar / Excluir */}
+                        {isConfirmingDelete ? (
+                          <div className="p-2 rounded-lg bg-red-950/40 border border-red-500/40 space-y-2">
+                            <span className="block text-[10px] font-semibold text-red-200 text-center">
+                              Confirmar exclusão desta meta?
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  setDeletingGuidedMetaId(null);
+                                }}
+                                className="flex-1 py-1 px-2 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-bold transition-colors whitespace-nowrap"
+                              >
+                                Cancelar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async e => {
+                                  e.stopPropagation();
+                                  if (meta.id) {
+                                    await guidedStudyService.deleteMeta(meta.id);
+                                    setDeletingGuidedMetaId(null);
+                                    setExpandedGuidedMetaId(null);
+                                    fetchGuidedMetas();
+                                  }
+                                }}
+                                className="flex-1 py-1 px-2 rounded bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold transition-colors whitespace-nowrap"
+                              >
+                                Excluir
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 pt-0.5">
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setSelectedDateForGuided(dateString);
+                                setEditingGuidedMeta(meta);
+                                setIsGuidedModalOpen(true);
+                              }}
+                              className="flex-1 flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 text-[10px] font-bold uppercase tracking-wider transition-colors whitespace-nowrap"
+                            >
+                              <Edit2 className="w-3 h-3 shrink-0" />
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setDeletingGuidedMetaId(metaKey);
+                              }}
+                              className="flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-lg bg-zinc-900 hover:bg-red-950/60 border border-zinc-700/80 hover:border-red-500/50 text-zinc-400 hover:text-red-300 text-[10px] font-bold uppercase tracking-wider transition-colors whitespace-nowrap"
+                              title="Excluir Meta"
+                            >
+                              <Trash2 className="w-3 h-3 shrink-0" />
+                              Excluir
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedDateForGuided(dateString);
+                  setEditingGuidedMeta(null);
+                  setIsGuidedModalOpen(true);
+                }}
+                className="w-full mt-1 flex items-center justify-center gap-1 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-bold uppercase rounded transition-colors whitespace-nowrap"
+              >
+                + Meta (Estudo Guiado)
+              </button>
+            </div>
+          );
+        })()}
 
         <div className="pt-1 space-y-1.5">
           <button
@@ -2041,6 +2325,18 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
           onSuccess={() => {
             fetchGuidedMetas();
           }}
+        />
+      )}
+
+      {/* Admin Preview Modal for Guided Study Metas (.JSON / PDF / Video / Flashcards) */}
+      {previewGuidedMeta && (
+        <StudentGuidedStudyModal
+          isOpen={!!previewGuidedMeta}
+          onClose={() => setPreviewGuidedMeta(null)}
+          meta={previewGuidedMeta}
+          classId={classData.id}
+          userId=""
+          isAdminPreview
         />
       )}
     </>

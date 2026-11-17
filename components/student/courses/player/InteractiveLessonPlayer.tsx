@@ -7,7 +7,7 @@ import {
   History, Flag, BarChart3, Sun, Moon
 } from 'lucide-react';
 import { 
-  InteractiveMapData, MindmapNode, MindmapNodeColor, InteractiveMatrix, 
+  InteractiveMapData, MindmapNode, MindmapNodeColor, MindmapBlock, MindmapNodeDetail, InteractiveMatrix, 
   InteractiveQuestao, InteractiveFlashcard, InteractiveMapStudentProgress,
   QuestionAttempt, QuestionAnswerData, BatteryTestHistoryItem
 } from '../../../../types/interactiveMap';
@@ -98,6 +98,153 @@ function parsePegaAVisaoSegments(rawText: string | undefined | null, isDark = fa
       html: formatMarkdown(highlightInitialKeyword(line), isDark)
     };
   });
+}
+
+function formatInspectorRichHtml(rawHtml: string | undefined | null, isDark = false): string {
+  if (!rawHtml) return '';
+  const strongColor = isDark ? '#93c5fd' : '#002060';
+  const withMarkdown = String(rawHtml)
+    .replace(/\*\*([\s\S]*?)\*\*/g, `<strong class="matrix-kw" style="color: ${strongColor}; font-weight: 700;">$1</strong>`)
+    .replace(/\*([^*\n<>]+?)\*/g, '<em>$1</em>');
+  return sanitizeInteractiveHtml(withMarkdown);
+}
+
+function buildVisaoHtmlFromText(rawVisao: string, isDark = false): string {
+  const trimmed = rawVisao.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('<')) {
+    return formatInspectorRichHtml(trimmed, isDark);
+  }
+  const segments = parsePegaAVisaoSegments(trimmed, isDark);
+  const hasMarkers = segments.some(s => Boolean(s.marker));
+  if (hasMarkers) {
+    return `<div class="pega-a-visao-content">${segments
+      .map(seg =>
+        seg.marker
+          ? `<p><strong>${seg.marker}</strong> ${seg.html}</p>`
+          : `<p>${seg.html}</p>`
+      )
+      .join('')}</div>`;
+  }
+  return segments.map(seg => `<p>${seg.html}</p>`).join('');
+}
+
+/**
+ * Monta ou preserva os blocos do Inspetor Lateral na ordem didática oficial:
+ * 1º: b_visao   -> 💡 PEGA A VISÃO (TEORIA BIZURADA)
+ * 2º: b_lei     -> ⚖️ TEXTO DA LEI / DISPOSITIVO LITERAL
+ * 3º: b_lista   -> 📌 PONTOS CRÍTICOS DE PROVA
+ * 4º: b_exemplo -> 🎯 EXEMPLO PRÁTICO
+ * 5º: b_atencao -> ⚠️ ATENÇÃO / PEGADINHA
+ */
+function buildBlocksFromLegacyDetail(detail: MindmapNodeDetail | undefined, isDark = false): MindmapBlock[] {
+  if (!detail) return [];
+
+  const rawVisao = detail.pega_visao || detail.resumo;
+
+  if (Array.isArray(detail.blocks) && detail.blocks.length > 0) {
+    const normalizedBlocks = detail.blocks.map(blk => ({
+      ...blk,
+      html: formatInspectorRichHtml(blk.html, isDark)
+    }));
+
+    const visaoIdx = normalizedBlocks.findIndex(b => b.type === 'visao' || b.id === 'b_visao');
+    if (visaoIdx === 0) {
+      return normalizedBlocks;
+    }
+    if (visaoIdx > 0) {
+      const reordered = [...normalizedBlocks];
+      const [visaoBlock] = reordered.splice(visaoIdx, 1);
+      return [visaoBlock, ...reordered];
+    }
+    if (rawVisao && rawVisao.trim()) {
+      return [
+        {
+          id: 'b_visao',
+          type: 'visao',
+          title: '💡 PEGA A VISÃO (TEORIA BIZURADA)',
+          html: buildVisaoHtmlFromText(rawVisao, isDark)
+        },
+        ...normalizedBlocks
+      ];
+    }
+    return normalizedBlocks;
+  }
+
+  const blocks: MindmapBlock[] = [];
+
+  // 1º: b_visao -> 💡 PEGA A VISÃO (TEORIA BIZURADA)
+  if (rawVisao && rawVisao.trim()) {
+    blocks.push({
+      id: 'b_visao',
+      type: 'visao',
+      title: '💡 PEGA A VISÃO (TEORIA BIZURADA)',
+      html: buildVisaoHtmlFromText(rawVisao, isDark)
+    });
+  }
+
+  // 2º: b_lei -> ⚖️ TEXTO DA LEI / DISPOSITIVO LITERAL
+  if (Array.isArray(detail.lei_seca) && detail.lei_seca.length > 0) {
+    const leiHtml = detail.lei_seca
+      .map(line => {
+        const str = String(line ?? '').trim();
+        if (!str) return '';
+        return str.startsWith('<')
+          ? formatInspectorRichHtml(str, isDark)
+          : `<p>${formatMarkdown(str, isDark)}</p>`;
+      })
+      .filter(Boolean)
+      .join('');
+    if (leiHtml) {
+      blocks.push({
+        id: 'b_lei',
+        type: 'lei',
+        title: '⚖️ TEXTO DA LEI / DISPOSITIVO LITERAL',
+        html: leiHtml
+      });
+    }
+  }
+
+  // 3º: b_lista -> 📌 PONTOS CRÍTICOS DE PROVA
+  if (Array.isArray(detail.checklist) && detail.checklist.length > 0) {
+    const itemsHtml = detail.checklist
+      .map(item => String(item ?? '').trim())
+      .filter(Boolean)
+      .map(item => `<li>${formatMarkdown(item, isDark)}</li>`)
+      .join('');
+    if (itemsHtml) {
+      blocks.push({
+        id: 'b_lista',
+        type: 'lista',
+        title: '📌 PONTOS CRÍTICOS DE PROVA',
+        html: `<ul>${itemsHtml}</ul>`
+      });
+    }
+  }
+
+  // 4º: b_exemplo -> 🎯 EXEMPLO PRÁTICO
+  if (detail.exemplo && detail.exemplo.trim()) {
+    const exStr = detail.exemplo.trim();
+    blocks.push({
+      id: 'b_exemplo',
+      type: 'exemplo',
+      title: '🎯 EXEMPLO PRÁTICO',
+      html: exStr.startsWith('<') ? formatInspectorRichHtml(exStr, isDark) : `<p>${formatMarkdown(exStr, isDark)}</p>`
+    });
+  }
+
+  // 5º: b_atencao -> ⚠️ ATENÇÃO / PEGADINHA
+  if (detail.pegadinha && detail.pegadinha.trim()) {
+    const pegStr = detail.pegadinha.trim();
+    blocks.push({
+      id: 'b_atencao',
+      type: 'atencao',
+      title: '⚠️ ATENÇÃO / PEGADINHA',
+      html: pegStr.startsWith('<') ? formatInspectorRichHtml(pegStr, isDark) : `<p>${formatMarkdown(pegStr, isDark)}</p>`
+    });
+  }
+
+  return blocks;
 }
 
 // Cores temáticas para os nós e colunas
@@ -409,13 +556,11 @@ function InteractivePlayerCore({ mapData, lessonId, contentId, userId, embeddedI
           : 'interactive-player-light bg-[#f8fafc] text-slate-800'
       } ${
         isFullscreen 
-          ? 'fixed inset-0 z-50 w-screen h-screen flex flex-col overflow-hidden' 
-          : activeTab === 'mindmap'
-            ? embeddedInModal
-              ? 'w-full h-[calc(92vh-165px)] min-h-[460px] flex flex-col overflow-hidden rounded-xl border border-zinc-800/40'
-              : 'w-full h-[calc(100vh-176px)] lg:h-[calc(100vh-112px)] min-h-[560px] md:min-h-[640px] flex flex-col overflow-hidden'
-            : embeddedInModal
-              ? 'w-full min-h-[460px] h-auto flex flex-col overflow-visible rounded-xl border border-zinc-800/40'
+          ? 'fixed inset-0 z-[130] w-screen h-screen flex flex-col overflow-hidden' 
+          : embeddedInModal
+            ? 'w-full flex-1 min-h-0 h-full flex flex-col overflow-hidden'
+            : activeTab === 'mindmap' || activeTab === 'questoes'
+              ? 'w-full h-[calc(100vh-176px)] lg:h-[calc(100vh-112px)] min-h-[560px] md:min-h-[640px] flex flex-col overflow-hidden'
               : 'w-full min-h-[calc(100vh-176px)] lg:min-h-[calc(100vh-112px)] h-auto flex flex-col overflow-visible'
       }`}
     >
@@ -698,9 +843,9 @@ function InteractivePlayerCore({ mapData, lessonId, contentId, userId, embeddedI
 
       {/* Área Central de Conteúdo */}
       <main className={`flex-1 relative flex flex-col ${
-        activeTab === 'mindmap'
+        activeTab === 'mindmap' || activeTab === 'questoes'
           ? 'min-h-0 overflow-hidden'
-          : isFullscreen
+          : isFullscreen || embeddedInModal
             ? 'min-h-0 overflow-y-auto custom-scrollbar'
             : 'h-auto overflow-visible'
       } ${
@@ -814,6 +959,7 @@ function MindmapTab({
   // Refs para container do canvas e aside lateral
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const asideRef = useRef<HTMLElement>(null);
+  const inspectorScrollRef = useRef<HTMLDivElement>(null);
 
   // Controle de nós expandidos
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -824,6 +970,13 @@ function MindmapTab({
   const [customWidth, setCustomWidth] = useState<number | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [panelFontScale, setPanelFontScale] = useState(1); // Zoom A-, 100%, A+
+
+  // Sempre reposiciona o scroll do Inspetor Lateral no topo ao abrir/alternar um nó
+  useEffect(() => {
+    if (inspectorScrollRef.current) {
+      inspectorScrollRef.current.scrollTop = 0;
+    }
+  }, [selectedNode?.id]);
 
   // 1. Zoom no ponto exato do mouse (Wheel) com e.preventDefault()
   useEffect(() => {
@@ -1587,178 +1740,97 @@ function MindmapTab({
 
           {/* Conteúdo com Scroll e Escala de Fonte Proporcional */}
           <div 
-            className="flex-1 p-5 overflow-y-auto overflow-x-auto space-y-4 custom-scrollbar"
-            style={{ fontSize: `${panelFontScale * 0.875}rem` }}
+            ref={inspectorScrollRef}
+            className="flex-1 p-5 overflow-y-auto overflow-x-auto custom-scrollbar"
+            style={{
+              fontSize: `${panelFontScale * 0.875}rem`,
+              ['--insp-zoom' as string]: panelFontScale
+            }}
           >
-            {/* 1. Pega a Visão (Resumo Estruturado Verticalmente) */}
-            {selectedNode.detail?.resumo && (() => {
-              const pegaSegments = parsePegaAVisaoSegments(selectedNode.detail.resumo, isDark);
-              const hasMarkedItems = pegaSegments.some(seg => Boolean(seg.marker));
+            {(() => {
+              const inspectorBlocks = buildBlocksFromLegacyDetail(selectedNode.detail, isDark);
+              const keyNumbers = selectedNode.detail?.key_numbers || [];
+              const keyNumbersInsertAfterIdx = (() => {
+                const leiIdx = inspectorBlocks.findIndex(b => b.type === 'lei');
+                if (leiIdx !== -1) return leiIdx;
+                const visaoIdx = inspectorBlocks.findIndex(b => b.type === 'visao');
+                if (visaoIdx !== -1) return visaoIdx;
+                return -1;
+              })();
+
+              const renderKeyNumbersGrid = () =>
+                keyNumbers.length > 0 ? (
+                  <div key="insp-key-numbers" className="grid grid-cols-2 gap-2 mb-3">
+                    {keyNumbers.map((kn, kIdx) => (
+                      <div
+                        key={kIdx}
+                        className={`p-3 rounded-xl border text-center ${
+                          isDark ? 'bg-[#141822] border-gray-800' : 'bg-white border-slate-200 shadow-sm'
+                        }`}
+                      >
+                        <span className={`text-lg font-black block ${isDark ? 'text-amber-400' : 'text-[#b45309]'}`}>
+                          {kn.value}
+                        </span>
+                        <span className={`text-[10px] font-bold uppercase tracking-tight ${isDark ? 'text-gray-400' : 'text-slate-500'}`}>
+                          {kn.label}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null;
 
               return (
-                <div className={`p-4 rounded-xl border ${
-                  isDark 
-                    ? 'bg-gradient-to-br from-blue-950/40 to-indigo-950/20 border-blue-900/40 text-gray-200' 
-                    : 'bg-white border-slate-200 shadow-sm text-slate-700'
-                }`}>
-                  <div className={`flex items-center gap-2 mb-2.5 ${isDark ? 'text-blue-400' : 'text-[#002060]'}`}>
-                    <Lightbulb size={16} />
-                    <span className="text-[10px] font-black uppercase tracking-wider">Pega a Visão</span>
-                  </div>
-                  <div className={`pega-a-visao-content font-medium ${isDark ? 'text-gray-200' : 'text-slate-700'}`}>
-                    {hasMarkedItems ? (
-                      <ul className="flex flex-col gap-2 list-none m-0 p-0">
-                        {pegaSegments.map((seg, idx) => (
-                          <li
-                            key={idx}
-                            className={
-                              seg.marker
-                                ? `flex items-start gap-2 rounded-lg px-2.5 py-1.5 border ${
-                                    isDark
-                                      ? 'bg-black/20 border-blue-900/30'
-                                      : 'bg-slate-50/80 border-slate-200/80'
-                                  }`
-                                : 'leading-[1.6]'
-                            }
-                          >
-                            {seg.marker && (
-                              <span
-                                className={`font-black text-xs shrink-0 mt-0.5 min-w-[1.25rem] ${
-                                  isDark ? 'text-blue-400' : 'text-[#002060]'
-                                }`}
-                              >
-                                {seg.marker}
-                              </span>
-                            )}
-                            <span
-                              className="flex-1 leading-[1.6]"
-                              dangerouslySetInnerHTML={{ __html: seg.html }}
-                            />
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      pegaSegments.map((seg, idx) => (
-                        <div
-                          key={idx}
-                          className="leading-[1.6]"
-                          dangerouslySetInnerHTML={{ __html: seg.html }}
-                        />
-                      ))
-                    )}
-                  </div>
-                </div>
+                <>
+                  {keyNumbers.length > 0 && keyNumbersInsertAfterIdx === -1 && renderKeyNumbersGrid()}
+                  {inspectorBlocks.map((blk, idx) => {
+                    let cls = 'insp-custom-box';
+                    if (blk.type === 'lei') cls = 'insp-law-box';
+                    else if (blk.type === 'atencao') cls = 'insp-alert-box';
+                    else if (blk.type === 'exemplo') cls = 'insp-example-box';
+                    else if (blk.type === 'visao') cls = 'insp-visao-box';
+                    else if (blk.type === 'lista') cls = 'insp-list-box';
+
+                    const defaultTitle =
+                      blk.type === 'visao'
+                        ? '💡 PEGA A VISÃO (TEORIA BIZURADA)'
+                        : blk.type === 'lei'
+                          ? '⚖️ TEXTO DA LEI / DISPOSITIVO LITERAL'
+                          : blk.type === 'lista'
+                            ? '📌 PONTOS CRÍTICOS DE PROVA'
+                            : blk.type === 'exemplo'
+                              ? '🎯 EXEMPLO PRÁTICO'
+                              : blk.type === 'atencao'
+                                ? '⚠️ ATENÇÃO / PEGADINHA'
+                                : '';
+
+                    const displayTitle = blk.title ?? defaultTitle;
+                    const startsWithSymbol = /^[^\wÀ-ÿ]/u.test(displayTitle.trim());
+
+                    return (
+                      <React.Fragment key={blk.id || `${blk.type}-${idx}`}>
+                        <div className={cls}>
+                          {displayTitle && (
+                            <div className="insp-card-title flex items-center gap-1.5 text-[11px] uppercase tracking-wider mb-2">
+                              {!startsWithSymbol && blk.type === 'visao' && <Lightbulb size={15} className="shrink-0" />}
+                              {!startsWithSymbol && blk.type === 'lei' && <BookOpen size={15} className="shrink-0" />}
+                              {!startsWithSymbol && blk.type === 'lista' && <CheckSquare size={15} className="shrink-0" />}
+                              {!startsWithSymbol && blk.type === 'exemplo' && <Sparkles size={15} className="shrink-0" />}
+                              {!startsWithSymbol && blk.type === 'atencao' && <AlertTriangle size={15} className="shrink-0" />}
+                              <span>{displayTitle}</span>
+                            </div>
+                          )}
+                          <div
+                            className="insp-card-body leading-relaxed"
+                            dangerouslySetInnerHTML={{ __html: blk.html }}
+                          />
+                        </div>
+                        {keyNumbers.length > 0 && idx === keyNumbersInsertAfterIdx && renderKeyNumbersGrid()}
+                      </React.Fragment>
+                    );
+                  })}
+                </>
               );
             })()}
-
-            {/* 2. Texto da Lei (Lei Seca com Sanitização e incisos verticais) */}
-            {selectedNode.detail?.lei_seca && selectedNode.detail.lei_seca.length > 0 && (
-              <div 
-                className={`p-4 rounded-xl italic ${isDark ? 'bg-[#0b0e14] border border-gray-800' : ''}`}
-                style={!isDark ? { backgroundColor: 'transparent', border: '2px dashed #7f7f7f' } : undefined}
-              >
-                <div className={`flex items-center gap-2 mb-3 not-italic ${isDark ? 'text-sky-400' : 'text-[#002060]'}`}>
-                  <BookOpen size={16} />
-                  <span className="text-[10px] font-black uppercase tracking-wider not-italic">Texto da Lei</span>
-                </div>
-                <div className={`space-y-2 leading-relaxed italic ${isDark ? 'text-gray-200' : 'text-slate-800'}`}>
-                  {selectedNode.detail.lei_seca.map((line, idx) => (
-                    <div 
-                      key={idx}
-                      className={`border-l-2 pl-3 py-0.5 text-xs font-normal italic ${
-                        isDark ? 'border-sky-900/60' : 'border-slate-400'
-                      }`}
-                      dangerouslySetInnerHTML={{ __html: sanitizeInteractiveHtml(line) }}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* 3. Números-Chave (Key Numbers) */}
-            {selectedNode.detail?.key_numbers && selectedNode.detail.key_numbers.length > 0 && (
-              <div className="grid grid-cols-2 gap-2">
-                {selectedNode.detail.key_numbers.map((kn, idx) => (
-                  <div key={idx} className={`p-3 rounded-xl border text-center ${
-                    isDark ? 'bg-[#141822] border-gray-800' : 'bg-white border-slate-200 shadow-sm'
-                  }`}>
-                    <span className={`text-lg font-black block ${isDark ? 'text-amber-400' : 'text-[#b45309]'}`}>{kn.value}</span>
-                    <span className={`text-[10px] font-bold uppercase tracking-tight ${isDark ? 'text-gray-400' : 'text-slate-500'}`}>{kn.label}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* 4. Pontos Críticos (Checklist) */}
-            {selectedNode.detail?.checklist && selectedNode.detail.checklist.length > 0 && (
-              <div className={`p-4 rounded-xl border ${
-                isDark ? 'bg-[#121620] border-gray-800 text-gray-300' : 'bg-white border-slate-200 shadow-sm text-slate-800'
-              }`}>
-                <div className={`flex items-center gap-2 mb-2 ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
-                  <CheckSquare size={16} />
-                  <span className="text-[10px] font-black uppercase tracking-wider">Pontos Críticos</span>
-                </div>
-                <ul className="space-y-1.5">
-                  {selectedNode.detail.checklist.map((item, idx) => (
-                    <li key={idx} className={`flex items-start gap-2 text-xs leading-relaxed ${isDark ? 'text-gray-300' : 'text-slate-700'}`}>
-                      <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
-                      <span dangerouslySetInnerHTML={{ __html: formatMarkdown(item, isDark) }} />
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {/* 5. Exemplo Prático */}
-            {selectedNode.detail?.exemplo && (
-              <div 
-                className={`p-4 rounded-xl ${isDark ? 'bg-[#12151c] border border-purple-900/40' : ''}`}
-                style={!isDark ? { backgroundColor: '#f0f9ff', border: '2px dashed #0070c0' } : undefined}
-              >
-                <div className={`flex items-center gap-2 mb-2 ${isDark ? 'text-purple-400' : 'text-[#0070c0]'}`}>
-                  <Sparkles size={16} />
-                  <span className="text-[10px] font-black uppercase tracking-wider">Exemplo Prático</span>
-                </div>
-                <p
-                  className={`text-xs leading-relaxed italic ${isDark ? 'text-gray-300' : 'text-slate-800'}`}
-                  dangerouslySetInnerHTML={{ __html: `&ldquo;${formatMarkdown(selectedNode.detail.exemplo, isDark)}&rdquo;` }}
-                />
-              </div>
-            )}
-
-            {/* 6. Atenção / Pegadinha */}
-            {selectedNode.detail?.pegadinha && (
-              <div 
-                className={`p-4 rounded-xl ${isDark ? 'bg-amber-950/20 border border-amber-800/40' : ''}`}
-                style={!isDark ? { backgroundColor: '#fef2f2', border: '2px solid #c00000' } : undefined}
-              >
-                <div className={`flex items-center gap-2 mb-2 ${isDark ? 'text-amber-400' : 'text-[#c00000]'}`}>
-                  <AlertTriangle size={16} />
-                  <span className="text-[10px] font-black uppercase tracking-wider">Atenção / Pegadinha</span>
-                </div>
-                <p
-                  className={`text-xs leading-relaxed ${isDark ? 'text-amber-200 font-medium' : 'text-red-950 font-semibold'}`}
-                  dangerouslySetInnerHTML={{ __html: formatMarkdown(selectedNode.detail.pegadinha, isDark) }}
-                />
-              </div>
-            )}
-
-            {/* 7. Blocos Customizados (Blocks) */}
-            {selectedNode.detail?.blocks && selectedNode.detail.blocks.map((blk, idx) => (
-              <div key={idx} className={`p-4 rounded-xl border space-y-1.5 ${
-                isDark ? 'bg-[#131620] border-gray-800 text-gray-300' : 'bg-white border-slate-200 shadow-sm text-slate-800'
-              }`}>
-                {blk.title && (
-                  <h5 className={`text-[11px] font-black uppercase tracking-wider ${isDark ? 'text-gray-300' : 'text-[#002060]'}`}>
-                    {blk.title}
-                  </h5>
-                )}
-                <div 
-                  className="text-xs leading-relaxed"
-                  dangerouslySetInnerHTML={{ __html: sanitizeInteractiveHtml(blk.html) }}
-                />
-              </div>
-            ))}
           </div>
         </aside>
       )}
@@ -1979,6 +2051,7 @@ function QuestoesTab({
   const [showQuestionHistory, setShowQuestionHistory] = useState(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const questionsStripRef = useRef<HTMLDivElement | null>(null);
+  const viewQuestionsRef = useRef<HTMLDivElement | null>(null);
 
   const scrollQuestionsStrip = useCallback((direction: 'left' | 'right') => {
     const strip = questionsStripRef.current;
@@ -2055,6 +2128,13 @@ function QuestoesTab({
     const targetLeft = activeBtn.offsetLeft - strip.clientWidth / 2 + activeBtn.clientWidth / 2;
     strip.scrollTo({ left: Math.max(0, targetLeft), behavior: 'smooth' });
   }, [currentIndex, filteredQuestoes.length]);
+
+  // Ao trocar de questão, bateria ou filtro, retorna suavemente ao topo da área #view-questions
+  useEffect(() => {
+    if (viewQuestionsRef.current) {
+      viewQuestionsRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [currentIndex, selectedBateria, studyFilter]);
 
   // 1. Estatísticas Gerais e da Bateria para as barras de progresso e desempenho
   const stats = useMemo(() => {
@@ -2225,13 +2305,32 @@ function QuestoesTab({
 
   const isCorrect = currentAns.revealed && currentAns.selected === currentQ?.gabarito;
   const questionNumberFormatted = currentQ ? String(currentQ.numero || currentIndex + 1).padStart(2, '0') : '00';
-  const bancaFormatted = currentQ?.banca ? currentQ.banca.toUpperCase() : 'GERAL';
-  const artigoVinculado = currentQ ? ((currentQ as any).artigo || (currentQ as any).artigos || (currentQ as any).lei) : null;
+  const bancaStr = String(currentQ?.banca_nome || currentQ?.banca || 'BANCA').trim();
+  const orgaoStr = currentQ?.orgao ? String(currentQ.orgao).trim() : '';
+  const cargoStr = currentQ?.cargo ? String(currentQ.cargo).trim() : '';
+  const anoStr = currentQ?.ano !== undefined && currentQ?.ano !== null ? String(currentQ.ano).trim() : '';
+  const showOrgaoChip = Boolean(orgaoStr && !bancaStr.toLowerCase().includes(orgaoStr.toLowerCase()));
+  const showCargoChip = Boolean(cargoStr && !bancaStr.toLowerCase().includes(cargoStr.toLowerCase()));
+  const showAnoChip = Boolean(anoStr && !bancaStr.includes(anoStr));
+  const artigosList: string[] = Array.isArray(currentQ?.artigos)
+    ? currentQ.artigos.map(a => String(a).trim()).filter(Boolean)
+    : typeof currentQ?.artigos === 'string' && currentQ.artigos.trim()
+      ? [currentQ.artigos.trim()]
+      : currentQ?.artigo && String(currentQ.artigo).trim()
+        ? [String(currentQ.artigo).trim()]
+        : currentQ?.lei && String(currentQ.lei).trim()
+          ? [String(currentQ.lei).trim()]
+          : [];
 
   return (
-    <div className={`p-3 sm:p-4 md:p-6 w-full h-auto flex flex-col space-y-4 max-w-7xl mx-auto overflow-visible ${
-      isDark ? 'text-gray-100' : 'text-slate-800'
-    }`}>
+    <div
+      id="view-questions"
+      ref={viewQuestionsRef}
+      className={`questions-view-container w-full flex-1 min-h-0 h-full overflow-y-auto ${
+        isDark ? 'text-gray-100' : 'text-slate-800'
+      }`}
+    >
+      <div className="p-3 sm:p-4 md:p-6 pb-10 w-full h-auto flex flex-col space-y-4 max-w-7xl mx-auto overflow-visible">
       {/* 1. BARRAS DE PROGRESSO GERAL E DESEMPENHO DA BATERIA */}
       <div className={`p-3.5 md:p-4 rounded-2xl border flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 shrink-0 transition-colors ${
         isDark ? 'bg-[#0f121a] border-gray-800' : 'bg-white border-slate-200 shadow-sm'
@@ -2595,9 +2694,9 @@ function QuestoesTab({
         </div>
       ) : (
         /* LAYOUT EM 2 COLUNAS (Mobile: empilhado flex-col | Desktop: lado a lado md:flex-row com altura natural sem barra interna) */
-        <div className={`flex flex-col ${showSidePanel ? 'md:flex-row md:items-start' : 'flex-col'} gap-5 flex-1 h-auto overflow-visible`}>
+        <div className={`flex flex-col ${showSidePanel ? 'md:flex-row md:items-start' : 'flex-col'} gap-5 w-full h-auto overflow-visible`}>
           {/* COLUNA ESQUERDA (Questão) */}
-          <div className={`${showSidePanel ? 'w-full md:flex-1 min-w-0' : 'w-full'} flex flex-col h-auto overflow-visible`}>
+          <div className={`q-left-col ${showSidePanel ? 'w-full md:flex-1 min-w-0' : 'w-full'} flex flex-col h-auto overflow-visible`}>
             <div className={`flex flex-col h-auto max-h-none rounded-2xl border p-4 sm:p-5 md:p-6 shadow-sm overflow-visible ${
               isDark 
                 ? 'bg-[#0f121a] border-gray-800 text-gray-100 shadow-xl' 
@@ -2607,24 +2706,39 @@ function QuestoesTab({
               <div className={`flex flex-wrap items-center justify-between gap-2 pb-3 mb-4 border-b shrink-0 ${
                 isDark ? 'border-gray-800' : 'border-slate-100'
               }`}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`text-xs font-black uppercase tracking-wider px-2.5 py-1 rounded-lg ${
-                    isDark ? 'bg-red-600/20 text-red-400 border border-red-500/30' : 'bg-slate-100 text-[#002060] font-bold border border-slate-200'
+                <div id="q-meta-row" className="flex flex-wrap items-center gap-2">
+                  <span className={`q-badge-main text-xs font-black uppercase tracking-wider px-2.5 py-1 rounded-lg ${
+                    isDark ? 'bg-red-600/20 text-red-400 border border-red-500/30' : 'bg-[#002060] text-white font-extrabold border border-[#002060]'
                   }`}>
-                    QUESTÃO {questionNumberFormatted} • {bancaFormatted}
+                    QUESTÃO {questionNumberFormatted} • {bancaStr.toUpperCase()}
                   </span>
-                  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${
-                    isDark ? 'text-gray-400 bg-gray-800 border-gray-700' : 'text-slate-600 bg-slate-50 border-slate-200'
-                  }`}>
-                    Bateria {currentQ.bateria_id}
-                  </span>
-                  {artigoVinculado && (
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
-                      isDark ? 'text-amber-400 bg-amber-950/40 border-amber-800/60' : 'text-amber-700 bg-amber-50 border-amber-200'
-                    }`}>
-                      {artigoVinculado}
+                  {showOrgaoChip && (
+                    <span className="q-badge-chip">
+                      ÓRGÃO: {orgaoStr}
                     </span>
                   )}
+                  {showCargoChip && (
+                    <span className="q-badge-chip">
+                      CARGO: {cargoStr}
+                    </span>
+                  )}
+                  {showAnoChip && (
+                    <span className="q-badge-chip">
+                      ANO: {anoStr}
+                    </span>
+                  )}
+                  {currentQ.bateria_id !== undefined && currentQ.bateria_id !== null && String(currentQ.bateria_id) !== '' && (
+                    <span className={`text-[11px] font-bold uppercase px-2.5 py-1 rounded-[7px] border ${
+                      isDark ? 'text-gray-300 bg-gray-800 border-gray-700' : 'text-slate-600 bg-slate-100 border-slate-200'
+                    }`}>
+                      Bateria {currentQ.bateria_id}
+                    </span>
+                  )}
+                  {artigosList.map((art, aIdx) => (
+                    <span key={aIdx} className="q-badge-art">
+                      {art}
+                    </span>
+                  ))}
                 </div>
 
                 {/* Botão Refazer na Coluna Esquerda quando o painel lateral estiver oculto */}
@@ -2643,16 +2757,16 @@ function QuestoesTab({
               </div>
 
               {/* Corpo da Questão: Enunciado e Alternativas com fluxo natural sem scroll interno */}
-              <div className="h-auto max-h-none overflow-visible space-y-5">
+              <div className="h-auto max-h-none overflow-visible">
                 {/* Enunciado */}
-                <p className={`text-sm md:text-base font-medium leading-relaxed whitespace-pre-line ${
+                <div className={`q-enunciation question-statement enunciado-box text-sm md:text-base font-medium leading-relaxed whitespace-pre-line ${
                   isDark ? 'text-gray-100' : 'text-slate-800'
                 }`}>
                   {enunciado}
-                </p>
+                </div>
 
                 {/* Alternativas A-E (sem max-height e sem barra de rolagem interna) */}
-                <div className="alternatives-container max-h-none h-auto overflow-y-visible overflow-x-hidden flex flex-col gap-2.5 pt-2">
+                <div className="q-options question-options-container alternativas-box alternatives-container">
                   {Object.entries(alternativas || {}).map(([letter, text]) => {
                     const isSelected = currentAns.selected === letter;
                     const isEliminated = eliminatedList.includes(letter);
@@ -2820,7 +2934,7 @@ function QuestoesTab({
 
           {/* COLUNA DIREITA (Gabarito & Comentário) */}
           {showSidePanel && (
-            <div className="w-full md:w-[380px] lg:w-[440px] shrink-0 flex flex-col h-auto overflow-visible">
+            <div className="q-right-col w-full md:w-[380px] lg:w-[440px] shrink-0 self-start flex flex-col h-auto overflow-visible">
               <div className={`flex flex-col h-auto max-h-none rounded-2xl border p-4 sm:p-5 shadow-sm overflow-visible ${
                 isDark 
                   ? 'bg-[#0f121a] border-gray-800 text-gray-100 shadow-xl' 
@@ -2952,6 +3066,7 @@ function QuestoesTab({
           )}
         </div>
       )}
+      </div>
 
       {/* 3. MODAL: MEU HISTÓRICO DE DESEMPENHO */}
       {showHistoryModal && (

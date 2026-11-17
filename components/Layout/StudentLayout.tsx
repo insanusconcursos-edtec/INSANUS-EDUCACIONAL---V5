@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import StudentHeader from './Student/StudentHeader';
 import StudentNavbar from './Student/StudentNavbar';
 import PlanUpdateManager from '../student/PlanUpdateManager';
@@ -9,13 +9,22 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useStudyContext } from '../../contexts/StudyContext';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../services/firebase';
+import { Plan } from '../../types/plan';
+import {
+  isCurrentPlanLocationAllowed,
+  getDefaultPlanLandingPath
+} from '../../utils/planNavigation';
 
 const StudentLayout: React.FC = () => {
   const { userData } = useAuth();
   const { currentProduct, setCurrentProduct } = useStudyContext();
   const [themeColor, setThemeColor] = useState('#EF4444');
   const [planTitle, setPlanTitle] = useState('Meu Plano de Estudos');
+  const [activePlanData, setActivePlanData] = useState<Plan | null>(null);
+  const [loadedPlanId, setLoadedPlanId] = useState<string | null>(null);
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const activeTabParam = searchParams.get('tab');
 
   const isCourseArea = location.pathname.includes('/app/courses') || location.pathname.includes('/app/presential') || location.pathname.includes('/app/eventos-ao-vivo');
 
@@ -23,14 +32,23 @@ const StudentLayout: React.FC = () => {
 
   useEffect(() => {
     const planId = userData?.activePlanId || userData?.currentPlanId;
-    if (!planId) return;
+    if (!planId) {
+      setActivePlanData(null);
+      setLoadedPlanId(null);
+      return;
+    }
 
     const unsub = onSnapshot(doc(db, 'plans', planId), (docSnap) => {
       if (docSnap.exists()) {
-        const data = docSnap.data();
+        const data = docSnap.data() as Plan;
         const title = data.title || 'Meu Plano de Estudos';
         setThemeColor(data.themeColor || '#EF4444');
         setPlanTitle(title);
+        setActivePlanData({ id: docSnap.id, ...data });
+        setLoadedPlanId(planId);
+      } else {
+        setActivePlanData(null);
+        setLoadedPlanId(planId);
       }
     });
 
@@ -67,6 +85,12 @@ const StudentLayout: React.FC = () => {
   };
 
   const currentPlanId = userData?.activePlanId || userData?.currentPlanId;
+  const shouldRedirectRestrictedRoute = Boolean(
+    currentPlanId &&
+      loadedPlanId === currentPlanId &&
+      activePlanData &&
+      !isCurrentPlanLocationAllowed(activePlanData, location.pathname, activeTabParam)
+  );
 
   return (
     <div 
@@ -99,7 +123,11 @@ const StudentLayout: React.FC = () => {
             ? "w-full p-0 relative z-10"
             : "max-w-[1600px] mx-auto p-6 md:p-8 relative z-10"
         }>
-          <Outlet />
+          {shouldRedirectRestrictedRoute ? (
+            <Navigate to={getDefaultPlanLandingPath(activePlanData)} replace />
+          ) : (
+            <Outlet />
+          )}
         </div>
       </main>
 

@@ -18,6 +18,32 @@ export const CONTEST_STATUS_LABELS: Record<ContestStatus, string> = {
   'EDITAL_PUBLICADO': 'Edital Publicado'
 };
 
+// Abas nativas que podem ser ocultadas no Curso Online
+export type NativeCourseTabId = 'MODULES' | 'EDITAL' | 'LIVE' | 'ANNOUNCEMENTS';
+
+// Abas da Turma Presencial que podem ser puxadas/compartilhadas no Curso Online
+export type CoursePresentialSharedTabKey =
+  | 'dailyGoals'
+  | 'schedule'
+  | 'planning'
+  | 'teaching'
+  | 'live'
+  | 'simulados';
+
+export interface CoursePresentialSharedTabConfig {
+  enabled?: boolean;
+  label?: string;
+}
+
+export interface CoursePresentialSharedTabsMap {
+  dailyGoals?: CoursePresentialSharedTabConfig;
+  schedule?: CoursePresentialSharedTabConfig;
+  planning?: CoursePresentialSharedTabConfig;
+  teaching?: CoursePresentialSharedTabConfig;
+  live?: CoursePresentialSharedTabConfig;
+  simulados?: CoursePresentialSharedTabConfig;
+}
+
 export interface OnlineCourse {
   id: string;
   title: string;
@@ -55,10 +81,14 @@ export interface OnlineCourse {
     whitelistedUsers?: string[];
   };
 
+  // --- VISIBILIDADE DE ABAS NATIVAS ---
+  hiddenTabs?: NativeCourseTabId[];
+
   // --- VINCULAÇÃO TURMA PRESENCIAL ---
   linkedPresentialId?: string;
   linkedPresentialTabName?: string;
   linkedPresentialModules?: string[] | 'all';
+  linkedPresentialSharedTabs?: CoursePresentialSharedTabsMap;
 
   // --- SEGURANÇA E FREE PASS ---
   published?: boolean;
@@ -190,10 +220,14 @@ export interface CourseFormData {
   type?: 'REGULAR' | 'ISOLADO';
   teacherIds?: string[];
 
+  // Visibilidade de Abas Nativas
+  hiddenTabs?: NativeCourseTabId[];
+
   // Vincular Turma Presencial
   linkedPresentialId?: string;
   linkedPresentialTabName?: string;
   linkedPresentialModules?: string[] | 'all';
+  linkedPresentialSharedTabs?: CoursePresentialSharedTabsMap;
 
   // Segurança e Free Pass
   published?: boolean;

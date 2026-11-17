@@ -29,6 +29,35 @@ export interface LinkedCourse {
   visibleTabs: string[];
 }
 
+export type NativePlanTabId =
+  | 'TODAY'
+  | 'CALENDAR'
+  | 'EDICT'
+  | 'MENTORSHIP'
+  | 'CALL'
+  | 'SIMULADOS'
+  | 'LIVE'
+  | 'CONFIG';
+
+export type PlanPresentialSharedTabKey =
+  | 'dailyGoals'
+  | 'schedule'
+  | 'planning'
+  | 'teaching'
+  | 'live'
+  | 'simulados';
+
+export interface PlanPresentialSharedTabConfig {
+  enabled?: boolean;
+  label?: string;
+}
+
+export interface PlanLinkedPresentialConfig {
+  enabled?: boolean;
+  classId?: string | null;
+  sharedTabs?: Partial<Record<PlanPresentialSharedTabKey, PlanPresentialSharedTabConfig>>;
+}
+
 export interface Plan {
   id?: string;
   title: string;
@@ -52,6 +81,8 @@ export interface Plan {
   simuladosVinculados?: string[];
   linkedMentors?: string[]; // IDs dos mentores vinculados
   linkedCourses?: LinkedCourse[]; // Cursos online vinculados com abas customizadas
+  hiddenTabs?: NativePlanTabId[]; // Abas nativas ocultadas pelo administrador
+  linkedPresentialConfig?: PlanLinkedPresentialConfig; // Vinculação de abas e recursos de Turma Presencial
   isGenerationBlocked?: boolean;
   isChatDisabled?: boolean;
   createdAt?: any;
@@ -64,3 +95,4 @@ export interface Plan {
   isBlocked?: boolean;
   unlockDate?: string | null;
 }
+

@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, Layout, Layers, RefreshCw, FileText, GraduationCap, MessageSquare } from 'lucide-react';
 import { getPlanById, Plan, updatePlan } from '../../services/planService';
 import { PlanVisualEditor } from '../../components/admin/plan/visual/PlanVisualEditor';
@@ -34,14 +34,17 @@ import ConfirmationModal from '../../components/ui/ConfirmationModal';
 import Loading from '../../components/ui/Loading';
 import SyncControlPanel from '../../components/admin/sync/SyncControlPanel';
 import { usePlanSync } from '../../hooks/usePlanSync';
-import { Video, BarChart3, Megaphone } from 'lucide-react';
+import { Video, BarChart3, Megaphone, SlidersHorizontal } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { PlanAnalyticsTab } from '../../components/admin/plan/analytics/PlanAnalyticsTab';
+import { PlanNavigationTab } from '../../components/admin/plan/navigation/PlanNavigationTab';
 
-type TabView = 'STRUCTURE' | 'CYCLES' | 'EDICT' | 'MENTORSHIP' | 'VISUAL' | 'CHAT' | 'CALL' | 'ANALYTICS' | 'ANNOUNCEMENTS';
+type TabView = 'STRUCTURE' | 'CYCLES' | 'EDICT' | 'MENTORSHIP' | 'VISUAL' | 'NAVIGATION' | 'CHAT' | 'CALL' | 'ANALYTICS' | 'ANNOUNCEMENTS';
 
 const PlanEditor: React.FC = () => {
   const { planId } = useParams<{ planId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   // Data State
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -49,7 +52,11 @@ const PlanEditor: React.FC = () => {
   const [topics, setTopics] = useState<Topic[]>([]);
   
   // UI State
-  const [activeTab, setActiveTab] = useState<TabView>('STRUCTURE');
+  const [activeTab, setActiveTab] = useState<TabView>(() => {
+    const tabParam = searchParams.get('tab')?.toUpperCase();
+    if (tabParam === 'NAVIGATION') return 'NAVIGATION';
+    return 'STRUCTURE';
+  });
   const [loading, setLoading] = useState(true);
   const [loadingTopics, setLoadingTopics] = useState(false);
   
@@ -90,7 +97,7 @@ const PlanEditor: React.FC = () => {
             ]);
             
             if (!fetchedPlan) {
-                alert('Plano não encontrado');
+                toast.error('Plano não encontrado');
                 navigate('/admin/planos');
                 return;
             }
@@ -115,7 +122,8 @@ const PlanEditor: React.FC = () => {
       setPlan(prev => prev ? { ...prev, ...updates } : null);
     } catch (e) {
       console.error(e);
-      alert('Erro ao atualizar plano');
+      toast.error('Erro ao atualizar plano');
+      throw e;
     }
   };
 
@@ -359,58 +367,64 @@ const PlanEditor: React.FC = () => {
         </div>
 
         {/* TAB SWITCHER */}
-        <div className="bg-zinc-900 p-1 rounded-xl border border-zinc-800 flex gap-1">
+        <div className="bg-zinc-900 p-1 rounded-xl border border-zinc-800 flex gap-1 overflow-x-auto max-w-full scrollbar-thin">
             <button 
                 onClick={() => setActiveTab('STRUCTURE')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'STRUCTURE' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeTab === 'STRUCTURE' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
                 <Layers size={14} /> Estrutura
             </button>
             <button 
                 onClick={() => setActiveTab('CYCLES')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'CYCLES' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeTab === 'CYCLES' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
                 <RefreshCw size={14} /> Ciclos
             </button>
             <button 
                 onClick={() => setActiveTab('EDICT')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'EDICT' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeTab === 'EDICT' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
                 <FileText size={14} /> Edital
             </button>
             <button 
                 onClick={() => setActiveTab('MENTORSHIP')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'MENTORSHIP' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeTab === 'MENTORSHIP' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
                 <GraduationCap size={14} /> Mentoria
             </button>
             <button 
                 onClick={() => setActiveTab('VISUAL')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'VISUAL' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeTab === 'VISUAL' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
                 <Layout size={14} /> Visual
             </button>
             <button 
+                onClick={() => setActiveTab('NAVIGATION')}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeTab === 'NAVIGATION' ? 'bg-zinc-800 text-white shadow-lg border border-emerald-500/35' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+                <SlidersHorizontal size={14} className={activeTab === 'NAVIGATION' ? 'text-emerald-400' : ''} /> Abas & Presencial
+            </button>
+            <button 
                 onClick={() => setActiveTab('ANALYTICS')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'ANALYTICS' ? 'bg-zinc-800 text-white shadow-lg border border-yellow-400/30' : 'text-zinc-500 hover:text-zinc-300'}`}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeTab === 'ANALYTICS' ? 'bg-zinc-800 text-white shadow-lg border border-yellow-400/30' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
                 <BarChart3 size={14} className={activeTab === 'ANALYTICS' ? 'text-yellow-400' : ''} /> Análise
             </button>
             <button 
                 onClick={() => setActiveTab('CHAT')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'CHAT' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeTab === 'CHAT' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
                 <MessageSquare size={14} /> Chat
             </button>
             <button 
                 onClick={() => setActiveTab('CALL')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'CALL' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeTab === 'CALL' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
                 <Video size={14} /> Call
             </button>
             <button 
                 onClick={() => setActiveTab('ANNOUNCEMENTS')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'ANNOUNCEMENTS' ? 'bg-zinc-800 text-white shadow-lg border border-red-500/30' : 'text-zinc-500 hover:text-zinc-300'}`}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeTab === 'ANNOUNCEMENTS' ? 'bg-zinc-800 text-white shadow-lg border border-red-500/30' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
                 <Megaphone size={14} className={activeTab === 'ANNOUNCEMENTS' ? 'text-red-500' : ''} /> Avisos
             </button>
@@ -519,6 +533,12 @@ const PlanEditor: React.FC = () => {
           </div>
       )}
 
+      {activeTab === 'NAVIGATION' && plan && (
+          <div className="flex-1 overflow-hidden">
+             <PlanNavigationTab plan={plan} onUpdate={handleUpdatePlan} />
+          </div>
+      )}
+
       {activeTab === 'ANALYTICS' && plan && (
           <div className="flex-1 overflow-hidden flex flex-col">
              <PlanAnalyticsTab 
@@ -540,7 +560,16 @@ const PlanEditor: React.FC = () => {
                       </p>
                   </div>
                   <button
-                      onClick={() => handleUpdatePlan({ isChatDisabled: !plan?.isChatDisabled })}
+                      onClick={() => {
+                        const nextDisabled = !plan?.isChatDisabled;
+                        const currentHidden = new Set(plan?.hiddenTabs || []);
+                        if (nextDisabled) currentHidden.add('CALL');
+                        else currentHidden.delete('CALL');
+                        handleUpdatePlan({
+                          isChatDisabled: nextDisabled,
+                          hiddenTabs: Array.from(currentHidden)
+                        });
+                      }}
                       className={`px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all border ${
                           plan?.isChatDisabled 
                           ? 'bg-green-600/10 hover:bg-green-600/20 text-green-500 border-green-500/30' 

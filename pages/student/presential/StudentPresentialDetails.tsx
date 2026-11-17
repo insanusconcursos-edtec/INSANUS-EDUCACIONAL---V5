@@ -1,14 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { classService } from '../../../services/classService';
 import { courseService } from '../../../services/courseService';
 import { classScheduleService } from '../../../services/classScheduleService';
 import { curriculumService } from '../../../services/curriculumService';
+import { guidedStudyService } from '../../../services/guidedStudyService';
 import { Class } from '../../../types/class';
-import { OnlineCourse, CourseModule } from '../../../types/course';
-import { ArrowLeft, Calendar, GraduationCap, BookOpen, ChevronDown, Radio, Video, Clock, Play, FileText, ListTree } from 'lucide-react';
+import { OnlineCourse, CourseModule, CourseModuleGroup, CourseSection } from '../../../types/course';
+import { ClassScheduleEvent } from '../../../types/schedule';
+import { GuidedStudyMeta, GuidedStudyProgress } from '../../../types/guidedStudy';
+import { ArrowLeft, Calendar, GraduationCap, BookOpen, ChevronDown, Radio, Video, Clock, Play, FileText, ListTree, Target } from 'lucide-react';
 import { StudentClassSchedule } from '../../../components/student/presential/StudentClassSchedule';
-import { StudentModuleCard } from '../../../components/student/courses/StudentModuleCard';
+import { StudentPresentialDailyGoals } from '../../../components/student/presential/StudentPresentialDailyGoals';
+import { StudentCourseModulesCatalog } from '../../../components/student/courses/StudentCourseModulesCatalog';
 import { CoursePlayer } from '../../../components/student/courses/player/CoursePlayer';
 import { StudentPedagogicalPlanning } from '../../../components/student/presential/StudentPedagogicalPlanning';
 import { ConcursoStatusBanner } from '../../../components/student/presential/ConcursoStatusBanner';
@@ -19,18 +23,39 @@ import { useStudyContext } from '../../../contexts/StudyContext';
 import { useAuth } from '../../../contexts/AuthContext';
 import { StudentCourseEdital } from '../../../components/student/courses/edital/StudentCourseEdital';
 import { CourseReviewDashboard } from '../../../components/student/courses/reviews/CourseReviewDashboard';
+import { toLocalISODate } from '../../../utils/dateUtils';
+
+const computePendingDailyItemsCount = (
+  events: ClassScheduleEvent[],
+  metas: GuidedStudyMeta[],
+  liveEvents: LiveEvent[],
+  progressMap: Record<string, GuidedStudyProgress>
+): number => {
+  const todayStr = toLocalISODate();
+  const pendingMetas = metas.filter((m) => m.date <= todayStr && !progressMap[m.id || '']?.completed).length;
+  const todaysEvents = events.filter(
+    (ev) => ev.date === todayStr && ev.status !== 'CANCELED' && ev.status !== 'COMPLETED'
+  );
+  const linkedLiveIds = new Set(
+    todaysEvents.map((ev) => ev.liveEventId).filter((id): id is string => Boolean(id))
+  );
+  const standaloneTodaysLives = liveEvents.filter(
+    (le) => le.eventDate === todayStr && le.status !== 'ended' && !linkedLiveIds.has(le.id)
+  );
+  return pendingMetas + todaysEvents.length + standaloneTodaysLives.length;
+};
 
 export const StudentPresentialDetails: React.FC = () => {
   const { classId } = useParams<{ classId: string }>();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { setCurrentProduct } = useStudyContext();
   const moduleIdParam = searchParams.get('module');
   
   const { currentUser } = useAuth();
   const [currentClass, setCurrentClass] = useState<Class | null>(null);
   const [activeTab, setActiveTab] = useState<
-    'TEACHING' | 'SCHEDULE' | 'PLANNING' | 'LIVE' | 'SIMULADOS' | 
+    'TEACHING' | 'DAILY_GOALS' | 'SCHEDULE' | 'PLANNING' | 'LIVE' | 'SIMULADOS' | 
     'LINKED_COURSE' | 'LINKED_COURSE_MODULES' | 'LINKED_COURSE_EDITAL' | 'LINKED_COURSE_LIVE'
   >('TEACHING');
   const [loading, setLoading] = useState(true);
@@ -46,9 +71,12 @@ export const StudentPresentialDetails: React.FC = () => {
   // Linked Course State
   const [linkedCourse, setLinkedCourse] = useState<OnlineCourse | null>(null);
   const [linkedCourseModules, setLinkedCourseModules] = useState<CourseModule[]>([]);
+  const [linkedCourseModuleGroups, setLinkedCourseModuleGroups] = useState<CourseModuleGroup[]>([]);
+  const [linkedCourseSections, setLinkedCourseSections] = useState<CourseSection[]>([]);
   const [linkedCourseLiveEvents, setLinkedCourseLiveEvents] = useState<LiveEvent[]>([]);
   const [loadingLinkedCourse, setLoadingLinkedCourse] = useState(false);
   const [selectedLinkedModule, setSelectedLinkedModule] = useState<CourseModule | null>(null);
+  const [selectedLinkedGroupId, setSelectedLinkedGroupId] = useState<string | null>(null);
 
   // Update current product for support
   useEffect(() => {
@@ -67,18 +95,91 @@ export const StudentPresentialDetails: React.FC = () => {
   // Tab availability flags
   const [hasModules, setHasModules] = useState(false);
   const [hasSchedule, setHasSchedule] = useState(false);
+  const [hasGuidedMetas, setHasGuidedMetas] = useState(false);
   const [hasPlanning, setHasPlanning] = useState(false);
+  const [dailyBadgeCount, setDailyBadgeCount] = useState(0);
   
   // Teaching Tab State
   const [modules, setModules] = useState<CourseModule[]>([]);
+  const [teachingModuleGroups, setTeachingModuleGroups] = useState<CourseModuleGroup[]>([]);
+  const [teachingSections, setTeachingSections] = useState<CourseSection[]>([]);
   const [selectedModule, setSelectedModule] = useState<CourseModule | null>(null);
+  const [selectedTeachingGroupId, setSelectedTeachingGroupId] = useState<string | null>(null);
   const [loadingModules, setLoadingModules] = useState(false);
   const [teachingClassId, setTeachingClassId] = useState<string>(classId || '');
 
+  const handleSwitchTab = useCallback(
+    (tabId: string, queryParams?: Record<string, string>) => {
+      setActiveTab(tabId as any);
+      if (queryParams && Object.keys(queryParams).length > 0) {
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.set('tab', tabId);
+        Object.entries(queryParams).forEach(([k, v]) => {
+          if (v) nextParams.set(k, v);
+          else nextParams.delete(k);
+        });
+        setSearchParams(nextParams, { replace: true });
+      } else if (
+        searchParams.has('tab') ||
+        searchParams.has('subjectId') ||
+        searchParams.has('topicId') ||
+        searchParams.has('moduleId')
+      ) {
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete('tab');
+        nextParams.delete('subjectId');
+        nextParams.delete('topicId');
+        nextParams.delete('moduleId');
+        setSearchParams(nextParams, { replace: true });
+      }
+    },
+    [searchParams, setSearchParams]
+  );
+
+  const refreshDailyBadge = useCallback(async () => {
+    if (!classId) return;
+    try {
+      const [initialEvents, initialMetas, prog] = await Promise.all([
+        classScheduleService.getScheduleEventsByClass(classId),
+        guidedStudyService.getMetasByClass(classId),
+        currentUser?.uid
+          ? guidedStudyService.getStudentProgress(currentUser.uid, classId)
+          : Promise.resolve({} as Record<string, GuidedStudyProgress>)
+      ]);
+
+      let eventsData = initialEvents;
+      let metasData = initialMetas;
+      const masterId = currentClass?.masterClassId;
+
+      if (masterId && (eventsData.length === 0 || metasData.length === 0)) {
+        const [mEvents, mMetas] = await Promise.all([
+          eventsData.length === 0 ? classScheduleService.getScheduleEventsByClass(masterId) : Promise.resolve([]),
+          metasData.length === 0 ? guidedStudyService.getMetasByClass(masterId) : Promise.resolve([])
+        ]);
+        if (eventsData.length === 0 && mEvents.length > 0) eventsData = mEvents;
+        if (metasData.length === 0 && mMetas.length > 0) metasData = mMetas;
+      }
+
+      setDailyBadgeCount(computePendingDailyItemsCount(eventsData, metasData, classLiveEvents, prog));
+    } catch (err) {
+      console.error('Error refreshing daily goals badge:', err);
+    }
+  }, [classId, currentClass?.masterClassId, currentUser?.uid, classLiveEvents]);
+
   const tabs = React.useMemo(() => {
-    const list = [
+    const showDailyAndSchedule =
+      hasSchedule || hasGuidedMetas || Boolean(currentClass?.isGuidedStudyEnabled);
+
+    const list: Array<{
+      id: string;
+      label: string;
+      icon: React.ComponentType<{ size?: number; className?: string }>;
+      show: boolean;
+      badge?: number;
+    }> = [
       { id: 'TEACHING', label: 'ÁREA DE ENSINO', icon: GraduationCap, show: hasModules },
-      { id: 'SCHEDULE', label: 'CRONOGRAMA', icon: Calendar, show: hasSchedule },
+      { id: 'DAILY_GOALS', label: 'METAS DE HOJE', icon: Target, show: showDailyAndSchedule, badge: dailyBadgeCount },
+      { id: 'SCHEDULE', label: 'CRONOGRAMA', icon: Calendar, show: showDailyAndSchedule },
       { id: 'PLANNING', label: 'PLANEJAMENTO PEDAGÓGICO', icon: BookOpen, show: hasPlanning },
       { id: 'LIVE', label: '🔴 EVENTOS AO VIVO', icon: Radio, show: classLiveEvents.length > 0 },
       { id: 'SIMULADOS', label: 'SIMULADOS', icon: FileText, show: !!currentClass?.linkedSimulatedId },
@@ -123,7 +224,7 @@ export const StudentPresentialDetails: React.FC = () => {
     }
 
     return list.filter(tab => tab.show);
-  }, [hasModules, hasSchedule, hasPlanning, classLiveEvents, currentClass]);
+  }, [hasModules, hasSchedule, hasGuidedMetas, dailyBadgeCount, hasPlanning, classLiveEvents, currentClass]);
 
   useEffect(() => {
     const fetchClass = async () => {
@@ -132,47 +233,90 @@ export const StudentPresentialDetails: React.FC = () => {
           const data = await classService.getClassById(classId);
           if (data) {
             // Check content availability for current class
-            const [initialModulesData, eventsData, subjectsData, initialLiveEventsData] = await Promise.all([
+            const [
+              initialModulesData,
+              initialEventsData,
+              initialSubjectsData,
+              initialLiveEventsData,
+              initialGuidedMetasData,
+              studentProgressData
+            ] = await Promise.all([
               courseService.getModules(classId),
               classScheduleService.getScheduleEventsByClass(classId),
               curriculumService.getSubjectsByClass(classId),
-              liveEventService.getLiveEventsByPresentialClass(classId)
+              liveEventService.getLiveEventsByPresentialClass(classId),
+              guidedStudyService.getMetasByClass(classId),
+              currentUser?.uid
+                ? guidedStudyService.getStudentProgress(currentUser.uid, classId)
+                : Promise.resolve({} as Record<string, GuidedStudyProgress>)
             ]);
 
             let modulesData = initialModulesData;
+            let eventsData = initialEventsData;
+            let subjectsData = initialSubjectsData;
             let liveEventsData = initialLiveEventsData;
+            let guidedMetasData = initialGuidedMetasData;
 
             let tId = classId;
             let currentLinkedSimulatedId = data.linkedSimulatedId;
             let currentLinkedCourseId = data.linkedCourseId;
             let currentLinkedCourseTabLabel = data.linkedCourseTabLabel;
             let currentLinkedCourseSharedTabs = data.linkedCourseSharedTabs;
+            let currentIsGuidedStudyEnabled = data.isGuidedStudyEnabled;
 
-            // Inheritance Logic: Fallback to master class for teaching environment if child is empty
+            // Inheritance Logic: Fallback to master class if child is empty
             if (data.masterClassId) {
               const needsModules = modulesData.length === 0;
+              const needsEvents = eventsData.length === 0;
+              const needsSubjects = subjectsData.length === 0;
               const needsLiveEvents = liveEventsData.length === 0;
+              const needsGuidedMetas = guidedMetasData.length === 0;
               const needsSimulated = !currentLinkedSimulatedId;
               const needsLinkedCourse = !currentLinkedCourseId;
 
-              if (needsModules || needsLiveEvents || needsSimulated || needsLinkedCourse) {
+              if (
+                needsModules ||
+                needsEvents ||
+                needsSubjects ||
+                needsLiveEvents ||
+                needsGuidedMetas ||
+                needsSimulated ||
+                needsLinkedCourse
+              ) {
                 const masterData = await classService.getClassById(data.masterClassId);
                 if (masterData) {
-                  // Modules inheritance
-                  if (needsModules) {
-                    const masterModules = await courseService.getModules(data.masterClassId);
-                    if (masterModules.length > 0) {
-                      modulesData = masterModules;
-                      tId = data.masterClassId;
-                    }
+                  const [
+                    masterModules,
+                    masterEvents,
+                    masterSubjects,
+                    masterLiveEvents,
+                    masterGuidedMetas
+                  ] = await Promise.all([
+                    needsModules ? courseService.getModules(data.masterClassId) : Promise.resolve([]),
+                    needsEvents ? classScheduleService.getScheduleEventsByClass(data.masterClassId) : Promise.resolve([]),
+                    needsSubjects ? curriculumService.getSubjectsByClass(data.masterClassId) : Promise.resolve([]),
+                    needsLiveEvents ? liveEventService.getLiveEventsByPresentialClass(data.masterClassId) : Promise.resolve([]),
+                    needsGuidedMetas ? guidedStudyService.getMetasByClass(data.masterClassId) : Promise.resolve([])
+                  ]);
+
+                  if (needsModules && masterModules.length > 0) {
+                    modulesData = masterModules;
+                    tId = data.masterClassId;
                   }
-                  
-                  // Live Events inheritance
-                  if (needsLiveEvents) {
-                    const masterLiveEvents = await liveEventService.getLiveEventsByPresentialClass(data.masterClassId);
-                    if (masterLiveEvents.length > 0) {
-                      liveEventsData = masterLiveEvents;
-                    }
+                  if (needsEvents && masterEvents.length > 0) {
+                    eventsData = masterEvents;
+                  }
+                  if (needsSubjects && masterSubjects.length > 0) {
+                    subjectsData = masterSubjects;
+                  }
+                  if (needsLiveEvents && masterLiveEvents.length > 0) {
+                    liveEventsData = masterLiveEvents;
+                  }
+                  if (needsGuidedMetas && masterGuidedMetas.length > 0) {
+                    guidedMetasData = masterGuidedMetas;
+                  }
+                  if (masterData.isGuidedStudyEnabled && !currentIsGuidedStudyEnabled) {
+                    currentIsGuidedStudyEnabled = true;
                   }
 
                   // Simulateds inheritance
@@ -193,6 +337,7 @@ export const StudentPresentialDetails: React.FC = () => {
             // Update state with (potentially inherited) values
             const updatedClass = {
               ...data,
+              isGuidedStudyEnabled: currentIsGuidedStudyEnabled,
               linkedSimulatedId: currentLinkedSimulatedId,
               linkedCourseId: currentLinkedCourseId,
               linkedCourseTabLabel: currentLinkedCourseTabLabel,
@@ -206,19 +351,28 @@ export const StudentPresentialDetails: React.FC = () => {
             
             setHasModules(modulesData.length > 0);
             setHasSchedule(eventsData.length > 0);
+            setHasGuidedMetas(guidedMetasData.length > 0);
             setHasPlanning(subjectsData.length > 0);
+            setDailyBadgeCount(
+              computePendingDailyItemsCount(eventsData, guidedMetasData, liveEventsData, studentProgressData)
+            );
 
-            // Fetch Linked Course if exists
+            // Fetch Linked Course if exists (including Blocks / ModuleGroups and Thematic Sections)
             if (currentLinkedCourseId) {
               setLoadingLinkedCourse(true);
+              setSelectedLinkedGroupId(null);
               try {
-                const [lCourse, lModules, lLiveEvents] = await Promise.all([
+                const [lCourse, lModules, lGroups, lSections, lLiveEvents] = await Promise.all([
                   courseService.getCourse(currentLinkedCourseId),
                   courseService.getModules(currentLinkedCourseId),
+                  courseService.getModuleGroups(currentLinkedCourseId),
+                  courseService.getCourseSections(currentLinkedCourseId),
                   liveEventService.getLiveEventsByOnlineCourse(currentLinkedCourseId)
                 ]);
                 setLinkedCourse(lCourse);
                 setLinkedCourseModules(lModules);
+                setLinkedCourseModuleGroups(lGroups || []);
+                setLinkedCourseSections(lSections || []);
                 setLinkedCourseLiveEvents(lLiveEvents || []);
               } catch (err) {
                 console.error("Error fetching linked course:", err);
@@ -229,14 +383,15 @@ export const StudentPresentialDetails: React.FC = () => {
 
             // Adjust active tab if current one is hidden
             const hModules = modulesData.length > 0;
-            const hSchedule = eventsData.length > 0;
+            const hDailyAndSchedule =
+              eventsData.length > 0 || guidedMetasData.length > 0 || Boolean(currentIsGuidedStudyEnabled);
             const hPlanning = subjectsData.length > 0;
             const hLive = liveEventsData.length > 0;
             const hSimulated = !!currentLinkedSimulatedId;
 
             const availableIds = [
               ...(hModules ? ['TEACHING'] : []),
-              ...(hSchedule ? ['SCHEDULE'] : []),
+              ...(hDailyAndSchedule ? ['DAILY_GOALS', 'SCHEDULE'] : []),
               ...(hPlanning ? ['PLANNING'] : []),
               ...(hLive ? ['LIVE'] : []),
               ...(hSimulated ? ['SIMULADOS'] : []),
@@ -272,15 +427,21 @@ export const StudentPresentialDetails: React.FC = () => {
     };
 
     fetchClass();
-  }, [classId]);
+  }, [classId, currentUser?.uid]);
 
   useEffect(() => {
     const fetchModules = async () => {
       if (activeTab === 'TEACHING' && teachingClassId) {
         setLoadingModules(true);
         try {
-          const data = await courseService.getModules(teachingClassId);
-          setModules(data);
+          const [modsData, groupsData, sectionsData] = await Promise.all([
+            courseService.getModules(teachingClassId),
+            courseService.getModuleGroups(teachingClassId),
+            courseService.getCourseSections(teachingClassId)
+          ]);
+          setModules(modsData);
+          setTeachingModuleGroups(groupsData || []);
+          setTeachingSections(sectionsData || []);
         } catch (error) {
           console.error("Error fetching modules:", error);
         } finally {
@@ -292,28 +453,47 @@ export const StudentPresentialDetails: React.FC = () => {
     fetchModules();
   }, [activeTab, teachingClassId]);
 
-  // Deep Linking: Switch to Teaching tab if module param is present, or Planning/Simulados if tab param is present
+  // Deep Linking: Switch to requested tab if tab param is present
   useEffect(() => {
-    if (moduleIdParam) {
-      setActiveTab('TEACHING');
-    }
-    const tabParam = searchParams.get('tab');
-    if (tabParam?.toUpperCase() === 'PLANNING') {
+    const tabParam = searchParams.get('tab')?.toUpperCase();
+    if (tabParam === 'DAILY_GOALS') {
+      setActiveTab('DAILY_GOALS');
+    } else if (tabParam === 'SCHEDULE') {
+      setActiveTab('SCHEDULE');
+    } else if (tabParam === 'PLANNING') {
       setActiveTab('PLANNING');
-    } else if (tabParam?.toUpperCase() === 'SIMULADOS') {
+    } else if (tabParam === 'SIMULADOS') {
       setActiveTab('SIMULADOS');
+    } else if (tabParam === 'LIVE') {
+      setActiveTab('LIVE');
     }
-  }, [moduleIdParam, searchParams]);
+  }, [searchParams]);
 
-  // Deep Linking: Auto-select module when modules are loaded
+  // Deep Linking: Auto-select module (either in Teaching or in Linked Course, including its Block) when loaded
   useEffect(() => {
-    if (moduleIdParam && modules.length > 0 && activeTab === 'TEACHING' && !selectedModule) {
-      const module = modules.find(m => m.id === moduleIdParam);
-      if (module) {
-        setSelectedModule(module);
+    if (!moduleIdParam) return;
+
+    const teachingMod = modules.find((m) => m.id === moduleIdParam);
+    if (teachingMod) {
+      if (activeTab !== 'TEACHING') setActiveTab('TEACHING');
+      if (teachingMod.groupId) setSelectedTeachingGroupId(teachingMod.groupId);
+      if (!selectedModule || selectedModule.id !== teachingMod.id) {
+        setSelectedModule(teachingMod);
+      }
+      return;
+    }
+
+    const linkedMod = linkedCourseModules.find((m) => m.id === moduleIdParam);
+    if (linkedMod) {
+      if (activeTab !== 'LINKED_COURSE_MODULES' && activeTab !== 'LINKED_COURSE') {
+        setActiveTab('LINKED_COURSE_MODULES');
+      }
+      if (linkedMod.groupId) setSelectedLinkedGroupId(linkedMod.groupId);
+      if (!selectedLinkedModule || selectedLinkedModule.id !== linkedMod.id) {
+        setSelectedLinkedModule(linkedMod);
       }
     }
-  }, [moduleIdParam, modules, activeTab, selectedModule]);
+  }, [moduleIdParam, modules, linkedCourseModules, activeTab, selectedModule, selectedLinkedModule]);
 
   if (loading) {
     return (
@@ -353,9 +533,19 @@ export const StudentPresentialDetails: React.FC = () => {
     active: true
   };
 
-  // Netflix-style horizontal scroll container classes
-  const netflixContainerClasses = "flex overflow-x-auto pb-6 gap-6 snap-x snap-mandatory scroll-smooth";
-  const netflixItemClasses = "flex-none w-[200px] sm:w-[240px] md:w-[280px] snap-start";
+  const isLinkedCourseMaintenance = Boolean(
+    linkedCourse?.maintenanceMode?.enabled &&
+      !linkedCourse?.maintenanceMode?.whitelistedUsers?.includes(currentUser?.email || '')
+  );
+
+  const clearModuleSearchParams = () => {
+    if (searchParams.has('module') || searchParams.has('lesson')) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('module');
+      next.delete('lesson');
+      setSearchParams(next, { replace: true });
+    }
+  };
 
   return (
     <div className="min-h-screen bg-black text-gray-100 pb-20">
@@ -396,11 +586,11 @@ export const StudentPresentialDetails: React.FC = () => {
       <div className="sticky top-0 z-20 bg-black/95 backdrop-blur-md border-b border-zinc-800 shadow-md">
         <div className="max-w-7xl mx-auto px-4">
           {/* Desktop Tabs Navigation */}
-          <div className="hidden md:flex items-center space-x-8 overflow-x-auto no-scrollbar py-2">
+          <div className="hidden md:flex items-center space-x-6 overflow-x-auto no-scrollbar py-2">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
+                onClick={() => handleSwitchTab(tab.id)}
                 className={`flex items-center space-x-2 px-4 py-3 text-base font-medium transition-colors whitespace-nowrap border-b-2 ${
                   activeTab === tab.id 
                     ? 'border-red-600 text-red-600' 
@@ -409,6 +599,17 @@ export const StudentPresentialDetails: React.FC = () => {
               >
                 <tab.icon size={18} />
                 <span>{tab.label}</span>
+                {typeof tab.badge === 'number' && tab.badge > 0 && (
+                  <span
+                    className={`ml-1 px-1.5 py-0.5 rounded-md text-[10px] font-black tabular-nums leading-none border ${
+                      activeTab === tab.id
+                        ? 'bg-red-600 text-white border-red-500'
+                        : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                    }`}
+                  >
+                    {tab.badge}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -416,18 +617,18 @@ export const StudentPresentialDetails: React.FC = () => {
           {/* Mobile Select Navigation */}
           <div className="md:hidden flex justify-center py-3">
             {tabs.length > 0 && (
-              <div className="relative w-full max-w-[280px]">
+              <div className="relative w-full max-w-[300px]">
                 <div className="absolute left-3 top-1/2 -translate-y-1/2 text-red-600 pointer-events-none">
                   {React.createElement(tabs.find(t => t.id === activeTab)?.icon || GraduationCap, { size: 18 })}
                 </div>
                 <select
                   value={activeTab}
-                  onChange={(e) => setActiveTab(e.target.value as any)}
+                  onChange={(e) => handleSwitchTab(e.target.value)}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-lg pl-10 pr-10 py-2.5 text-sm font-bold appearance-none focus:outline-none focus:ring-1 focus:ring-red-600/50"
                 >
                   {tabs.map((tab) => (
                     <option key={tab.id} value={tab.id}>
-                      {tab.label}
+                      {tab.label}{typeof tab.badge === 'number' && tab.badge > 0 ? ` (${tab.badge})` : ''}
                     </option>
                   ))}
                 </select>
@@ -457,7 +658,10 @@ export const StudentPresentialDetails: React.FC = () => {
             <CoursePlayer 
               course={fakeCourse} 
               module={selectedModule} 
-              onBack={() => setSelectedModule(null)} 
+              onBack={() => {
+                setSelectedModule(null);
+                clearModuleSearchParams();
+              }} 
             />
           ) : (
             loadingModules ? (
@@ -466,27 +670,20 @@ export const StudentPresentialDetails: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-6">
-                <h3 className="text-xl font-semibold text-gray-200 flex items-center">
+                <h3 className="text-xl font-semibold text-gray-200 flex items-center uppercase">
                   <GraduationCap className="mr-2 text-red-500" />
                   Módulos de Ensino
                 </h3>
-                
-                {modules.length === 0 ? (
-                  <div className="p-8 text-center bg-gray-900/50 rounded-xl border border-gray-800 text-gray-500">
-                    Nenhum módulo disponível para esta turma.
-                  </div>
-                ) : (
-                  <div className={netflixContainerClasses}>
-                    {modules.map(module => (
-                      <div key={module.id} className={netflixItemClasses}>
-                        <StudentModuleCard 
-                          module={module} 
-                          onClick={setSelectedModule} 
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
+
+                <StudentCourseModulesCatalog
+                  modules={modules}
+                  moduleGroups={teachingModuleGroups}
+                  sections={teachingSections}
+                  selectedGroupId={selectedTeachingGroupId}
+                  onSelectGroup={setSelectedTeachingGroupId}
+                  onSelectModule={setSelectedModule}
+                  emptyMessage="Nenhum módulo disponível para esta turma."
+                />
               </div>
             )
           )
@@ -497,7 +694,10 @@ export const StudentPresentialDetails: React.FC = () => {
             <CoursePlayer 
               course={linkedCourse!} 
               module={selectedLinkedModule} 
-              onBack={() => setSelectedLinkedModule(null)} 
+              onBack={() => {
+                setSelectedLinkedModule(null);
+                clearModuleSearchParams();
+              }} 
             />
           ) : (
             loadingLinkedCourse ? (
@@ -506,27 +706,22 @@ export const StudentPresentialDetails: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-6">
-                <h3 className="text-xl font-semibold text-gray-200 flex items-center">
+                <h3 className="text-xl font-semibold text-gray-200 flex items-center uppercase">
                   <Video className="mr-2 text-red-500" />
                   {currentClass?.linkedCourseSharedTabs?.modules?.label || currentClass?.linkedCourseTabLabel || 'Módulos do Curso'}
                 </h3>
-                
-                {linkedCourseModules.length === 0 ? (
-                  <div className="p-8 text-center bg-gray-900/50 rounded-xl border border-gray-800 text-gray-500">
-                    Nenhum módulo disponível para este curso.
-                  </div>
-                ) : (
-                  <div className={netflixContainerClasses}>
-                    {linkedCourseModules.map(module => (
-                      <div key={module.id} className={netflixItemClasses}>
-                        <StudentModuleCard 
-                          module={module} 
-                          onClick={setSelectedLinkedModule} 
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
+
+                <StudentCourseModulesCatalog
+                  modules={linkedCourseModules}
+                  moduleGroups={linkedCourseModuleGroups}
+                  sections={linkedCourseSections}
+                  selectedGroupId={selectedLinkedGroupId}
+                  onSelectGroup={setSelectedLinkedGroupId}
+                  onSelectModule={setSelectedLinkedModule}
+                  isMaintenance={isLinkedCourseMaintenance}
+                  maintenanceMessage={linkedCourse?.maintenanceMode?.message}
+                  emptyMessage="Nenhum módulo ou bloco disponível para este curso."
+                />
               </div>
             )
           )
@@ -628,11 +823,23 @@ export const StudentPresentialDetails: React.FC = () => {
           </div>
         )}
 
+        {activeTab === 'DAILY_GOALS' && (
+          <StudentPresentialDailyGoals
+            classId={currentClass.id}
+            masterClassId={currentClass.masterClassId}
+            linkedSimulatedId={currentClass.linkedSimulatedId}
+            liveEvents={classLiveEvents}
+            onSwitchTab={handleSwitchTab}
+            onProgressUpdated={refreshDailyBadge}
+          />
+        )}
+
         {activeTab === 'SCHEDULE' && (
           <StudentClassSchedule 
             classId={currentClass.id} 
             masterClassId={currentClass.masterClassId}
             linkedSimulatedId={currentClass.linkedSimulatedId}
+            onProgressUpdated={refreshDailyBadge}
           />
         )}
 

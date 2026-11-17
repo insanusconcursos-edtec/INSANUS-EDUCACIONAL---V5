@@ -1,23 +1,66 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { OnlineCourse, CourseModule, CourseModuleGroup, CourseSection, CONTEST_STATUS_LABELS, CourseStructureModule, CourseLesson, CourseContent, CourseStructureFolder } from '../../../types/course';
+import {
+  OnlineCourse,
+  CourseModule,
+  CourseModuleGroup,
+  CourseSection,
+  CONTEST_STATUS_LABELS,
+  CourseStructureModule
+} from '../../../types/course';
+import { Class } from '../../../types/class';
+import { LiveEvent } from '../../../types/liveEvent';
+import { GuidedStudyProgress } from '../../../types/guidedStudy';
 import { courseService } from '../../../services/courseService';
+import { classService } from '../../../services/classService';
+import { classScheduleService } from '../../../services/classScheduleService';
+import { guidedStudyService } from '../../../services/guidedStudyService';
 import { getStudentConfig } from '../../../services/studentService';
 import { liveEventService } from '../../../services/liveEventService';
-import { LiveEvent } from '../../../types/liveEvent';
-import { StudentModuleCard } from './StudentModuleCard';
-import { StudentModuleGroupCard } from './StudentModuleGroupCard';
+import { StudentCourseModulesCatalog } from './StudentCourseModulesCatalog';
 import { CoursePlayer } from './player/CoursePlayer';
 import { useAuth } from '../../../contexts/AuthContext';
-import { CheckCircle2, LayoutList, ListTree, PlayCircle, ArrowLeft, Radio, Video, Clock, Play, Calendar, PlaySquare, Lock, MapPin, ChevronDown, ChevronRight, FileText, Loader2, Layers, Folder, X, Users, Megaphone, Bell, CheckCircle, Cpu } from 'lucide-react';
+import {
+  CheckCircle2,
+  LayoutList,
+  ListTree,
+  PlayCircle,
+  ArrowLeft,
+  Radio,
+  Video,
+  Clock,
+  Play,
+  Calendar,
+  PlaySquare,
+  Lock,
+  FileText,
+  Loader2,
+  Megaphone,
+  CheckCircle,
+  Target,
+  BookOpen,
+  GraduationCap
+} from 'lucide-react';
 import { StudentCourseEdital } from './edital/StudentCourseEdital';
 import { CourseReviewDashboard } from './reviews/CourseReviewDashboard';
 import { WelcomeVideoModal } from './WelcomeVideoModal';
-import { subscribeToAnnouncementsByCourse, markAnnouncementAsRead } from '../../../services/announcementService';
+import {
+  subscribeToAnnouncementsByCourse,
+  markAnnouncementAsRead
+} from '../../../services/announcementService';
 import { Announcement } from '../../../types/announcement';
 import AnnouncementPopUp from '../AnnouncementPopUp';
-import { motion, AnimatePresence } from 'motion/react';
+import { StudentPresentialDailyGoals } from '../presential/StudentPresentialDailyGoals';
+import { StudentClassSchedule } from '../presential/StudentClassSchedule';
+import { StudentPedagogicalPlanning } from '../presential/StudentPedagogicalPlanning';
+import { LinkedSimulatedView } from '../simulados/LinkedSimulatedView';
+import {
+  CourseStudentTabId,
+  isNativeCourseTabHidden,
+  isCoursePresentialTabShared,
+  getCoursePresentialTabLabel,
+  computeCoursePresentialPendingDailyCount
+} from '../../../utils/courseNavigation';
 import toast from 'react-hot-toast';
 
 interface CourseDetailsProps {
@@ -30,273 +73,301 @@ export function CourseDetails({ course, onBack, isInsidePlan = false }: CourseDe
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  
-  // ESTADO DAS ABAS - MÓDULOS, EDITAL, LIVE, PRESENTIAL ou ANNOUNCEMENTS
-  const [activeTab, setActiveTab] = useState<'MODULES' | 'EDITAL' | 'LIVE' | 'PRESENTIAL' | 'ANNOUNCEMENTS'>('MODULES');
+
+  // Mantém os metadados do curso sempre sincronizados com o Firestore
+  const [effectiveCourse, setEffectiveCourse] = useState<OnlineCourse>(course);
+
+  useEffect(() => {
+    setEffectiveCourse(course);
+  }, [course]);
+
+  // Aba ativa do aluno (nativas + abas compartilhadas da turma presencial)
+  const [activeTab, setActiveTab] = useState<CourseStudentTabId>('MODULES');
   const [courseAnnouncements, setCourseAnnouncements] = useState<Announcement[]>([]);
   const [activePopUpAnnouncement, setActivePopUpAnnouncement] = useState<Announcement | null>(null);
   const [focusTopicId, setFocusTopicId] = useState<string | null>(null);
 
+  // Estrutura nativa do Curso Online
   const [modules, setModules] = useState<CourseModule[]>([]);
   const [moduleGroups, setModuleGroups] = useState<CourseModuleGroup[]>([]);
   const [sections, setSections] = useState<CourseSection[]>([]);
-  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-
-  const toggleSectionCollapse = (sectionId: string) => {
-    setCollapsedSections(prev => ({
-      ...prev,
-      [sectionId]: !prev[sectionId]
-    }));
-  };
   const [courseLiveEvents, setCourseLiveEvents] = useState<LiveEvent[]>([]);
-  const [presentialStructure, setPresentialStructure] = useState<CourseStructureModule[]>([]);
-  const [selectedPresentialModule, setSelectedPresentialModule] = useState<CourseModule | null>(null);
-  const [linkedClass, setLinkedClass] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingPresential, setLoadingPresential] = useState(false);
   const [selectedModule, setSelectedModule] = useState<CourseModule | null>(null);
-  const [linkedCourseConfig, setLinkedCourseConfig] = useState<{ courseId: string; tabName: string; visibleTabs: string[] } | null>(null);
 
-  // ESTADO DE CONTEÚDOS DAS AULAS DO PRESENCIAL
-  const [lessonContents, setLessonContents] = useState<Record<string, CourseContent[]>>({});
-  const [loadingContents, setLoadingContents] = useState<Record<string, boolean>>({});
+  // Recursos puxados da Turma Presencial Vinculada
+  const [linkedClass, setLinkedClass] = useState<Class | null>(null);
+  const [presentialTeachingClassId, setPresentialTeachingClassId] = useState<string>('');
+  const [presentialModules, setPresentialModules] = useState<CourseModule[]>([]);
+  const [presentialModuleGroups, setPresentialModuleGroups] = useState<CourseModuleGroup[]>([]);
+  const [presentialSections, setPresentialSections] = useState<CourseSection[]>([]);
+  const [selectedPresentialGroupId, setSelectedPresentialGroupId] = useState<string | null>(null);
+  const [selectedPresentialModule, setSelectedPresentialModule] = useState<CourseModule | null>(null);
+  const [presentialLiveEvents, setPresentialLiveEvents] = useState<LiveEvent[]>([]);
+  const [presentialDailyBadgeCount, setPresentialDailyBadgeCount] = useState<number>(0);
+  const [loadingPresential, setLoadingPresential] = useState<boolean>(false);
 
-  const fetchLessonContents = async (lessonId: string) => {
-    if (lessonContents[lessonId] || loadingContents[lessonId]) return;
-    
-    setLoadingContents(prev => ({ ...prev, [lessonId]: true }));
-    try {
-      const contents = await courseService.getContents(lessonId);
-      setLessonContents(prev => ({ ...prev, [lessonId]: contents }));
-    } catch (error) {
-      console.error("Erro ao carregar conteúdos da aula:", error);
-    } finally {
-      setLoadingContents(prev => ({ ...prev, [lessonId]: false }));
-    }
-  };
+  const [loading, setLoading] = useState<boolean>(true);
+  const [linkedCourseConfig, setLinkedCourseConfig] = useState<{
+    courseId: string;
+    tabName: string;
+    visibleTabs: string[];
+  } | null>(null);
 
-  const renderLesson = (lesson: CourseLesson) => {
-    const isExpanded = expandedFolders.includes(lesson.id);
-    const contents = lessonContents[lesson.id] || [];
-    const isLoading = loadingContents[lesson.id];
+  // Manutenção
+  const isUserWhitelisted = effectiveCourse.maintenanceMode?.whitelistedUsers?.includes(
+    currentUser?.email || ''
+  );
+  const isMaintenance = Boolean(effectiveCourse.maintenanceMode?.enabled && !isUserWhitelisted);
+  const [showMaintenancePopup, setShowMaintenancePopup] = useState<boolean>(isMaintenance);
 
-    return (
-      <div key={lesson.id} className="space-y-2">
-        <button 
-          onClick={() => {
-            setExpandedFolders(prev => 
-              prev.includes(lesson.id) ? prev.filter(id => id !== lesson.id) : [...prev, lesson.id]
-            );
-            fetchLessonContents(lesson.id);
-          }}
-          className="w-full flex items-center justify-between p-3 pl-10 hover:bg-zinc-800/50 rounded-xl transition-colors group/lesson"
-        >
-          <div className="flex items-center gap-3">
-            {lesson.type === 'system_json' ? (
-              <Cpu size={14} className="text-cyan-400 group-hover/lesson:text-cyan-300" />
-            ) : lesson.type === 'pdf' ? (
-              <FileText size={14} className="text-yellow-500 group-hover/lesson:text-yellow-400" />
-            ) : (
-              <PlayCircle size={14} className="text-zinc-600 group-hover/lesson:text-brand-red" />
-            )}
-            <span className="text-zinc-400 text-xs font-bold group-hover/lesson:text-zinc-200 transition-colors">
-              {lesson.title}
-            </span>
-          </div>
-          <div className="text-zinc-600 group-hover/lesson:text-white transition-colors">
-            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          </div>
-        </button>
-
-        <AnimatePresence>
-          {isExpanded && (
-            <motion.div 
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden pl-14 space-y-1"
-            >
-              {isLoading ? (
-                <div className="py-2 flex justify-center">
-                  <Loader2 size={12} className="animate-spin text-zinc-600" />
-                </div>
-              ) : contents.length === 0 ? (
-                <div className="py-2 text-[10px] text-zinc-700 font-bold uppercase tracking-widest italic">Nenhum material disponível.</div>
-              ) : (
-                contents.map(content => (
-                  <div key={content.id} className="flex items-center justify-between p-2 hover:bg-zinc-800/30 rounded-lg group/content">
-                    <div className="flex items-center gap-3">
-                      <FileText size={12} className="text-zinc-700 group-hover/content:text-brand-red" />
-                      <span className="text-[11px] text-zinc-500 group-hover/content:text-zinc-300 font-medium">{content.title}</span>
-                    </div>
-                    {(content.fileUrl || content.videoUrl || content.linkUrl) && (
-                      <a 
-                        href={content.fileUrl || content.videoUrl || content.linkUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[9px] font-black text-brand-red bg-brand-red/5 px-2 py-1 rounded border border-brand-red/10 hover:bg-brand-red hover:text-white transition-all uppercase tracking-widest"
-                      >
-                        Acessar
-                      </a>
-                    )}
-                  </div>
-                ))
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-    );
-  };
-
-  const renderFolder = (folder: CourseStructureFolder) => {
-    const isExpanded = expandedFolders.includes(folder.id);
-
-    return (
-      <div key={folder.id} className="space-y-1">
-        <button 
-          onClick={() => {
-            setExpandedFolders(prev => 
-              prev.includes(folder.id) ? prev.filter(id => id !== folder.id) : [...prev, folder.id]
-            );
-          }}
-          className="w-full flex items-center justify-between p-3 pl-6 hover:bg-zinc-800/50 rounded-xl transition-colors group/folder"
-        >
-          <div className="flex items-center gap-3">
-            <Folder size={16} className="text-zinc-600 group-hover/folder:text-brand-red" />
-            <span className="text-zinc-400 text-xs font-black uppercase tracking-tight group-hover/folder:text-zinc-200 transition-colors">
-              {folder.title}
-            </span>
-          </div>
-          <div className="text-zinc-600 group-hover/folder:text-white transition-colors">
-            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          </div>
-        </button>
-
-        <AnimatePresence>
-          {isExpanded && (
-            <motion.div 
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden"
-            >
-              <div className="space-y-1">
-                {folder.subfolders?.map(sub => renderFolder(sub))}
-                {folder.lessons.map(lesson => renderLesson(lesson))}
-                {folder.subfolders?.length === 0 && folder.lessons.length === 0 && (
-                  <div className="pl-12 py-2 text-[10px] text-zinc-700 font-bold uppercase tracking-widest italic">Pasta vazia.</div>
-                )}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-    );
-  };
-
-  // ESTADO DE MANUTENÇÃO
-  const isUserWhitelisted = course.maintenanceMode?.whitelistedUsers?.includes(currentUser?.email || '');
-  const isMaintenance = course.maintenanceMode?.enabled && !isUserWhitelisted;
-  const [showMaintenancePopup, setShowMaintenancePopup] = useState(isMaintenance);
-
-  // Estado do Progresso e Estrutura para o "Continuar Estudos"
+  // Progresso e Estrutura para "Continuar Estudos"
   const [structure, setStructure] = useState<CourseStructureModule[]>([]);
-  const [detailedProgress, setDetailedProgress] = useState<Record<string, { completedAt: string }>>({});
-  const [progress, setProgress] = useState(0);
-  const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(false);
+  const [detailedProgress, setDetailedProgress] = useState<Record<string, { completedAt: string }>>(
+    {}
+  );
+  const [progress, setProgress] = useState<number>(0);
+  const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState<boolean>(false);
   const [currentPlanId, setCurrentPlanId] = useState<string | undefined>(undefined);
 
+  const refreshPresentialDailyBadge = useCallback(
+    async (
+      targetClassId?: string,
+      masterId?: string,
+      livesOverride?: LiveEvent[]
+    ) => {
+      const resolvedClassId = targetClassId || linkedClass?.id || effectiveCourse.linkedPresentialId;
+      if (!resolvedClassId) return;
+
+      try {
+        const [initialEvents, initialMetas, prog] = await Promise.all([
+          classScheduleService.getScheduleEventsByClass(resolvedClassId),
+          guidedStudyService.getMetasByClass(resolvedClassId),
+          currentUser?.uid
+            ? guidedStudyService.getStudentProgress(currentUser.uid, resolvedClassId)
+            : Promise.resolve({} as Record<string, GuidedStudyProgress>)
+        ]);
+
+        let eventsData = initialEvents;
+        let metasData = initialMetas;
+        const resolvedMasterId = masterId !== undefined ? masterId : linkedClass?.masterClassId;
+
+        if (resolvedMasterId && (eventsData.length === 0 || metasData.length === 0)) {
+          const [mEvents, mMetas] = await Promise.all([
+            eventsData.length === 0
+              ? classScheduleService.getScheduleEventsByClass(resolvedMasterId)
+              : Promise.resolve([]),
+            metasData.length === 0
+              ? guidedStudyService.getMetasByClass(resolvedMasterId)
+              : Promise.resolve([])
+          ]);
+          if (eventsData.length === 0 && mEvents.length > 0) eventsData = mEvents;
+          if (metasData.length === 0 && mMetas.length > 0) metasData = mMetas;
+        }
+
+        const count = computeCoursePresentialPendingDailyCount(
+          eventsData,
+          metasData,
+          livesOverride ?? presentialLiveEvents,
+          prog
+        );
+        setPresentialDailyBadgeCount(count);
+      } catch (err) {
+        console.error('Erro ao atualizar contador de metas diárias presenciais no curso:', err);
+      }
+    },
+    [
+      linkedClass?.id,
+      linkedClass?.masterClassId,
+      effectiveCourse.linkedPresentialId,
+      currentUser?.uid,
+      presentialLiveEvents
+    ]
+  );
+
   useEffect(() => {
+    let isMounted = true;
+
     const loadData = async () => {
-        try {
-            // 1. Carrega Módulos, Grupos, Sessões, Estrutura e Eventos ao Vivo
-            const [modulesData, groupsData, sectionsData, structureData, liveEventsData] = await Promise.all([
-                courseService.getModules(course.id),
-                courseService.getModuleGroups(course.id),
-                courseService.getCourseSections(course.id),
-                courseService.getCourseStructure(course.id),
-                liveEventService.getLiveEventsByOnlineCourse(course.id)
-            ]);
-            setModules(modulesData);
-            setModuleGroups(groupsData);
-            setSections(sectionsData);
-            setStructure(structureData);
-            setCourseLiveEvents(liveEventsData);
+      setLoading(true);
+      try {
+        // 0. Busca metadados atualizados do curso online (garante leitura imediata de hiddenTabs/linkedPresentialSharedTabs)
+        const freshCourse = await courseService.getCourse(course.id);
+        const resolvedCourse: OnlineCourse = freshCourse ? { ...course, ...freshCourse } : course;
+        if (isMounted) {
+          setEffectiveCourse(resolvedCourse);
+        }
 
-            // 2. Carrega Turma Presencial Vinculada (se houver)
-            if (course.linkedPresentialId) {
-              setLoadingPresential(true);
-              try {
-                // Buscamos os dados da turma para o player
-                const { classService } = await import('../../../services/classService');
-                const classData = await classService.getClassById(course.linkedPresentialId);
-                setLinkedClass(classData);
+        // 1. Carrega Módulos, Blocos, Sessões, Estrutura e Eventos ao Vivo do Curso Online
+        const [modulesData, groupsData, sectionsData, structureData, liveEventsData] =
+          await Promise.all([
+            courseService.getModules(course.id),
+            courseService.getModuleGroups(course.id),
+            courseService.getCourseSections(course.id),
+            courseService.getCourseStructure(course.id),
+            liveEventService.getLiveEventsByOnlineCourse(course.id)
+          ]);
 
-                // Buscamos a estrutura COMPLETA do ambiente de ensino da turma (Modules -> Folders -> Lessons)
-                const fullStructure = await courseService.getCourseStructure(course.linkedPresentialId);
+        if (!isMounted) return;
+        setModules(modulesData);
+        setModuleGroups(groupsData);
+        setSections(sectionsData);
+        setStructure(structureData);
+        setCourseLiveEvents(liveEventsData);
 
-                // Filtragem de Módulos
-                let filteredStructure = fullStructure;
-                if (course.linkedPresentialModules && course.linkedPresentialModules !== 'all') {
-                  const allowedIds = course.linkedPresentialModules;
-                  filteredStructure = fullStructure.filter(m => allowedIds.includes(m.id));
+        // 2. Carrega Turma Presencial Vinculada e seus Recursos (se houver)
+        if (resolvedCourse.linkedPresentialId) {
+          setLoadingPresential(true);
+          try {
+            const pClassId = resolvedCourse.linkedPresentialId;
+            const classData = await classService.getClassById(pClassId);
+
+            if (classData && isMounted) {
+              let resolvedLives = await liveEventService.getLiveEventsByPresentialClass(pClassId);
+              let resolvedSimulatedId = classData.linkedSimulatedId;
+              let resolvedGuidedStudy = classData.isGuidedStudyEnabled;
+              let resolvedTeachId = pClassId;
+
+              if (classData.masterClassId) {
+                const masterData = await classService.getClassById(classData.masterClassId);
+                if (masterData) {
+                  if (resolvedLives.length === 0) {
+                    const masterLives = await liveEventService.getLiveEventsByPresentialClass(
+                      classData.masterClassId
+                    );
+                    if (masterLives.length > 0) resolvedLives = masterLives;
+                  }
+                  if (!resolvedSimulatedId && masterData.linkedSimulatedId) {
+                    resolvedSimulatedId = masterData.linkedSimulatedId;
+                  }
+                  if (masterData.isGuidedStudyEnabled && !resolvedGuidedStudy) {
+                    resolvedGuidedStudy = true;
+                  }
+                  const ownMods = await courseService.getModules(pClassId);
+                  if (ownMods.length === 0) {
+                    const masterMods = await courseService.getModules(classData.masterClassId);
+                    if (masterMods.length > 0) {
+                      resolvedTeachId = classData.masterClassId;
+                    }
+                  }
                 }
+              }
 
-                setPresentialStructure(filteredStructure);
-              } catch (error) {
-                console.error("Erro ao carregar dados do presencial:", error);
-              } finally {
-                setLoadingPresential(false);
+              const enrichedClass: Class = {
+                ...classData,
+                linkedSimulatedId: resolvedSimulatedId,
+                isGuidedStudyEnabled: resolvedGuidedStudy
+              };
+
+              const [pMods, pGroups, pSections] = await Promise.all([
+                courseService.getModules(resolvedTeachId),
+                courseService.getModuleGroups(resolvedTeachId),
+                courseService.getCourseSections(resolvedTeachId)
+              ]);
+
+              let filteredMods = pMods || [];
+              let filteredGroups = pGroups || [];
+              let filteredSections = pSections || [];
+
+              if (
+                resolvedCourse.linkedPresentialModules &&
+                resolvedCourse.linkedPresentialModules !== 'all'
+              ) {
+                const allowedSet = new Set(resolvedCourse.linkedPresentialModules);
+                filteredMods = filteredMods.filter((m) => allowedSet.has(m.id));
+                const activeGroupIds = new Set(
+                  filteredMods.map((m) => m.groupId).filter((id): id is string => Boolean(id))
+                );
+                filteredGroups = filteredGroups.filter((g) => activeGroupIds.has(g.id));
+                const activeSectionIds = new Set<string>([
+                  ...filteredMods
+                    .filter((m) => !m.groupId && m.sectionId)
+                    .map((m) => m.sectionId as string),
+                  ...filteredGroups
+                    .filter((g) => g.sectionId)
+                    .map((g) => g.sectionId as string)
+                ]);
+                filteredSections = filteredSections.filter((s) => activeSectionIds.has(s.id));
+              }
+
+              if (isMounted) {
+                setLinkedClass(enrichedClass);
+                setPresentialTeachingClassId(resolvedTeachId);
+                setPresentialLiveEvents(resolvedLives);
+                setPresentialModules(filteredMods);
+                setPresentialModuleGroups(filteredGroups);
+                setPresentialSections(filteredSections);
+              }
+
+              if (isCoursePresentialTabShared(resolvedCourse, 'dailyGoals')) {
+                await refreshPresentialDailyBadge(
+                  enrichedClass.id,
+                  enrichedClass.masterClassId,
+                  resolvedLives
+                );
               }
             }
-
-            // 3. Calcula Progresso Geral
-            if (currentUser) {
-                const [completedLessons, detailed, stats, config] = await Promise.all([
-                    courseService.getCompletedLessons(currentUser.uid, course.id),
-                    courseService.getDetailedProgress(currentUser.uid, course.id),
-                    courseService.getCourseStats(course.id),
-                    getStudentConfig(currentUser.uid)
-                ]);
-                
-                setDetailedProgress(detailed);
-                setCurrentPlanId(config?.currentPlanId);
-
-                // --- VINCULAÇÃO DE CURSO AO PLANO (FILTRAR ABAS APENAS SE VISUALIZADO DENTRO DO PLANO) ---
-                if (isInsidePlan && config?.currentPlanId) {
-                    try {
-                        const { getPlanById } = await import('../../../services/planService');
-                        const planData = await getPlanById(config.currentPlanId);
-                        if (planData && planData.linkedCourses) {
-                            const matchingConfig = planData.linkedCourses.find((lc: any) => lc.courseId === course.id);
-                            if (matchingConfig) {
-                                setLinkedCourseConfig(matchingConfig);
-                                if (matchingConfig.visibleTabs && matchingConfig.visibleTabs.length > 0) {
-                                    setActiveTab(matchingConfig.visibleTabs[0] as any);
-                                }
-                            }
-                        }
-                    } catch (err) {
-                        console.error("Erro ao carregar config de abas do plano:", err);
-                    }
-                }
-
-                const total = stats.totalLessons;
-                const completed = completedLessons.length;
-                const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
-                
-                setProgress(percentage);
-            }
-        } catch (error) {
-            console.error(error);
-        } finally {
-            setLoading(false);
+          } catch (error) {
+            console.error('Erro ao carregar dados da turma presencial vinculada:', error);
+          } finally {
+            if (isMounted) setLoadingPresential(false);
+          }
+        } else {
+          setLinkedClass(null);
+          setPresentialModules([]);
+          setPresentialModuleGroups([]);
+          setPresentialSections([]);
+          setPresentialLiveEvents([]);
+          setPresentialDailyBadgeCount(0);
         }
+
+        // 3. Calcula Progresso Geral e Config do Plano (quando embutido em Plano)
+        if (currentUser) {
+          const [completedLessons, detailed, stats, config] = await Promise.all([
+            courseService.getCompletedLessons(currentUser.uid, course.id),
+            courseService.getDetailedProgress(currentUser.uid, course.id),
+            courseService.getCourseStats(course.id),
+            getStudentConfig(currentUser.uid)
+          ]);
+
+          if (!isMounted) return;
+          setDetailedProgress(detailed);
+          setCurrentPlanId(config?.currentPlanId);
+
+          if (isInsidePlan && config?.currentPlanId) {
+            try {
+              const { getPlanById } = await import('../../../services/planService');
+              const planData = await getPlanById(config.currentPlanId);
+              if (planData && planData.linkedCourses && isMounted) {
+                const matchingConfig = planData.linkedCourses.find(
+                  (lc) => lc.courseId === course.id
+                );
+                if (matchingConfig) {
+                  setLinkedCourseConfig(matchingConfig);
+                }
+              }
+            } catch (err) {
+              console.error('Erro ao carregar config de abas do plano:', err);
+            }
+          }
+
+          const total = stats.totalLessons;
+          const completed = completedLessons.length;
+          const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+          setProgress(percentage);
+        }
+      } catch (error) {
+        console.error(error);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
     };
+
     loadData();
-  }, [course.id, currentUser]);
+    return () => {
+      isMounted = false;
+    };
+  }, [course.id, currentUser, isInsidePlan]);
 
   // Monitorar comunicados do curso em tempo real e disparar popups obrigatórios
   useEffect(() => {
@@ -304,7 +375,7 @@ export function CourseDetails({ course, onBack, isInsidePlan = false }: CourseDe
     const unsub = subscribeToAnnouncementsByCourse(course.id, (data) => {
       setCourseAnnouncements(data);
       if (currentUser?.uid) {
-        const popup = data.find(a => a.forcePopUp && !a.readBy?.includes(currentUser.uid));
+        const popup = data.find((a) => a.forcePopUp && !a.readBy?.includes(currentUser.uid));
         if (popup) {
           setActivePopUpAnnouncement(popup);
         }
@@ -313,91 +384,416 @@ export function CourseDetails({ course, onBack, isInsidePlan = false }: CourseDe
     return () => unsub();
   }, [course.id, currentUser?.uid]);
 
-  const unreadAnnouncementsCount = currentUser 
-    ? courseAnnouncements.filter(a => !a.readBy?.includes(currentUser.uid)).length 
+  const unreadAnnouncementsCount = currentUser
+    ? courseAnnouncements.filter((a) => !a.readBy?.includes(currentUser.uid)).length
     : 0;
+
+  // Verifica se o Plano pai permite a aba (quando o curso está embutido dentro de um Plano)
+  const isTabAllowedByParentPlan = useCallback(
+    (tabId: CourseStudentTabId): boolean => {
+      if (
+        !isInsidePlan ||
+        !linkedCourseConfig ||
+        !Array.isArray(linkedCourseConfig.visibleTabs) ||
+        linkedCourseConfig.visibleTabs.length === 0
+      ) {
+        return true;
+      }
+      if (tabId.startsWith('PRESENTIAL')) {
+        return (
+          linkedCourseConfig.visibleTabs.includes('PRESENTIAL') ||
+          linkedCourseConfig.visibleTabs.includes(tabId)
+        );
+      }
+      return linkedCourseConfig.visibleTabs.includes(tabId);
+    },
+    [isInsidePlan, linkedCourseConfig]
+  );
+
+  const isModulesTabVisible =
+    !isNativeCourseTabHidden(effectiveCourse, 'MODULES') && isTabAllowedByParentPlan('MODULES');
+  const isEditalTabVisible =
+    !isNativeCourseTabHidden(effectiveCourse, 'EDITAL') && isTabAllowedByParentPlan('EDITAL');
+
+  // Lista dinâmica e ordenada das abas disponíveis para o aluno neste curso
+  const availableTabs = useMemo(() => {
+    const list: Array<{
+      id: CourseStudentTabId;
+      label: string;
+      icon: React.ComponentType<{ size?: number; className?: string }>;
+      badge?: number;
+      badgeTone?: 'amber' | 'red';
+    }> = [];
+
+    if (isModulesTabVisible) {
+      list.push({ id: 'MODULES', label: 'Módulos do Curso', icon: LayoutList });
+    }
+
+    if (
+      isCoursePresentialTabShared(effectiveCourse, 'dailyGoals') &&
+      isTabAllowedByParentPlan('PRESENTIAL_DAILY_GOALS')
+    ) {
+      list.push({
+        id: 'PRESENTIAL_DAILY_GOALS',
+        label: getCoursePresentialTabLabel(effectiveCourse, 'dailyGoals'),
+        icon: Target,
+        badge: presentialDailyBadgeCount,
+        badgeTone: 'amber'
+      });
+    }
+
+    if (
+      isCoursePresentialTabShared(effectiveCourse, 'schedule') &&
+      isTabAllowedByParentPlan('PRESENTIAL_SCHEDULE')
+    ) {
+      list.push({
+        id: 'PRESENTIAL_SCHEDULE',
+        label: getCoursePresentialTabLabel(effectiveCourse, 'schedule'),
+        icon: Calendar
+      });
+    }
+
+    if (
+      isCoursePresentialTabShared(effectiveCourse, 'planning') &&
+      isTabAllowedByParentPlan('PRESENTIAL_PLANNING')
+    ) {
+      list.push({
+        id: 'PRESENTIAL_PLANNING',
+        label: getCoursePresentialTabLabel(effectiveCourse, 'planning'),
+        icon: BookOpen
+      });
+    }
+
+    if (isEditalTabVisible) {
+      list.push({ id: 'EDITAL', label: 'Edital Verticalizado', icon: ListTree });
+    }
+
+    if (
+      isCoursePresentialTabShared(effectiveCourse, 'teaching') &&
+      isTabAllowedByParentPlan('PRESENTIAL')
+    ) {
+      list.push({
+        id: 'PRESENTIAL',
+        label: getCoursePresentialTabLabel(effectiveCourse, 'teaching'),
+        icon: GraduationCap
+      });
+    }
+
+    if (
+      isCoursePresentialTabShared(effectiveCourse, 'simulados') &&
+      isTabAllowedByParentPlan('PRESENTIAL_SIMULADOS')
+    ) {
+      list.push({
+        id: 'PRESENTIAL_SIMULADOS',
+        label: getCoursePresentialTabLabel(effectiveCourse, 'simulados'),
+        icon: FileText
+      });
+    }
+
+    if (
+      courseLiveEvents.length > 0 &&
+      !isNativeCourseTabHidden(effectiveCourse, 'LIVE') &&
+      isTabAllowedByParentPlan('LIVE')
+    ) {
+      list.push({ id: 'LIVE', label: 'Eventos ao Vivo', icon: Radio });
+    }
+
+    if (
+      isCoursePresentialTabShared(effectiveCourse, 'live') &&
+      isTabAllowedByParentPlan('PRESENTIAL_LIVE')
+    ) {
+      list.push({
+        id: 'PRESENTIAL_LIVE',
+        label: getCoursePresentialTabLabel(effectiveCourse, 'live'),
+        icon: Radio
+      });
+    }
+
+    if (
+      !isNativeCourseTabHidden(effectiveCourse, 'ANNOUNCEMENTS') &&
+      isTabAllowedByParentPlan('ANNOUNCEMENTS')
+    ) {
+      list.push({
+        id: 'ANNOUNCEMENTS',
+        label: 'Avisos',
+        icon: Megaphone,
+        badge: unreadAnnouncementsCount,
+        badgeTone: 'red'
+      });
+    }
+
+    return list;
+  }, [
+    effectiveCourse,
+    isModulesTabVisible,
+    isEditalTabVisible,
+    isTabAllowedByParentPlan,
+    presentialDailyBadgeCount,
+    courseLiveEvents.length,
+    unreadAnnouncementsCount
+  ]);
+
+  // Garante seleção automática da primeira aba visível caso a aba atual tenha sido ocultada
+  useEffect(() => {
+    if (loading) return;
+    if (availableTabs.length > 0 && !availableTabs.some((t) => t.id === activeTab)) {
+      setActiveTab(availableTabs[0].id);
+    }
+  }, [loading, availableTabs, activeTab]);
+
+  // Limpa parâmetros internos preservando ?tab=course_<id> caso esteja dentro de um Plano
+  const updateCourseSearchParams = useCallback(
+    (updates: Record<string, string | null>) => {
+      const next = new URLSearchParams(searchParams);
+      Object.entries(updates).forEach(([k, v]) => {
+        if (v === null || v === '') next.delete(k);
+        else next.set(k, v);
+      });
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
 
   // Lógica para abrir módulo via URL
   useEffect(() => {
     const moduleId = searchParams.get('module');
-    if (moduleId && modules.length > 0) {
-      const module = modules.find(m => m.id === moduleId);
-      if (module) {
-        setSelectedModule(module);
+    if (moduleId && modules.length > 0 && isModulesTabVisible) {
+      const mod = modules.find((m) => m.id === moduleId);
+      if (mod) {
+        if (mod.groupId) setSelectedGroupId(mod.groupId);
+        setSelectedModule(mod);
       }
     }
-  }, [searchParams, modules]);
+  }, [searchParams, modules, isModulesTabVisible]);
+
+  // Navegação cruzada entre as abas presenciais compartilhadas (Metas de Hoje <-> Cronograma <-> Planejamento <-> Simulados <-> Ao Vivo)
+  const canOpenPresentialSchedule = availableTabs.some((t) => t.id === 'PRESENTIAL_SCHEDULE');
+  const canOpenPresentialPlanning = availableTabs.some((t) => t.id === 'PRESENTIAL_PLANNING');
+  const canOpenPresentialSimulados =
+    availableTabs.some((t) => t.id === 'PRESENTIAL_SIMULADOS') &&
+    Boolean(linkedClass?.linkedSimulatedId);
+  const canOpenAnyLive =
+    availableTabs.some((t) => t.id === 'PRESENTIAL_LIVE') ||
+    availableTabs.some((t) => t.id === 'LIVE');
+
+  const handleSwitchFromPresentialWidget = useCallback(
+    (targetId: string, queryParams?: Record<string, string>) => {
+      const upper = targetId.toUpperCase();
+      let nextTab: CourseStudentTabId | null = null;
+
+      if (upper === 'SCHEDULE' && canOpenPresentialSchedule) {
+        nextTab = 'PRESENTIAL_SCHEDULE';
+      } else if (
+        upper === 'DAILY_GOALS' &&
+        availableTabs.some((t) => t.id === 'PRESENTIAL_DAILY_GOALS')
+      ) {
+        nextTab = 'PRESENTIAL_DAILY_GOALS';
+      } else if (upper === 'PLANNING' && canOpenPresentialPlanning) {
+        nextTab = 'PRESENTIAL_PLANNING';
+      } else if (upper === 'TEACHING' && availableTabs.some((t) => t.id === 'PRESENTIAL')) {
+        nextTab = 'PRESENTIAL';
+      } else if (upper === 'SIMULADOS' && canOpenPresentialSimulados) {
+        nextTab = 'PRESENTIAL_SIMULADOS';
+      } else if (upper === 'LIVE') {
+        if (availableTabs.some((t) => t.id === 'PRESENTIAL_LIVE')) {
+          nextTab = 'PRESENTIAL_LIVE';
+        } else if (availableTabs.some((t) => t.id === 'LIVE')) {
+          nextTab = 'LIVE';
+        }
+      }
+
+      if (!nextTab) return;
+      setActiveTab(nextTab);
+      setFocusTopicId(null);
+
+      if (queryParams && Object.keys(queryParams).length > 0) {
+        updateCourseSearchParams({
+          subjectId: queryParams.subjectId || null,
+          topicId: queryParams.topicId || null,
+          moduleId: queryParams.moduleId || null
+        });
+      } else {
+        updateCourseSearchParams({
+          subjectId: null,
+          topicId: null,
+          moduleId: null
+        });
+      }
+    },
+    [
+      availableTabs,
+      canOpenPresentialSchedule,
+      canOpenPresentialPlanning,
+      canOpenPresentialSimulados,
+      updateCourseSearchParams
+    ]
+  );
+
+  const handleSelectCourseTab = (tabId: CourseStudentTabId) => {
+    setActiveTab(tabId);
+    setFocusTopicId(null);
+    if (
+      searchParams.has('subjectId') ||
+      searchParams.has('topicId') ||
+      searchParams.has('moduleId')
+    ) {
+      updateCourseSearchParams({
+        subjectId: null,
+        topicId: null,
+        moduleId: null
+      });
+    }
+  };
 
   // Handler para Navegação via Review
-  const handleReviewNow = (disciplineId: string, topicId: string) => {
-      setActiveTab('EDITAL');
-      setFocusTopicId(topicId);
+  const handleReviewNow = (_disciplineId: string, topicId: string) => {
+    if (!isEditalTabVisible) return;
+    setActiveTab('EDITAL');
+    setFocusTopicId(topicId);
   };
 
   // Algoritmo de Busca Cronológica (Última Concluída + 1)
   const handleContinue = () => {
     if (!currentUser || structure.length === 0) return;
 
-    // 1. Achatamento (Flatten) da grade curricular para uma fila única 1D (Pulando itens EM PRODUÇÃO)
-    const flatCurriculum: { moduleId: string, lessonId: string }[] = [];
-    structure.forEach(mod => {
-        mod.folders.forEach(folder => {
-            folder.lessons.forEach(lesson => {
-                if (!lesson.isProduction) {
-                  flatCurriculum.push({ moduleId: mod.id, lessonId: lesson.id });
-                }
-            });
+    const flatCurriculum: { moduleId: string; lessonId: string }[] = [];
+    structure.forEach((mod) => {
+      mod.folders.forEach((folder) => {
+        folder.lessons.forEach((lesson) => {
+          if (!lesson.isProduction) {
+            flatCurriculum.push({ moduleId: mod.id, lessonId: lesson.id });
+          }
         });
-        mod.looseLessons.forEach(lesson => {
-            if (!lesson.isProduction) {
-              flatCurriculum.push({ moduleId: mod.id, lessonId: lesson.id });
-            }
-        });
+      });
+      mod.looseLessons.forEach((lesson) => {
+        if (!lesson.isProduction) {
+          flatCurriculum.push({ moduleId: mod.id, lessonId: lesson.id });
+        }
+      });
     });
 
     if (flatCurriculum.length === 0) return;
 
-    // 2. Busca Cronológica: Encontra a aula concluída MAIS RECENTEMENTE no tempo
     let mostRecentIndex = -1;
     let latestTimestamp = 0;
 
     for (let i = 0; i < flatCurriculum.length; i++) {
-        const item = flatCurriculum[i];
-        const progress = detailedProgress[item.lessonId];
-        
-        if (progress) {
-            const itemDate = new Date(progress.completedAt).getTime();
-            if (itemDate >= latestTimestamp) {
-                latestTimestamp = itemDate;
-                mostRecentIndex = i;
-            }
+      const item = flatCurriculum[i];
+      const prog = detailedProgress[item.lessonId];
+
+      if (prog) {
+        const itemDate = new Date(prog.completedAt).getTime();
+        if (itemDate >= latestTimestamp) {
+          latestTimestamp = itemDate;
+          mostRecentIndex = i;
         }
+      }
     }
 
     let targetItem = null;
-
-    // 3. Regras de Negócio Estritas: Última Concluída + 1
     if (mostRecentIndex === -1) {
-        // Regra A: Nada concluído -> Vai para a primeiríssima aula do curso
-        targetItem = flatCurriculum[0];
+      targetItem = flatCurriculum[0];
     } else if (mostRecentIndex + 1 < flatCurriculum.length) {
-        // Regra B: Existe aula após a mais recente concluída -> Vai exatamente para a PRÓXIMA (+1)
-        targetItem = flatCurriculum[mostRecentIndex + 1];
+      targetItem = flatCurriculum[mostRecentIndex + 1];
     } else {
-        // Regra C: O curso todo foi concluído -> Mantém na última aula existente
-        targetItem = flatCurriculum[mostRecentIndex];
+      targetItem = flatCurriculum[mostRecentIndex];
     }
 
-    // 4. Redirecionamento Imediato via URL Params
     if (targetItem) {
-        setSearchParams({ module: targetItem.moduleId, lesson: targetItem.lessonId });
+      updateCourseSearchParams({
+        module: targetItem.moduleId,
+        lesson: targetItem.lessonId
+      });
     }
   };
 
+  const renderLiveEventsGrid = (eventsList: LiveEvent[], emptyLabel: string) => {
+    if (eventsList.length === 0) {
+      return (
+        <div className="p-10 text-center bg-zinc-900/40 rounded-2xl border border-zinc-800 text-zinc-400 text-sm">
+          {emptyLabel}
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        {eventsList.map((event) => (
+          <div
+            key={event.id}
+            className="group bg-zinc-900/50 border border-zinc-800 rounded-2xl overflow-hidden hover:border-[var(--plan-theme)]/50 transition-all duration-300 flex flex-col"
+          >
+            <div className="relative aspect-video overflow-hidden bg-zinc-800">
+              {event.thumbnailUrl ? (
+                <img
+                  src={event.thumbnailUrl}
+                  alt={event.title}
+                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-zinc-600">
+                  <Video size={48} />
+                </div>
+              )}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60" />
+
+              <div className="absolute top-4 left-4">
+                {event.status === 'live' ? (
+                  <div className="flex items-center gap-2 bg-[var(--plan-theme)] text-white px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest animate-pulse shadow-[0_0_15px_rgba(var(--plan-theme-rgb),0.5)]">
+                    <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                    Ao Vivo Agora
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 bg-zinc-800/90 backdrop-blur-md text-zinc-300 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border border-zinc-700">
+                    <Clock size={10} />
+                    {event.status === 'scheduled' ? 'Agendado' : 'Encerrado'}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="p-5 flex-1 flex flex-col gap-4">
+              <div className="space-y-2">
+                <h3 className="text-white font-black text-lg uppercase tracking-tight line-clamp-2 group-hover:text-[var(--plan-theme)] transition-colors">
+                  {event.title}
+                </h3>
+                <div className="flex items-center gap-4 text-zinc-500 font-bold text-[10px] uppercase tracking-widest">
+                  <div className="flex items-center gap-1.5">
+                    <Calendar size={12} className="text-[var(--plan-theme)]" />
+                    {event.eventDate.split('-').reverse().join('/')}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Clock size={12} />
+                    {event.startTime}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => navigate(`/app/eventos-ao-vivo/sala/${event.id}`)}
+                className={`w-full mt-auto flex items-center justify-center gap-2 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all duration-300 group/btn ${
+                  event.status === 'live'
+                    ? 'bg-[var(--plan-theme)] hover:brightness-110 text-white shadow-lg shadow-[var(--plan-theme)]/20'
+                    : 'bg-zinc-800 hover:bg-zinc-700 text-white'
+                }`}
+              >
+                <Play size={14} fill="currentColor" className="group-hover/btn:scale-110 transition-transform" />
+                {event.status === 'live' ? 'ACESSAR SALA DE TRANSMISSÃO' : 'VER DETALHES DO EVENTO'}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   if (selectedModule || selectedPresentialModule) {
-      const activeModule = selectedModule || selectedPresentialModule;
-      const activeCourse = selectedModule ? course : {
-          id: linkedClass?.id || course.linkedPresentialId,
+    const activeModule = selectedModule || selectedPresentialModule;
+    const activeCourse = selectedModule
+      ? effectiveCourse
+      : ({
+          id: presentialTeachingClassId || linkedClass?.id || effectiveCourse.linkedPresentialId || '',
           title: linkedClass?.name || 'Turma Presencial',
           coverUrl: linkedClass?.coverImage || '',
           bannerUrlDesktop: linkedClass?.bannerUrlDesktop || '',
@@ -406,712 +802,439 @@ export function CourseDetails({ course, onBack, isInsidePlan = false }: CourseDe
           categoryId: linkedClass?.category || '',
           active: true,
           createdAt: linkedClass?.createdAt || new Date().toISOString(),
-          updatedAt: linkedClass?.updatedAt || new Date().toISOString(),
-      } as OnlineCourse;
+          updatedAt: linkedClass?.updatedAt || new Date().toISOString()
+        } as OnlineCourse);
 
-      return (
-        <CoursePlayer 
-            course={activeCourse} 
-            module={activeModule!} 
-            onBack={() => {
-                setSelectedModule(null);
-                setSelectedPresentialModule(null);
-                setSearchParams({});
-            }} 
-        />
-      );
+    return (
+      <CoursePlayer
+        course={activeCourse}
+        module={activeModule!}
+        onBack={() => {
+          setSelectedModule(null);
+          setSelectedPresentialModule(null);
+          updateCourseSearchParams({
+            module: null,
+            lesson: null
+          });
+        }}
+      />
+    );
   }
 
   return (
     <div className="flex flex-col w-full animate-in fade-in pb-20 min-h-full">
-      
-      {/* ==================================================== */}
-      {/* HERO BANNER RESPONSIVO (IGUAL PRESENCIAL)            */}
-      {/* ==================================================== */}
+      {/* HERO BANNER RESPONSIVO */}
       <div className="relative w-full mb-6 bg-zinc-900">
-         
-         {/* Botão Voltar */}
-         <button 
-            onClick={onBack}
-            className="absolute top-4 left-4 z-10 p-2 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors backdrop-blur-sm"
-         >
-            <ArrowLeft size={24} />
-         </button>
+        <button
+          onClick={onBack}
+          className="absolute top-4 left-4 z-10 p-2 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors backdrop-blur-sm"
+        >
+          <ArrowLeft size={24} />
+        </button>
 
-         <picture>
-             <source media="(min-width: 768px)" srcSet={course.bannerUrlDesktop || course.coverUrl} />
-             <img 
-                src={course.bannerUrlMobile || course.coverUrl} 
-                alt={`Banner do curso ${course.title}`} 
-                className={`w-full h-48 md:h-[400px] object-cover border-b border-[var(--plan-theme)]/30 shadow-lg transition-all duration-700 ${isMaintenance ? 'grayscale opacity-50 contrast-125' : ''}`} 
-                referrerPolicy="no-referrer"
-             />
-         </picture>
+        <picture>
+          <source
+            media="(min-width: 768px)"
+            srcSet={effectiveCourse.bannerUrlDesktop || effectiveCourse.coverUrl}
+          />
+          <img
+            src={effectiveCourse.bannerUrlMobile || effectiveCourse.coverUrl}
+            alt={`Banner do curso ${effectiveCourse.title}`}
+            className={`w-full h-48 md:h-[400px] object-cover border-b border-[var(--plan-theme)]/30 shadow-lg transition-all duration-700 ${
+              isMaintenance ? 'grayscale opacity-50 contrast-125' : ''
+            }`}
+            referrerPolicy="no-referrer"
+          />
+        </picture>
 
-         <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black to-transparent h-24 md:h-32 pointer-events-none"></div>
+        <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black to-transparent h-24 md:h-32 pointer-events-none" />
       </div>
 
       <div className="w-full px-6 md:px-8">
-          {/* BARRA DE AÇÕES E PROGRESSO (MOVIDA PARA BAIXO DO BANNER) */}
+        {/* BARRA DE AÇÕES E PROGRESSO */}
+        {(isModulesTabVisible ||
+          Boolean(effectiveCourse.welcomeVideoUrl) ||
+          (effectiveCourse.contestStatus && effectiveCourse.contestStatus !== 'SEM_PREVISAO')) && (
           <div className="mb-8">
-              <div className="flex flex-col md:flex-row md:items-center gap-4">
-                   {/* Botão de Ação Principal */}
-                   <button 
-                    onClick={() => {
-                        if (isMaintenance) {
-                            toast.error(course.maintenanceMode?.message || 'O conteúdo do curso foi trancado para atualização.');
-                            return;
-                        }
-                        handleContinue();
-                    }}
-                    className={`flex items-center justify-center gap-2 px-8 py-3 rounded-lg font-black text-sm uppercase transition-all shadow-[0_0_20px_rgba(255,255,255,0.3)] shrink-0 ${isMaintenance ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed opacity-50' : 'bg-white hover:bg-gray-200 text-black hover:scale-105'}`}
-                   >
-                       <PlayCircle size={20} fill="currentColor" />
-                       {progress > 0 ? 'CONTINUAR ESTUDOS' : 'INICIAR CURSO'}
-                   </button>
-
-                   {/* Botão de Boas-Vindas (Opcional) */}
-                   {course.welcomeVideoUrl && (
-                      <button 
-                        onClick={() => setIsWelcomeModalOpen(true)}
-                        className="flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white px-8 py-3 rounded-lg font-black text-sm uppercase transition-transform hover:scale-105 border border-zinc-700 shrink-0"
-                      >
-                          <PlaySquare size={20} className="text-[var(--plan-theme)]" />
-                          {course.welcomeButtonTitle || 'BOAS VINDAS'}
-                      </button>
-                   )}
-
-                   <div className="flex items-center gap-4 flex-wrap w-full md:w-auto">
-                      {/* Badge de Status */}
-                      {course.contestStatus && course.contestStatus !== 'SEM_PREVISAO' && (
-                          <div className="flex items-center gap-2 px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-lg text-white font-bold text-xs uppercase shrink-0">
-                              <CheckCircle2 size={16} className="text-green-500" />
-                              <span className="text-gray-300">
-                                {CONTEST_STATUS_LABELS[course.contestStatus]}
-                                {course.contestStatus === 'BANCA_CONTRATADA' && course.examBoard && (
-                                    <span className="text-white ml-1">: {course.examBoard}</span>
-                                )}
-                              </span>
-                          </div>
-                      )}
-
-                      {/* Barra de Progresso */}
-                      <div className="flex-1 min-w-[200px] max-w-md flex items-center gap-4 bg-zinc-900 border border-zinc-800 rounded-lg p-3 px-4">
-                          <span className="text-[10px] font-bold text-gray-400 uppercase hidden sm:block">Progresso</span>
-                          <div className="flex-1 bg-black rounded-full h-1.5 overflow-hidden">
-                              <div className="bg-[var(--plan-theme)] h-full rounded-full transition-all duration-1000 ease-out" style={{ width: `${progress}%` }}></div>
-                          </div>
-                          <span className="text-sm font-black text-white">{progress}%</span>
-                      </div>
-                   </div>
-              </div>
-          </div>
-
-          {/* DASHBOARD DE REVISÕES */}
-          <div className="mb-8">
-            <CourseReviewDashboard courseId={course.id} onReviewNow={handleReviewNow} />
-          </div>
-
-          {/* SISTEMA DE ABAS (NOVO) */}
-          <div className="flex items-center gap-6 md:gap-8 border-b border-gray-800 mb-8 overflow-x-auto scrollbar-none whitespace-nowrap px-1">
-            {(!isInsidePlan || !linkedCourseConfig || linkedCourseConfig.visibleTabs?.includes('MODULES')) && (
-              <button 
+            <div className="flex flex-col md:flex-row md:items-center gap-4">
+              {isModulesTabVisible && (
+                <button
                   onClick={() => {
-                      setActiveTab('MODULES');
-                      setFocusTopicId(null);
+                    if (isMaintenance) {
+                      toast.error(
+                        effectiveCourse.maintenanceMode?.message ||
+                          'O conteúdo do curso foi trancado para atualização.'
+                      );
+                      return;
+                    }
+                    handleContinue();
                   }}
-                  className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0
-                      ${activeTab === 'MODULES' ? 'border-[var(--plan-theme)] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}
-                  `}
-              >
-                  <LayoutList size={16} className="md:w-[18px] md:h-[18px]" />
-                  Módulos do Curso
-              </button>
-            )}
-            
-            {(!isInsidePlan || !linkedCourseConfig || linkedCourseConfig.visibleTabs?.includes('EDITAL')) && (
-              <button 
-                  onClick={() => {
-                      setActiveTab('EDITAL');
-                      setFocusTopicId(null);
-                  }}
-                  className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0
-                      ${activeTab === 'EDITAL' ? 'border-[var(--plan-theme)] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}
-                  `}
-              >
-                  <ListTree size={16} className="md:w-[18px] md:h-[18px]" />
-                  Edital Verticalizado
-              </button>
-            )}
- 
-            {courseLiveEvents.length > 0 && (!isInsidePlan || !linkedCourseConfig || linkedCourseConfig.visibleTabs?.includes('LIVE')) && (
-                <button 
-                    onClick={() => {
-                        setActiveTab('LIVE');
-                        setFocusTopicId(null);
-                    }}
-                    className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0
-                        ${activeTab === 'LIVE' ? 'border-[var(--plan-theme)] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}
-                    `}
+                  className={`flex items-center justify-center gap-2 px-8 py-3 rounded-lg font-black text-sm uppercase transition-all shadow-[0_0_20px_rgba(255,255,255,0.3)] shrink-0 ${
+                    isMaintenance
+                      ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed opacity-50'
+                      : 'bg-white hover:bg-gray-200 text-black hover:scale-105'
+                  }`}
                 >
-                    <Radio size={16} className={`md:w-[18px] md:h-[18px] ${activeTab === 'LIVE' ? 'text-[var(--plan-theme)]' : ''}`} />
-                    Eventos ao Vivo
+                  <PlayCircle size={20} fill="currentColor" />
+                  {progress > 0 ? 'CONTINUAR ESTUDOS' : 'INICIAR CURSO'}
                 </button>
-            )}
- 
-            {course.linkedPresentialId && (!isInsidePlan || !linkedCourseConfig || linkedCourseConfig.visibleTabs?.includes('PRESENTIAL')) && (
-              <button 
-                  onClick={() => {
-                      setActiveTab('PRESENTIAL');
-                      setFocusTopicId(null);
-                  }}
-                  className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0
-                      ${activeTab === 'PRESENTIAL' ? 'border-[var(--plan-theme)] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}
-                  `}
-              >
-                  <Users size={16} className={`md:w-[18px] md:h-[18px] ${activeTab === 'PRESENTIAL' ? 'text-[var(--plan-theme)]' : ''}`} />
-                  {course.linkedPresentialTabName || 'AULAS PRESENCIAIS'}
-              </button>
-            )}
+              )}
 
-            {(!isInsidePlan || !linkedCourseConfig || linkedCourseConfig.visibleTabs?.includes('ANNOUNCEMENTS')) && (
-              <button 
-                  onClick={() => {
-                      setActiveTab('ANNOUNCEMENTS');
-                      setFocusTopicId(null);
-                  }}
-                  className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0
-                      ${activeTab === 'ANNOUNCEMENTS' ? 'border-[var(--plan-theme)] text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}
-                  `}
-              >
-                  <Megaphone size={16} className={`md:w-[18px] md:h-[18px] ${activeTab === 'ANNOUNCEMENTS' ? 'text-[var(--plan-theme)]' : ''}`} />
-                  Avisos
-                  {unreadAnnouncementsCount > 0 && (
-                    <span className="bg-red-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full animate-pulse">
-                      {unreadAnnouncementsCount}
-                    </span>
+              {effectiveCourse.welcomeVideoUrl && (
+                <button
+                  onClick={() => setIsWelcomeModalOpen(true)}
+                  className="flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white px-8 py-3 rounded-lg font-black text-sm uppercase transition-transform hover:scale-105 border border-zinc-700 shrink-0"
+                >
+                  <PlaySquare size={20} className="text-[var(--plan-theme)]" />
+                  {effectiveCourse.welcomeButtonTitle || 'BOAS VINDAS'}
+                </button>
+              )}
+
+              <div className="flex items-center gap-4 flex-wrap w-full md:w-auto">
+                {effectiveCourse.contestStatus &&
+                  effectiveCourse.contestStatus !== 'SEM_PREVISAO' && (
+                    <div className="flex items-center gap-2 px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-lg text-white font-bold text-xs uppercase shrink-0">
+                      <CheckCircle2 size={16} className="text-green-500" />
+                      <span className="text-gray-300">
+                        {CONTEST_STATUS_LABELS[effectiveCourse.contestStatus]}
+                        {effectiveCourse.contestStatus === 'BANCA_CONTRATADA' &&
+                          effectiveCourse.examBoard && (
+                            <span className="text-white ml-1">: {effectiveCourse.examBoard}</span>
+                          )}
+                      </span>
+                    </div>
                   )}
-              </button>
-            )}
+
+                {isModulesTabVisible && (
+                  <div className="flex-1 min-w-[200px] max-w-md flex items-center gap-4 bg-zinc-900 border border-zinc-800 rounded-lg p-3 px-4">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase hidden sm:block">
+                      Progresso
+                    </span>
+                    <div className="flex-1 bg-black rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className="bg-[var(--plan-theme)] h-full rounded-full transition-all duration-1000 ease-out"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                    <span className="text-sm font-black text-white">{progress}%</span>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
+        )}
 
-          {/* CONTEÚDO CONDICIONAL */}
-          <div>
-              {activeTab === 'MODULES' ? (
-                  // VISÃO DOS MÓDULOS E BLOCOS
-                  loading ? (
-                      <div className="flex gap-4 overflow-hidden">
-                          {[1,2,3].map(i => <div key={i} className="w-60 h-[300px] bg-zinc-900 rounded-lg animate-pulse" />)}
-                      </div>
-                  ) : selectedGroupId ? (
-                      // VISÃO INTERNA DO BLOCO SELECIONADO
-                      (() => {
-                        const activeGroup = moduleGroups.find(g => g.id === selectedGroupId);
-                        const currentGroupModules = modules.filter(m => m.groupId === selectedGroupId);
-                        return (
-                          <div className="space-y-6 animate-in fade-in">
-                            {/* Barra de Navegação do Bloco */}
-                            <div className="flex items-center justify-between gap-4 bg-purple-950/20 border border-purple-900/40 p-4 rounded-xl">
-                              <div className="flex items-center gap-3">
-                                <button
-                                  onClick={() => setSelectedGroupId(null)}
-                                  className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded-lg border border-zinc-700 text-xs font-bold uppercase flex items-center gap-2 transition-all shadow"
-                                >
-                                  <ArrowLeft size={14} /> Voltar aos Blocos
-                                </button>
-                                <div className="border-l border-zinc-800 pl-3">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-purple-400 font-black text-[10px] uppercase tracking-wider flex items-center gap-1">
-                                      <Layers size={11} /> Bloco de Disciplinas
-                                    </span>
-                                    <span className="bg-purple-900/60 text-purple-200 text-[10px] font-bold px-2 py-0.5 rounded-full border border-purple-700/50">
-                                      {currentGroupModules.length} {currentGroupModules.length === 1 ? 'módulo' : 'módulos'}
-                                    </span>
-                                  </div>
-                                  <h3 className="text-white font-black text-lg uppercase drop-shadow-sm">
-                                    {activeGroup?.title || 'Bloco Selecionado'}
-                                  </h3>
-                                </div>
-                              </div>
-                            </div>
+        {/* DASHBOARD DE REVISÕES (VINCULADO AO EDITAL) */}
+        {isEditalTabVisible && (
+          <div className="mb-8">
+            <CourseReviewDashboard courseId={effectiveCourse.id} onReviewNow={handleReviewNow} />
+          </div>
+        )}
 
-                            {/* Cards dos Módulos do Bloco */}
-                            {currentGroupModules.length === 0 ? (
-                              <div className="text-zinc-500 italic px-1 text-sm border-l-2 border-purple-900 pl-4 py-4 bg-purple-950/10 rounded-r-xl">
-                                Nenhum módulo disponível neste bloco no momento.
-                              </div>
-                            ) : (
-                              <div className="flex gap-4 md:gap-6 overflow-x-auto pb-8 scrollbar-thin scrollbar-thumb-purple-900 scrollbar-track-transparent px-1">
-                                {currentGroupModules.map(module => (
-                                  <StudentModuleCard 
-                                    key={module.id} 
-                                    module={module} 
-                                    onClick={(m) => {
-                                      if (isMaintenance) {
-                                        toast.error(course.maintenanceMode?.message || 'O conteúdo do curso foi trancado para atualização.');
-                                        return;
-                                      }
-                                      setSelectedModule(m);
-                                    }}
-                                    isLocked={isMaintenance}
-                                  />
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()
-                  ) : (
-                      // VISÃO GERAL (SESSÕES TEMÁTICAS COM ACORDEÃO E LINHAS UNIFICADAS)
-                      (() => {
-                        const rootModules = modules.filter(m => !m.groupId);
-                        const hasSections = sections.length > 0;
-                        const hasGroups = moduleGroups.length > 0;
-                        const hasRootModules = rootModules.length > 0;
+        {/* SISTEMA DE ABAS DINÂMICO (NATIVAS + TURMA PRESENCIAL COMPARTILHADA) */}
+        <div className="flex items-center gap-6 md:gap-8 border-b border-gray-800 mb-8 overflow-x-auto scrollbar-none whitespace-nowrap px-1">
+          {availableTabs.map((tab) => {
+            const IconComp = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => handleSelectCourseTab(tab.id)}
+                className={`flex items-center gap-2 pb-4 px-1 border-b-2 font-black text-[10px] md:text-xs uppercase tracking-widest transition-all shrink-0 ${
+                  isActive
+                    ? 'border-[var(--plan-theme)] text-white'
+                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                <IconComp
+                  size={16}
+                  className={`md:w-[18px] md:h-[18px] ${
+                    isActive ? 'text-[var(--plan-theme)]' : ''
+                  }`}
+                />
+                <span>{tab.label}</span>
+                {typeof tab.badge === 'number' && tab.badge > 0 && (
+                  <span
+                    className={`text-[9px] font-black px-1.5 py-0.5 rounded-full tabular-nums ${
+                      tab.badgeTone === 'red'
+                        ? 'bg-red-600 text-white animate-pulse'
+                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/35'
+                    }`}
+                  >
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
-                        if (!hasSections && !hasGroups && !hasRootModules) {
-                          return (
-                            <div className="text-zinc-500 italic px-1 text-sm border-l-2 border-zinc-800 pl-4 py-2">
-                              Nenhum módulo ou bloco disponível neste curso.
-                            </div>
-                          );
-                        }
-
-                        // Função para renderizar uma linha de itens unificados (Blocos e Módulos juntos lado a lado na mesma linha)
-                        const renderUnifiedRow = (sectionIdFilter: string | null) => {
-                          const rowGroups = moduleGroups.filter(g => (g.sectionId || null) === sectionIdFilter);
-                          const rowModules = rootModules.filter(m => (m.sectionId || null) === sectionIdFilter);
-
-                          const rowItems = [
-                            ...rowGroups.map(g => ({
-                              type: 'group' as const,
-                              id: g.id,
-                              order: g.order ?? 999,
-                              group: g,
-                              moduleCount: modules.filter(m => m.groupId === g.id).length
-                            })),
-                            ...rowModules.map(m => ({
-                              type: 'module' as const,
-                              id: m.id,
-                              order: m.order ?? 999,
-                              module: m
-                            }))
-                          ].sort((a, b) => a.order - b.order);
-
-                          if (rowItems.length === 0) {
-                            return (
-                              <div className="py-4 text-zinc-600 italic text-xs pl-2">
-                                Nenhum conteúdo cadastrado nesta sessão.
-                              </div>
-                            );
-                          }
-
-                          return (
-                            <div className="flex gap-4 md:gap-6 overflow-x-auto pb-4 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent px-1">
-                              {rowItems.map(item => {
-                                if (item.type === 'group') {
-                                  return (
-                                    <StudentModuleGroupCard 
-                                      key={item.id} 
-                                      group={item.group} 
-                                      moduleCount={item.moduleCount}
-                                      onClick={(g) => {
-                                        if (isMaintenance) {
-                                          toast.error(course.maintenanceMode?.message || 'O conteúdo do curso foi trancado para atualização.');
-                                          return;
-                                        }
-                                        setSelectedGroupId(g.id);
-                                      }}
-                                      isMaintenanceLocked={isMaintenance}
-                                    />
-                                  );
-                                }
-                                return (
-                                  <StudentModuleCard 
-                                    key={item.id} 
-                                    module={item.module} 
-                                    onClick={(m) => {
-                                      if (isMaintenance) {
-                                        toast.error(course.maintenanceMode?.message || 'O conteúdo do curso foi trancado para atualização.');
-                                        return;
-                                      }
-                                      setSelectedModule(m);
-                                    }}
-                                    isLocked={isMaintenance}
-                                  />
-                                );
-                              })}
-                            </div>
-                          );
-                        };
-
-                        // Se NÃO houver sessões criadas: exibe todos os itens de primeiro nível (blocos e módulos avulsos) na mesma linha horizontal
-                        if (!hasSections) {
-                          const allRootItems = [
-                            ...moduleGroups.map(g => ({
-                              type: 'group' as const,
-                              id: g.id,
-                              order: g.order ?? 999,
-                              group: g,
-                              moduleCount: modules.filter(m => m.groupId === g.id).length
-                            })),
-                            ...rootModules.map(m => ({
-                              type: 'module' as const,
-                              id: m.id,
-                              order: m.order ?? 999,
-                              module: m
-                            }))
-                          ].sort((a, b) => a.order - b.order);
-
-                          return (
-                            <div className="flex gap-4 md:gap-6 overflow-x-auto pb-8 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent px-1">
-                              {allRootItems.map(item => {
-                                if (item.type === 'group') {
-                                  return (
-                                    <StudentModuleGroupCard 
-                                      key={item.id} 
-                                      group={item.group} 
-                                      moduleCount={item.moduleCount}
-                                      onClick={(g) => {
-                                        if (isMaintenance) {
-                                          toast.error(course.maintenanceMode?.message || 'O conteúdo do curso foi trancado para atualização.');
-                                          return;
-                                        }
-                                        setSelectedGroupId(g.id);
-                                      }}
-                                      isMaintenanceLocked={isMaintenance}
-                                    />
-                                  );
-                                }
-                                return (
-                                  <StudentModuleCard 
-                                    key={item.id} 
-                                    module={item.module} 
-                                    onClick={(m) => {
-                                      if (isMaintenance) {
-                                        toast.error(course.maintenanceMode?.message || 'O conteúdo do curso foi trancado para atualização.');
-                                        return;
-                                      }
-                                      setSelectedModule(m);
-                                    }}
-                                    isLocked={isMaintenance}
-                                  />
-                                );
-                              })}
-                            </div>
-                          );
-                        }
-
-                        // Se EXISTEM sessões criadas: exibe cada sessão com Acordeão Inteligente
-                        const unassignedGroups = moduleGroups.filter(g => !g.sectionId);
-                        const unassignedModules = rootModules.filter(m => !m.sectionId);
-                        const hasUnassigned = unassignedGroups.length > 0 || unassignedModules.length > 0;
-
-                        return (
-                          <div className="space-y-6">
-                            {sections.map(section => {
-                              const isCollapsed = !!collapsedSections[section.id];
-                              const sectionGroups = moduleGroups.filter(g => g.sectionId === section.id);
-                              const sectionModules = rootModules.filter(m => m.sectionId === section.id);
-                              const totalItems = sectionGroups.length + sectionModules.length;
-
-                              return (
-                                <div key={section.id} className="bg-zinc-950/40 border border-zinc-800/80 rounded-2xl p-4 md:p-5 transition-all">
-                                  {/* Cabeçalho do Acordeão Inteligente */}
-                                  <button
-                                    onClick={() => toggleSectionCollapse(section.id)}
-                                    className="w-full flex items-center justify-between text-left group hover:opacity-90 transition-all cursor-pointer"
-                                  >
-                                    <div className="flex items-center gap-3">
-                                      <div className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 group-hover:text-white transition-colors">
-                                        {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-                                      </div>
-                                      <h3 className="text-white font-black text-sm md:text-base uppercase tracking-wider flex items-center gap-2">
-                                        {section.title}
-                                      </h3>
-                                      <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-zinc-900 text-zinc-400 border border-zinc-800">
-                                        {totalItems} {totalItems === 1 ? 'item' : 'itens'}
-                                      </span>
-                                    </div>
-                                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 group-hover:text-zinc-300 transition-colors">
-                                      {isCollapsed ? 'Expandir' : 'Recolher'}
-                                    </span>
-                                  </button>
-
-                                  {/* Linha Horizontal Unificada de Blocos e Módulos */}
-                                  <AnimatePresence initial={false}>
-                                    {!isCollapsed && (
-                                      <motion.div
-                                        initial={{ height: 0, opacity: 0 }}
-                                        animate={{ height: 'auto', opacity: 1 }}
-                                        exit={{ height: 0, opacity: 0 }}
-                                        transition={{ duration: 0.2 }}
-                                        className="overflow-hidden mt-4 pt-4 border-t border-zinc-800/60"
-                                      >
-                                        {renderUnifiedRow(section.id)}
-                                      </motion.div>
-                                    )}
-                                  </AnimatePresence>
-                                </div>
-                              );
+        {/* CONTEÚDO CONDICIONAL DA ABA ATIVA */}
+        <div>
+          {activeTab === 'MODULES' ? (
+            loading ? (
+              <div className="flex gap-4 overflow-hidden">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="w-60 h-[300px] bg-zinc-900 rounded-lg animate-pulse" />
+                ))}
+              </div>
+            ) : (
+              <StudentCourseModulesCatalog
+                modules={modules}
+                moduleGroups={moduleGroups}
+                sections={sections}
+                selectedGroupId={selectedGroupId}
+                onSelectGroup={setSelectedGroupId}
+                onSelectModule={setSelectedModule}
+                isMaintenance={isMaintenance}
+                maintenanceMessage={effectiveCourse.maintenanceMode?.message}
+                emptyMessage="Nenhum módulo ou bloco disponível neste curso."
+              />
+            )
+          ) : activeTab === 'PRESENTIAL_DAILY_GOALS' ? (
+            loadingPresential ? (
+              <div className="flex items-center justify-center py-16 gap-3 text-zinc-400 text-xs font-bold uppercase tracking-widest">
+                <Loader2 size={20} className="animate-spin text-[var(--plan-theme)]" />
+                Carregando metas diárias da turma presencial...
+              </div>
+            ) : linkedClass ? (
+              <StudentPresentialDailyGoals
+                classId={linkedClass.id}
+                masterClassId={linkedClass.masterClassId}
+                linkedSimulatedId={linkedClass.linkedSimulatedId}
+                liveEvents={presentialLiveEvents}
+                onSwitchTab={handleSwitchFromPresentialWidget}
+                onProgressUpdated={() => refreshPresentialDailyBadge()}
+                canOpenSchedule={canOpenPresentialSchedule}
+                canOpenPlanning={canOpenPresentialPlanning}
+                canOpenSimuladosTab={canOpenPresentialSimulados}
+                canOpenLiveTab={canOpenAnyLive}
+              />
+            ) : (
+              <div className="p-8 text-center bg-zinc-900/40 border border-zinc-800 rounded-2xl text-zinc-400 text-sm">
+                A turma presencial vinculada não foi encontrada.
+              </div>
+            )
+          ) : activeTab === 'PRESENTIAL_SCHEDULE' ? (
+            loadingPresential ? (
+              <div className="flex items-center justify-center py-16 gap-3 text-zinc-400 text-xs font-bold uppercase tracking-widest">
+                <Loader2 size={20} className="animate-spin text-[var(--plan-theme)]" />
+                Carregando cronograma da turma presencial...
+              </div>
+            ) : linkedClass ? (
+              <StudentClassSchedule
+                classId={linkedClass.id}
+                masterClassId={linkedClass.masterClassId}
+                linkedSimulatedId={linkedClass.linkedSimulatedId}
+                onSwitchTab={handleSwitchFromPresentialWidget}
+                onProgressUpdated={() => refreshPresentialDailyBadge()}
+                canOpenPlanning={canOpenPresentialPlanning}
+                canOpenSimuladosTabOverride={canOpenPresentialSimulados}
+              />
+            ) : (
+              <div className="p-8 text-center bg-zinc-900/40 border border-zinc-800 rounded-2xl text-zinc-400 text-sm">
+                A turma presencial vinculada não foi encontrada.
+              </div>
+            )
+          ) : activeTab === 'PRESENTIAL_PLANNING' ? (
+            loadingPresential ? (
+              <div className="flex items-center justify-center py-16 gap-3 text-zinc-400 text-xs font-bold uppercase tracking-widest">
+                <Loader2 size={20} className="animate-spin text-[var(--plan-theme)]" />
+                Carregando planejamento pedagógico...
+              </div>
+            ) : linkedClass ? (
+              <StudentPedagogicalPlanning
+                classId={linkedClass.id}
+                masterClassId={linkedClass.masterClassId}
+                totalMeetings={linkedClass.totalMeetings}
+                subjectGroups={linkedClass.subjectGroups}
+              />
+            ) : (
+              <div className="p-8 text-center bg-zinc-900/40 border border-zinc-800 rounded-2xl text-zinc-400 text-sm">
+                A turma presencial vinculada não foi encontrada.
+              </div>
+            )
+          ) : activeTab === 'EDITAL' ? (
+            <StudentCourseEdital
+              courseId={effectiveCourse.id}
+              planId={currentPlanId}
+              focusTopicId={focusTopicId}
+              isMaintenance={isMaintenance}
+              maintenanceMessage={effectiveCourse.maintenanceMode?.message}
+            />
+          ) : activeTab === 'PRESENTIAL' ? (
+            loadingPresential ? (
+              <div className="flex gap-4 overflow-hidden">
+                {[1, 2].map((i) => (
+                  <div key={i} className="w-60 h-[300px] bg-zinc-900 rounded-lg animate-pulse" />
+                ))}
+              </div>
+            ) : (
+              <StudentCourseModulesCatalog
+                modules={presentialModules}
+                moduleGroups={presentialModuleGroups}
+                sections={presentialSections}
+                selectedGroupId={selectedPresentialGroupId}
+                onSelectGroup={setSelectedPresentialGroupId}
+                onSelectModule={setSelectedPresentialModule}
+                isMaintenance={isMaintenance}
+                maintenanceMessage={effectiveCourse.maintenanceMode?.message}
+                emptyMessage="Nenhum módulo disponível no ambiente de ensino da turma presencial."
+              />
+            )
+          ) : activeTab === 'PRESENTIAL_SIMULADOS' ? (
+            loadingPresential ? (
+              <div className="flex items-center justify-center py-16 gap-3 text-zinc-400 text-xs font-bold uppercase tracking-widest">
+                <Loader2 size={20} className="animate-spin text-[var(--plan-theme)]" />
+                Carregando simulados da turma presencial...
+              </div>
+            ) : linkedClass?.linkedSimulatedId ? (
+              <LinkedSimulatedView simulatedId={linkedClass.linkedSimulatedId} />
+            ) : (
+              <div className="p-10 text-center bg-zinc-900/40 rounded-2xl border border-zinc-800 text-zinc-400 space-y-2">
+                <FileText size={36} className="mx-auto text-zinc-600" />
+                <p className="text-sm font-bold text-zinc-300 uppercase">
+                  Nenhuma turma de simulados vinculada à turma presencial referenciada.
+                </p>
+              </div>
+            )
+          ) : activeTab === 'PRESENTIAL_LIVE' ? (
+            renderLiveEventsGrid(
+              presentialLiveEvents,
+              'Nenhum evento ao vivo programado para a turma presencial vinculada.'
+            )
+          ) : activeTab === 'ANNOUNCEMENTS' ? (
+            <div className="space-y-4 max-w-4xl animate-in fade-in duration-300">
+              {courseAnnouncements.length === 0 ? (
+                <div className="p-8 text-center bg-zinc-900/50 border border-zinc-800 rounded-2xl">
+                  <Megaphone className="w-10 h-10 text-zinc-600 mx-auto mb-3" />
+                  <p className="text-zinc-400 text-sm font-bold uppercase tracking-tight">
+                    Nenhum comunicado até o momento
+                  </p>
+                  <p className="text-zinc-600 text-xs mt-1 font-medium">
+                    Os avisos enviados pela coordenação deste curso aparecerão aqui.
+                  </p>
+                </div>
+              ) : (
+                courseAnnouncements.map((ann) => {
+                  const isRead = currentUser ? ann.readBy?.includes(currentUser.uid) : false;
+                  return (
+                    <div
+                      key={ann.id}
+                      className="bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 rounded-2xl p-6 space-y-3 transition-all"
+                    >
+                      <div className="flex items-center justify-between gap-4 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          {ann.forcePopUp ? (
+                            <span className="bg-amber-500/10 text-amber-500 text-[9px] font-black uppercase px-2 py-0.5 rounded border border-amber-500/20">
+                              Pop-up
+                            </span>
+                          ) : (
+                            <span className="bg-zinc-800 text-zinc-400 text-[9px] font-black uppercase px-2 py-0.5 rounded">
+                              Comunicado
+                            </span>
+                          )}
+                          <span className="text-[11px] font-medium text-zinc-500">
+                            {new Date(ann.createdAt).toLocaleDateString('pt-BR')} às{' '}
+                            {new Date(ann.createdAt).toLocaleTimeString('pt-BR', {
+                              hour: '2-digit',
+                              minute: '2-digit'
                             })}
+                          </span>
+                        </div>
 
-                            {/* Seção de Itens Avulsos (Sem sessão vinculada) */}
-                            {hasUnassigned && (
-                              <div className="bg-zinc-950/40 border border-zinc-800/80 rounded-2xl p-4 md:p-5 transition-all">
-                                <button
-                                  onClick={() => toggleSectionCollapse('unassigned')}
-                                  className="w-full flex items-center justify-between text-left group hover:opacity-90 transition-all cursor-pointer"
-                                >
-                                  <div className="flex items-center gap-3">
-                                    <div className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 group-hover:text-white transition-colors">
-                                      {collapsedSections['unassigned'] ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-                                    </div>
-                                    <h3 className="text-white font-black text-sm md:text-base uppercase tracking-wider flex items-center gap-2">
-                                      Disciplinas Gerais / Outros Módulos
-                                    </h3>
-                                    <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-zinc-900 text-zinc-400 border border-zinc-800">
-                                      {unassignedGroups.length + unassignedModules.length} {unassignedGroups.length + unassignedModules.length === 1 ? 'item' : 'itens'}
-                                    </span>
-                                  </div>
-                                  <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 group-hover:text-zinc-300 transition-colors">
-                                    {collapsedSections['unassigned'] ? 'Expandir' : 'Recolher'}
-                                  </span>
-                                </button>
-
-                                <AnimatePresence initial={false}>
-                                  {!collapsedSections['unassigned'] && (
-                                    <motion.div
-                                      initial={{ height: 0, opacity: 0 }}
-                                      animate={{ height: 'auto', opacity: 1 }}
-                                      exit={{ height: 0, opacity: 0 }}
-                                      transition={{ duration: 0.2 }}
-                                      className="overflow-hidden mt-4 pt-4 border-t border-zinc-800/60"
-                                    >
-                                      {renderUnifiedRow(null)}
-                                    </motion.div>
-                                  )}
-                                </AnimatePresence>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()
-                  )
-              ) : activeTab === 'EDITAL' ? (
-                  // VISÃO DO EDITAL VERTICALIZADO
-                  <StudentCourseEdital 
-                    courseId={course.id} 
-                    planId={currentPlanId}
-                    focusTopicId={focusTopicId}
-                    isMaintenance={isMaintenance}
-                    maintenanceMessage={course.maintenanceMode?.message}
-                  />
-              ) : activeTab === 'PRESENTIAL' ? (
-                  // VISÃO DA TURMA PRESENCIAL VINCULADA (AMBIENTE DE ENSINO - VISUAL MIRROR)
-                  loadingPresential ? (
-                      <div className="flex gap-4 overflow-hidden">
-                          {[1,2].map(i => <div key={i} className="w-60 h-[300px] bg-zinc-900 rounded-lg animate-pulse" />)}
-                      </div>
-                  ) : presentialStructure.length === 0 ? (
-                      <div className="text-zinc-500 italic px-1 text-sm border-l-2 border-zinc-800 pl-4 py-2">Nenhum módulo disponível no momento.</div>
-                  ) : (
-                      <div className="flex gap-4 md:gap-6 overflow-x-auto pb-8 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent px-1">
-                          {presentialStructure.map(mod => (
-                              <StudentModuleCard 
-                                  key={mod.id} 
-                                  module={mod} 
-                                  onClick={(m) => {
-                                      if (isMaintenance) {
-                                          toast.error(course.maintenanceMode?.message || 'O conteúdo do curso foi trancado para atualização.');
-                                          return;
-                                      }
-                                      setSelectedPresentialModule(m);
-                                  }}
-                                  isLocked={isMaintenance}
-                              />
+                        {currentUser &&
+                          (isRead ? (
+                            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                              <CheckCircle size={12} /> Lido
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => markAnnouncementAsRead(ann.id, currentUser.uid)}
+                              className="text-[10px] font-bold text-white bg-red-600 hover:bg-red-700 px-3 py-1 rounded-lg uppercase tracking-wider transition-colors shadow-sm"
+                            >
+                              Marcar como lido
+                            </button>
                           ))}
                       </div>
-                  )
-              ) : activeTab === 'ANNOUNCEMENTS' ? (
-                  // VISÃO DOS AVISOS DO CURSO
-                  <div className="space-y-4 max-w-4xl animate-in fade-in duration-300">
-                    {courseAnnouncements.length === 0 ? (
-                      <div className="p-8 text-center bg-zinc-900/50 border border-zinc-800 rounded-2xl">
-                        <Megaphone className="w-10 h-10 text-zinc-600 mx-auto mb-3" />
-                        <p className="text-zinc-400 text-sm font-bold uppercase tracking-tight">Nenhum comunicado até o momento</p>
-                        <p className="text-zinc-600 text-xs mt-1 font-medium">Os avisos enviados pela coordenação deste curso aparecerão aqui.</p>
+
+                      <h3 className="text-lg font-black text-white uppercase tracking-tight">
+                        {ann.title}
+                      </h3>
+                      <div className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap font-medium">
+                        {ann.content}
                       </div>
-                    ) : (
-                      courseAnnouncements.map((ann) => {
-                        const isRead = currentUser ? ann.readBy?.includes(currentUser.uid) : false;
-                        return (
-                          <div key={ann.id} className="bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 rounded-2xl p-6 space-y-3 transition-all">
-                            <div className="flex items-center justify-between gap-4 flex-wrap">
-                              <div className="flex items-center gap-2">
-                                {ann.forcePopUp ? (
-                                  <span className="bg-amber-500/10 text-amber-500 text-[9px] font-black uppercase px-2 py-0.5 rounded border border-amber-500/20">
-                                    Pop-up
-                                  </span>
-                                ) : (
-                                  <span className="bg-zinc-800 text-zinc-400 text-[9px] font-black uppercase px-2 py-0.5 rounded">
-                                    Comunicado
-                                  </span>
-                                )}
-                                <span className="text-[11px] font-medium text-zinc-500">
-                                  {new Date(ann.createdAt).toLocaleDateString('pt-BR')} às {new Date(ann.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                                </span>
-                              </div>
-
-                              {currentUser && (
-                                isRead ? (
-                                  <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                                    <CheckCircle size={12} /> Lido
-                                  </span>
-                                ) : (
-                                  <button
-                                    onClick={() => markAnnouncementAsRead(ann.id, currentUser.uid)}
-                                    className="text-[10px] font-bold text-white bg-red-600 hover:bg-red-700 px-3 py-1 rounded-lg uppercase tracking-wider transition-colors shadow-sm"
-                                  >
-                                    Marcar como lido
-                                  </button>
-                                )
-                              )}
-                            </div>
-
-                            <h3 className="text-lg font-black text-white uppercase tracking-tight">{ann.title}</h3>
-                            <div className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap font-medium">
-                              {ann.content}
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-              ) : (
-                  // VISÃO DOS EVENTOS AO VIVO
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                      {courseLiveEvents.map((event) => (
-                          <div 
-                              key={event.id}
-                              className="group bg-zinc-900/50 border border-zinc-800 rounded-2xl overflow-hidden hover:border-[var(--plan-theme)]/50 transition-all duration-300 flex flex-col"
-                          >
-                              {/* Thumbnail */}
-                              <div className="relative aspect-video overflow-hidden bg-zinc-800">
-                                  {event.thumbnailUrl ? (
-                                      <img 
-                                          src={event.thumbnailUrl} 
-                                          alt={event.title}
-                                          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
-                                          referrerPolicy="no-referrer"
-                                      />
-                                  ) : (
-                                      <div className="w-full h-full flex items-center justify-center text-zinc-600">
-                                          <Video size={48} />
-                                      </div>
-                                  )}
-                                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60" />
-                                  
-                                  {/* Status Badge */}
-                                  <div className="absolute top-4 left-4">
-                                      {event.status === 'live' ? (
-                                          <div className="flex items-center gap-2 bg-[var(--plan-theme)] text-white px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest animate-pulse shadow-[0_0_15px_rgba(var(--plan-theme-rgb),0.5)]">
-                                              <div className="w-1.5 h-1.5 bg-white rounded-full" />
-                                              Ao Vivo Agora
-                                          </div>
-                                      ) : (
-                                          <div className="flex items-center gap-2 bg-zinc-800/90 backdrop-blur-md text-zinc-300 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border border-zinc-700">
-                                              <Clock size={10} />
-                                              {event.status === 'scheduled' ? 'Agendado' : 'Encerrado'}
-                                          </div>
-                                      )}
-                                  </div>
-                              </div>
-
-                              {/* Info */}
-                              <div className="p-5 flex-1 flex flex-col gap-4">
-                                  <div className="space-y-2">
-                                      <h3 className="text-white font-black text-lg uppercase tracking-tight line-clamp-2 group-hover:text-[var(--plan-theme)] transition-colors">
-                                          {event.title}
-                                      </h3>
-                                      <div className="flex items-center gap-4 text-zinc-500 font-bold text-[10px] uppercase tracking-widest">
-                                          <div className="flex items-center gap-1.5">
-                                              <Calendar size={12} className="text-[var(--plan-theme)]" />
-                                              {event.eventDate.split('-').reverse().join('/')}
-                                          </div>
-                                          <div className="flex items-center gap-1.5">
-                                              <Clock size={12} />
-                                              {event.startTime}
-                                          </div>
-                                      </div>
-                                  </div>
-
-                                  <button 
-                                      onClick={() => navigate(`/app/eventos-ao-vivo/sala/${event.id}`)}
-                                      className={`w-full mt-auto flex items-center justify-center gap-2 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all duration-300 group/btn ${
-                                          event.status === 'live' 
-                                              ? 'bg-[var(--plan-theme)] hover:brightness-110 text-white shadow-lg shadow-[var(--plan-theme)]/20' 
-                                              : 'bg-zinc-800 hover:bg-zinc-700 text-white'
-                                      }`}
-                                  >
-                                      <Play size={14} fill="currentColor" className="group-hover/btn:scale-110 transition-transform" />
-                                      {event.status === 'live' ? 'ACESSAR SALA DE TRANSMISSÃO' : 'VER DETALHES DO EVENTO'}
-                                  </button>
-                              </div>
-                          </div>
-                      ))}
-                  </div>
+                    </div>
+                  );
+                })
               )}
-          </div>
+            </div>
+          ) : (
+            renderLiveEventsGrid(
+              courseLiveEvents,
+              'Nenhum evento ao vivo programado para este curso no momento.'
+            )
+          )}
+        </div>
       </div>
 
       {/* MODAL DE VÍDEO DE BOAS-VINDAS */}
-      {course.welcomeVideoUrl && (
-        <WelcomeVideoModal 
+      {effectiveCourse.welcomeVideoUrl && (
+        <WelcomeVideoModal
           isOpen={isWelcomeModalOpen}
           onClose={() => setIsWelcomeModalOpen(false)}
-          videoUrl={course.welcomeVideoUrl}
-          title={course.welcomeButtonTitle || 'BOAS VINDAS'}
+          videoUrl={effectiveCourse.welcomeVideoUrl}
+          title={effectiveCourse.welcomeButtonTitle || 'BOAS VINDAS'}
         />
       )}
 
       {/* POPUP DE MANUTENÇÃO */}
       {showMaintenancePopup && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
-           <div className="bg-zinc-900 border border-orange-500/30 rounded-3xl p-8 max-w-md w-full shadow-[0_0_50px_rgba(249,115,22,0.15)] text-center relative overflow-hidden group">
-              {/* Background Glow */}
-              <div className="absolute -top-24 -right-24 w-48 h-48 bg-orange-500/10 rounded-full blur-[60px]" />
-              <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-orange-500/10 rounded-full blur-[60px]" />
+          <div className="bg-zinc-900 border border-orange-500/30 rounded-3xl p-8 max-w-md w-full shadow-[0_0_50px_rgba(249,115,22,0.15)] text-center relative overflow-hidden group">
+            <div className="absolute -top-24 -right-24 w-48 h-48 bg-orange-500/10 rounded-full blur-[60px]" />
+            <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-orange-500/10 rounded-full blur-[60px]" />
 
-              <div className="relative space-y-6">
-                <div className="inline-flex p-5 bg-orange-500/10 rounded-full text-orange-500 mb-2">
-                   <Lock size={40} strokeWidth={2.5} />
-                </div>
-                
-                <div className="space-y-3">
-                   <h2 className="text-2xl font-black text-white uppercase tracking-tight">Portal em <span className="text-orange-500">Manutenção</span></h2>
-                   <p className="text-zinc-400 text-sm leading-relaxed font-medium">
-                      {course.maintenanceMode?.message || 'O conteúdo deste curso está sendo atualizado para garantir a melhor experiência de estudo para você.'}
-                   </p>
-                </div>
-
-                {course.maintenanceMode?.endDate && (
-                   <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-4 inline-block w-full">
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Previsão de Retorno</p>
-                      <p className="text-xl font-black text-white uppercase tracking-tight">
-                         {new Date(course.maintenanceMode.endDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}
-                      </p>
-                   </div>
-                )}
-
-                <button 
-                  onClick={() => setShowMaintenancePopup(false)}
-                  className="w-full bg-white hover:bg-zinc-200 text-black py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg"
-                >
-                   Entendi, vou aguardar
-                </button>
+            <div className="relative space-y-6">
+              <div className="inline-flex p-5 bg-orange-500/10 rounded-full text-orange-500 mb-2">
+                <Lock size={40} strokeWidth={2.5} />
               </div>
-           </div>
+
+              <div className="space-y-3">
+                <h2 className="text-2xl font-black text-white uppercase tracking-tight">
+                  Portal em <span className="text-orange-500">Manutenção</span>
+                </h2>
+                <p className="text-zinc-400 text-sm leading-relaxed font-medium">
+                  {effectiveCourse.maintenanceMode?.message ||
+                    'O conteúdo deste curso está sendo atualizado para garantir a melhor experiência de estudo para você.'}
+                </p>
+              </div>
+
+              {effectiveCourse.maintenanceMode?.endDate && (
+                <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-4 inline-block w-full">
+                  <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">
+                    Previsão de Retorno
+                  </p>
+                  <p className="text-xl font-black text-white uppercase tracking-tight">
+                    {new Date(
+                      effectiveCourse.maintenanceMode.endDate + 'T12:00:00'
+                    ).toLocaleDateString('pt-BR', {
+                      day: '2-digit',
+                      month: 'long',
+                      year: 'numeric'
+                    })}
+                  </p>
+                </div>
+              )}
+
+              <button
+                onClick={() => setShowMaintenancePopup(false)}
+                className="w-full bg-white hover:bg-zinc-200 text-black py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg"
+              >
+                Entendi, vou aguardar
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

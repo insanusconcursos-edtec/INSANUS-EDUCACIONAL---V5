@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Play,
@@ -13,7 +14,8 @@ import {
   ChevronRight,
   Check,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Info
 } from 'lucide-react';
 import { GuidedStudyMeta, GuidedStudyProgress } from '../../../types/guidedStudy';
 import { CourseContent } from '../../../types/course';
@@ -28,6 +30,7 @@ interface StudentGuidedStudyModalProps {
   userId: string;
   progress?: GuidedStudyProgress;
   onProgressUpdated?: () => void;
+  isAdminPreview?: boolean;
 }
 
 export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = ({
@@ -37,10 +40,12 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
   classId,
   userId,
   progress,
-  onProgressUpdated
+  onProgressUpdated,
+  isAdminPreview = false
 }) => {
   const [isCompleted, setIsCompleted] = useState<boolean>(!!progress?.completed);
   const [isSaving, setIsSaving] = useState(false);
+  const [showOrientationBanner, setShowOrientationBanner] = useState(true);
 
   // Stopwatch state
   const [secondsElapsed, setSecondsElapsed] = useState<number>(0);
@@ -82,11 +87,12 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
     if (isOpen && meta) {
       setIsCompleted(!!progress?.completed);
       setSecondsElapsed(0);
-      setIsTimerRunning(true);
+      setIsTimerRunning(!isAdminPreview);
       setCurrentCardIndex(0);
       setIsFlipped(false);
       setCardsMastered(0);
       setMapLoadError(null);
+      setShowOrientationBanner(true);
 
       if (meta.type === 'interactive_map') {
         if (meta.interactiveMapJson) {
@@ -104,12 +110,22 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
         setIsLoadingMap(false);
       }
     }
-  }, [isOpen, meta, progress, loadRemoteInteractiveMap]);
+  }, [isOpen, meta, progress, isAdminPreview, loadRemoteInteractiveMap]);
+
+  // Lock body scroll while modal is open so main page never scrolls behind it
+  useEffect(() => {
+    if (!isOpen || !meta) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isOpen, meta]);
 
   // Stopwatch effect
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null;
-    if (isOpen && isTimerRunning && !isCompleted) {
+    if (isOpen && isTimerRunning && !isCompleted && !isAdminPreview) {
       interval = setInterval(() => {
         setSecondsElapsed(prev => prev + 1);
       }, 1000);
@@ -117,7 +133,7 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isOpen, isTimerRunning, isCompleted]);
+  }, [isOpen, isTimerRunning, isCompleted, isAdminPreview]);
 
   if (!isOpen || !meta) return null;
 
@@ -128,11 +144,12 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
   };
 
   const handleToggleCompletion = async () => {
+    if (isAdminPreview || !userId || !meta.id) return;
     try {
       setIsSaving(true);
       const newStatus = !isCompleted;
       const recordedMinutes = Math.max(1, Math.round(secondsElapsed / 60));
-      await guidedStudyService.toggleMetaProgress(userId, classId, meta.id!, newStatus, recordedMinutes);
+      await guidedStudyService.toggleMetaProgress(userId, classId, meta.id, newStatus, recordedMinutes);
       setIsCompleted(newStatus);
       if (onProgressUpdated) onProgressUpdated();
     } catch (err) {
@@ -172,27 +189,44 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
     interactiveMapJson: resolvedMapJson
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+  const modalNode = (
+    <div
+      className={`fixed inset-0 z-[120] bg-black/90 backdrop-blur-md animate-in fade-in duration-150 ${
+        isInteractiveMap
+          ? 'w-screen h-screen p-0 flex flex-col overflow-hidden'
+          : 'flex items-center justify-center p-3 sm:p-6'
+      }`}
+    >
       <div
-        className={`bg-zinc-900 border border-zinc-800 rounded-2xl w-full flex flex-col shadow-2xl overflow-hidden ${
-          isInteractiveMap ? 'max-w-7xl h-[92vh]' : 'max-w-4xl max-h-[92vh]'
+        className={`bg-zinc-900 flex flex-col shadow-2xl overflow-hidden ${
+          isInteractiveMap
+            ? 'w-screen h-screen max-w-none max-h-none rounded-none border-0 bg-zinc-950'
+            : 'w-full max-w-4xl max-h-[92vh] rounded-2xl border border-zinc-800'
         }`}
       >
         {/* Modal Header */}
-        <div className="px-4 sm:px-6 py-3.5 border-b border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950/60 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <span className={`px-2.5 py-1 rounded-lg text-xs font-bold border whitespace-nowrap shrink-0 ${badge.bg} ${badge.text}`}>
+        <div
+          className={`px-4 sm:px-6 border-b border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950 shrink-0 ${
+            isInteractiveMap ? 'py-2.5' : 'py-4'
+          }`}
+        >
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <span
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold border whitespace-nowrap shrink-0 ${badge.bg} ${badge.text}`}
+            >
               {badge.label}
             </span>
-            <div className="min-w-0">
-              <h2 className="text-base sm:text-lg font-bold text-white truncate max-w-2xl" title={meta.title}>
+            <div className="min-w-0 flex-1">
+              <h2
+                className="text-sm sm:text-base md:text-lg font-bold text-white truncate"
+                title={meta.title}
+              >
                 {meta.title}
               </h2>
               <div className="flex items-center gap-2 text-xs text-zinc-400 mt-0.5 tabular-nums flex-wrap">
                 {meta.disciplineName && (
                   <>
-                    <span className="truncate max-w-xs">{meta.disciplineName}</span>
+                    <span className="truncate max-w-xs sm:max-w-md">{meta.disciplineName}</span>
                     <span aria-hidden="true">·</span>
                   </>
                 )}
@@ -201,277 +235,345 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
-            {/* Stopwatch */}
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800/80 border border-zinc-700/80 rounded-xl text-xs text-zinc-300 tabular-nums">
-              <Clock className="w-4 h-4 text-amber-400 shrink-0" />
-              <span className="font-mono font-bold text-white">{formatTimer(secondsElapsed)}</span>
-            </div>
+          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+            {isInteractiveMap && meta.description && !showOrientationBanner && (
+              <button
+                type="button"
+                onClick={() => setShowOrientationBanner(true)}
+                className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                title="Exibir orientação do administrador"
+              >
+                <Info className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">Orientação</span>
+              </button>
+            )}
+
+            {!isAdminPreview && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-300 tabular-nums">
+                <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="font-mono font-bold text-white">{formatTimer(secondsElapsed)}</span>
+              </div>
+            )}
 
             <button
               type="button"
               onClick={onClose}
-              className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors"
+              className="px-2.5 py-1.5 text-zinc-300 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-colors flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap"
+              title="Fechar"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Fechar</span>
             </button>
           </div>
         </div>
 
-        {/* Modal Body */}
-        <div
-          className={`overflow-y-auto flex-1 bg-zinc-900 ${
-            isInteractiveMap ? 'p-3 sm:p-4 space-y-3' : 'p-6 space-y-6'
-          }`}
-        >
-          {/* Description */}
-          {meta.description && (
-            <div className="p-3.5 bg-zinc-950/50 border border-zinc-800 rounded-xl text-sm text-zinc-300 leading-relaxed">
-              <strong className="text-amber-400 block mb-1 text-xs uppercase tracking-wider">
+        {/* Compact Full-Width Orientation Strip for Interactive Map */}
+        {isInteractiveMap && meta.description && showOrientationBanner && (
+          <div className="px-4 sm:px-6 py-2 bg-zinc-900/95 border-b border-zinc-800 flex items-center justify-between gap-3 shrink-0">
+            <div className="text-xs text-zinc-300 leading-relaxed min-w-0 flex-1">
+              <strong className="text-amber-400 uppercase tracking-wider text-[10px] mr-2">
                 Orientação do Administrador:
               </strong>
-              {meta.description}
+              <span>{meta.description}</span>
             </div>
-          )}
+            <button
+              type="button"
+              onClick={() => setShowOrientationBanner(false)}
+              className="text-[11px] font-semibold text-zinc-400 hover:text-white shrink-0 whitespace-nowrap"
+            >
+              Ocultar
+            </button>
+          </div>
+        )}
 
-          {/* 0. TYPE: INTERACTIVE MAP (.JSON) */}
-          {isInteractiveMap && (
-            <div className="w-full">
-              {isLoadingMap ? (
-                <div className="w-full min-h-[420px] rounded-xl bg-zinc-950/60 border border-zinc-800 flex flex-col items-center justify-center gap-3 text-zinc-300">
-                  <Loader2 className="w-7 h-7 animate-spin text-indigo-400" />
-                  <span className="text-xs font-semibold">Carregando Mapa Mental, Quadros, Questões e Flashcards...</span>
-                </div>
-              ) : mapLoadError ? (
-                <div className="w-full min-h-[320px] rounded-xl bg-red-950/25 border border-red-800/50 p-6 flex flex-col items-center justify-center text-center gap-3">
-                  <AlertCircle className="w-8 h-8 text-red-400" />
-                  <p className="text-sm font-semibold text-red-200 max-w-md">{mapLoadError}</p>
-                  {meta.interactiveMapUrl && (
-                    <button
-                      type="button"
-                      onClick={() => loadRemoteInteractiveMap(meta.interactiveMapUrl!)}
-                      className="px-4 py-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-xs font-bold text-red-200 transition-colors"
-                    >
-                      Tentar Novamente
-                    </button>
+        {/* Modal Body */}
+        {isInteractiveMap ? (
+          <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden bg-zinc-950 p-0">
+            {isLoadingMap ? (
+              <div className="w-full flex-1 flex flex-col items-center justify-center gap-3 text-zinc-300">
+                <Loader2 className="w-7 h-7 animate-spin text-indigo-400" />
+                <span className="text-xs font-semibold">
+                  Carregando Mapa Mental, Quadros, Questões e Flashcards...
+                </span>
+              </div>
+            ) : mapLoadError ? (
+              <div className="w-full flex-1 p-6 flex flex-col items-center justify-center text-center gap-3">
+                <AlertCircle className="w-8 h-8 text-red-400" />
+                <p className="text-sm font-semibold text-red-200 max-w-md">{mapLoadError}</p>
+                {meta.interactiveMapUrl && (
+                  <button
+                    type="button"
+                    onClick={() => loadRemoteInteractiveMap(meta.interactiveMapUrl!)}
+                    className="px-4 py-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-xs font-bold text-red-200 transition-colors"
+                  >
+                    Tentar Novamente
+                  </button>
+                )}
+              </div>
+            ) : (
+              <InteractiveLessonPlayer
+                content={interactiveCourseContent}
+                lessonId={lessonScopeId}
+                embeddedInModal
+              />
+            )}
+          </div>
+        ) : (
+          <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-zinc-900">
+            {/* Description for non-JSON metas */}
+            {meta.description && (
+              <div className="p-3.5 bg-zinc-950/50 border border-zinc-800 rounded-xl text-sm text-zinc-300 leading-relaxed">
+                <strong className="text-amber-400 block mb-1 text-xs uppercase tracking-wider">
+                  Orientação do Administrador:
+                </strong>
+                {meta.description}
+              </div>
+            )}
+
+            {/* 1. TYPE: AULA (Panda Player) */}
+            {meta.type === 'aula' && (
+              <div className="space-y-4">
+                <div className="aspect-video w-full bg-black rounded-xl overflow-hidden border border-zinc-800 shadow-xl relative">
+                  {meta.pandaVideoId || meta.pandaVideoUrl ? (
+                    <iframe
+                      src={
+                        meta.pandaVideoUrl
+                          ? meta.pandaVideoUrl
+                          : `https://player-vouto.pandavideo.com.br/embed/?v=${meta.pandaVideoId}`
+                      }
+                      className="w-full h-full border-0"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                      title={meta.title}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 gap-2">
+                      <Play className="w-12 h-12 text-zinc-600" />
+                      <span className="text-xs">Vídeo não vinculado ou em processamento.</span>
+                    </div>
                   )}
                 </div>
-              ) : (
-                <InteractiveLessonPlayer
-                  content={interactiveCourseContent}
-                  lessonId={lessonScopeId}
-                  embeddedInModal
-                />
-              )}
-            </div>
-          )}
+              </div>
+            )}
 
-          {/* 1. TYPE: AULA (Panda Player) */}
-          {meta.type === 'aula' && (
-            <div className="space-y-4">
-              <div className="aspect-video w-full bg-black rounded-xl overflow-hidden border border-zinc-800 shadow-xl relative">
-                {meta.pandaVideoId || meta.pandaVideoUrl ? (
-                  <iframe
-                    src={
-                      meta.pandaVideoUrl 
-                        ? meta.pandaVideoUrl 
-                        : `https://player-vouto.pandavideo.com.br/embed/?v=${meta.pandaVideoId}`
-                    }
-                    className="w-full h-full border-0"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                    title={meta.title}
-                  />
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 gap-2">
-                    <Play className="w-12 h-12 text-zinc-600" />
-                    <span className="text-xs">Vídeo não vinculado ou em processamento.</span>
+            {/* 2. TYPE: MATERIAL, QUESTÕES, LEI SECA, RESUMO */}
+            {(meta.type === 'material' ||
+              meta.type === 'questoes' ||
+              meta.type === 'lei_seca' ||
+              meta.type === 'resumo') && (
+              <div className="space-y-4">
+                {meta.articles && (
+                  <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-300 flex items-center gap-2">
+                    <Scale className="w-4 h-4 text-purple-400 shrink-0" />
+                    <span>
+                      <strong>Artigos Recomendados:</strong> {meta.articles}
+                    </span>
+                  </div>
+                )}
+
+                {meta.questionCount && meta.questionCount > 0 ? (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex items-center gap-2 tabular-nums">
+                    <HelpCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>
+                      <strong>Meta de Exercícios:</strong> Resolver {meta.questionCount} questões propostas.
+                    </span>
+                  </div>
+                ) : null}
+
+                {/* PDF Viewer / Download */}
+                {meta.pdfUrl ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between p-3 bg-zinc-800/80 border border-zinc-700 rounded-xl">
+                      <div className="flex items-center gap-2 text-xs text-amber-400 font-bold truncate">
+                        <FileText className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{meta.pdfName || 'Material em PDF'}</span>
+                      </div>
+                      <a
+                        href={meta.pdfUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Baixar PDF</span>
+                      </a>
+                    </div>
+
+                    <div className="w-full h-96 bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden">
+                      <iframe
+                        src={`${meta.pdfUrl}#toolbar=1`}
+                        className="w-full h-full border-0"
+                        title={meta.pdfName || 'PDF'}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* External Link */}
+                {meta.externalLink && (
+                  <div className="pt-2">
+                    <a
+                      href={meta.externalLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full p-4 bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 rounded-xl text-xs text-white font-bold flex items-center justify-between transition-colors shadow-md"
+                    >
+                      <div className="flex items-center gap-2">
+                        <ExternalLink className="w-4 h-4 text-amber-400" />
+                        <span>Acessar Link do Caderno de Questões / Material Externo</span>
+                      </div>
+                      <span className="text-amber-400">Abrir &rarr;</span>
+                    </a>
                   </div>
                 )}
               </div>
-            </div>
-          )}
+            )}
 
-          {/* 2. TYPE: MATERIAL, QUESTÕES, LEI SECA, RESUMO */}
-          {(meta.type === 'material' || meta.type === 'questoes' || meta.type === 'lei_seca' || meta.type === 'resumo') && (
-            <div className="space-y-4">
-              {meta.articles && (
-                <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-300 flex items-center gap-2">
-                  <Scale className="w-4 h-4 text-purple-400 shrink-0" />
-                  <span><strong>Artigos Recomendados:</strong> {meta.articles}</span>
-                </div>
-              )}
-
-              {meta.questionCount && meta.questionCount > 0 ? (
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex items-center gap-2 tabular-nums">
-                  <HelpCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span><strong>Meta de Exercícios:</strong> Resolver {meta.questionCount} questões propostas.</span>
-                </div>
-              ) : null}
-
-              {/* PDF Viewer / Download */}
-              {meta.pdfUrl ? (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 bg-zinc-800/80 border border-zinc-700 rounded-xl">
-                    <div className="flex items-center gap-2 text-xs text-amber-400 font-bold truncate">
-                      <FileText className="w-4 h-4 shrink-0" />
-                      <span className="truncate">{meta.pdfName || 'Material em PDF'}</span>
+            {/* 3. TYPE: FLASHCARDS */}
+            {meta.type === 'flashcards' && (
+              <div className="space-y-6">
+                {cards.length === 0 ? (
+                  <div className="p-8 text-center bg-zinc-950/40 rounded-xl border border-zinc-800 text-zinc-500 text-xs">
+                    Nenhum flashcard cadastrado nesta meta.
+                  </div>
+                ) : (
+                  <div className="space-y-4 max-w-xl mx-auto">
+                    <div className="flex items-center justify-between text-xs font-bold text-zinc-400 tabular-nums">
+                      <span>
+                        Card {currentCardIndex + 1} de {cards.length}
+                      </span>
+                      <span className="text-pink-400">{cardsMastered} Dominados</span>
                     </div>
-                    <a
-                      href={meta.pdfUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+
+                    {/* Card Flip Container */}
+                    <div
+                      onClick={() => setIsFlipped(!isFlipped)}
+                      className="relative w-full h-64 bg-gradient-to-br from-zinc-900 to-zinc-950 border border-zinc-700/80 hover:border-pink-500/50 rounded-2xl p-6 flex flex-col items-center justify-center text-center cursor-pointer shadow-2xl transition-all group"
                     >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Baixar PDF</span>
-                    </a>
-                  </div>
+                      <span className="absolute top-4 left-4 text-[10px] font-extrabold uppercase tracking-widest text-pink-500/80 bg-pink-500/10 px-2 py-0.5 rounded border border-pink-500/20">
+                        {isFlipped ? 'VERSO (RESPOSTA)' : 'FRENTE (PERGUNTA)'}
+                      </span>
 
-                  <div className="w-full h-96 bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden">
-                    <iframe
-                      src={`${meta.pdfUrl}#toolbar=1`}
-                      className="w-full h-full border-0"
-                      title={meta.pdfName || 'PDF'}
-                    />
-                  </div>
-                </div>
-              ) : null}
+                      <p className="text-base font-bold text-white leading-relaxed px-4">
+                        {isFlipped ? currentCard?.back : currentCard?.front}
+                      </p>
 
-              {/* External Link */}
-              {meta.externalLink && (
-                <div className="pt-2">
-                  <a
-                    href={meta.externalLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full p-4 bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 rounded-xl text-xs text-white font-bold flex items-center justify-between transition-colors shadow-md"
-                  >
-                    <div className="flex items-center gap-2">
-                      <ExternalLink className="w-4 h-4 text-amber-400" />
-                      <span>Acessar Link do Caderno de Questões / Material Externo</span>
+                      <span className="absolute bottom-4 text-[10px] text-zinc-500 group-hover:text-pink-400 transition-colors">
+                        Clique para virar o card
+                      </span>
                     </div>
-                    <span className="text-amber-400">Abrir &rarr;</span>
-                  </a>
-                </div>
-              )}
-            </div>
-          )}
 
-          {/* 3. TYPE: FLASHCARDS */}
-          {meta.type === 'flashcards' && (
-            <div className="space-y-6">
-              {cards.length === 0 ? (
-                <div className="p-8 text-center bg-zinc-950/40 rounded-xl border border-zinc-800 text-zinc-500 text-xs">
-                  Nenhum flashcard cadastrado nesta meta.
-                </div>
-              ) : (
-                <div className="space-y-4 max-w-xl mx-auto">
-                  <div className="flex items-center justify-between text-xs font-bold text-zinc-400 tabular-nums">
-                    <span>Card {currentCardIndex + 1} de {cards.length}</span>
-                    <span className="text-pink-400">{cardsMastered} Dominados</span>
+                    {/* Controls */}
+                    <div className="flex items-center justify-between gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsFlipped(false);
+                          setCurrentCardIndex(prev => Math.max(0, prev - 1));
+                        }}
+                        disabled={currentCardIndex === 0}
+                        className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-xs font-bold text-zinc-300 rounded-xl flex items-center gap-1 transition-colors whitespace-nowrap"
+                      >
+                        <ChevronLeft className="w-4 h-4" /> Anterior
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCardsMastered(prev => prev + 1);
+                          setIsFlipped(false);
+                          if (currentCardIndex < cards.length - 1) {
+                            setCurrentCardIndex(prev => prev + 1);
+                          }
+                        }}
+                        className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                      >
+                        <Check className="w-4 h-4" /> Sabia Esta!
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsFlipped(false);
+                          if (currentCardIndex < cards.length - 1) {
+                            setCurrentCardIndex(prev => prev + 1);
+                          }
+                        }}
+                        disabled={currentCardIndex === cards.length - 1}
+                        className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-xs font-bold text-zinc-300 rounded-xl flex items-center gap-1 transition-colors whitespace-nowrap"
+                      >
+                        Próximo <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-
-                  {/* Card Flip Container */}
-                  <div
-                    onClick={() => setIsFlipped(!isFlipped)}
-                    className="relative w-full h-64 bg-gradient-to-br from-zinc-900 to-zinc-950 border border-zinc-700/80 hover:border-pink-500/50 rounded-2xl p-6 flex flex-col items-center justify-center text-center cursor-pointer shadow-2xl transition-all group"
-                  >
-                    <span className="absolute top-4 left-4 text-[10px] font-extrabold uppercase tracking-widest text-pink-500/80 bg-pink-500/10 px-2 py-0.5 rounded border border-pink-500/20">
-                      {isFlipped ? 'VERSO (RESPOSTA)' : 'FRENTE (PERGUNTA)'}
-                    </span>
-
-                    <p className="text-base font-bold text-white leading-relaxed px-4">
-                      {isFlipped ? currentCard?.back : currentCard?.front}
-                    </p>
-
-                    <span className="absolute bottom-4 text-[10px] text-zinc-500 group-hover:text-pink-400 transition-colors">
-                      Clique para virar o card
-                    </span>
-                  </div>
-
-                  {/* Controls */}
-                  <div className="flex items-center justify-between gap-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsFlipped(false);
-                        setCurrentCardIndex(prev => Math.max(0, prev - 1));
-                      }}
-                      disabled={currentCardIndex === 0}
-                      className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-xs font-bold text-zinc-300 rounded-xl flex items-center gap-1 transition-colors whitespace-nowrap"
-                    >
-                      <ChevronLeft className="w-4 h-4" /> Anterior
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCardsMastered(prev => prev + 1);
-                        setIsFlipped(false);
-                        if (currentCardIndex < cards.length - 1) {
-                          setCurrentCardIndex(prev => prev + 1);
-                        }
-                      }}
-                      className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors whitespace-nowrap"
-                    >
-                      <Check className="w-4 h-4" /> Sabia Esta!
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsFlipped(false);
-                        if (currentCardIndex < cards.length - 1) {
-                          setCurrentCardIndex(prev => prev + 1);
-                        }
-                      }}
-                      disabled={currentCardIndex === cards.length - 1}
-                      className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-xs font-bold text-zinc-300 rounded-xl flex items-center gap-1 transition-colors whitespace-nowrap"
-                    >
-                      Próximo <ChevronRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-        </div>
-
-        {/* Modal Footer */}
-        <div className="px-4 sm:px-6 py-3.5 border-t border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950/60 shrink-0">
-          <div className="text-xs text-zinc-400 tabular-nums">
-            {isCompleted ? (
-              <span className="text-emerald-400 font-bold flex items-center gap-1.5">
-                <CheckCircle className="w-4 h-4 shrink-0" /> Meta Concluída com sucesso!
-              </span>
-            ) : (
-              <span>
-                Tempo de estudo registrado:{' '}
-                <strong className="text-white">{Math.max(1, Math.round(secondsElapsed / 60))} min</strong>
-              </span>
+                )}
+              </div>
             )}
           </div>
+        )}
 
-          <button
-            type="button"
-            onClick={handleToggleCompletion}
-            disabled={isSaving}
-            className={`
-              px-5 sm:px-6 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-lg transition-all flex items-center gap-2 whitespace-nowrap shrink-0
-              ${isCompleted 
-                ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700' 
-                : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-black hover:brightness-110'}
-            `}
-          >
-            <CheckCircle className="w-4 h-4 shrink-0" />
-            <span>{isCompleted ? 'Desmarcar Conclusão' : 'Concluir Meta (Estudo Guiado)'}</span>
-          </button>
+        {/* Modal Footer */}
+        <div
+          className={`px-4 sm:px-6 border-t border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950 shrink-0 ${
+            isInteractiveMap ? 'py-2.5' : 'py-3.5'
+          }`}
+        >
+          {isAdminPreview ? (
+            <>
+              <span className="text-xs text-zinc-400">
+                Pré-visualização do conteúdo da meta pelo Administrador
+              </span>
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-xs font-bold transition-colors whitespace-nowrap shrink-0"
+              >
+                Fechar Visualização
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="text-xs text-zinc-400 tabular-nums">
+                {isCompleted ? (
+                  <span className="text-emerald-400 font-bold flex items-center gap-1.5">
+                    <CheckCircle className="w-4 h-4 shrink-0" /> Meta Concluída com sucesso!
+                  </span>
+                ) : (
+                  <span>
+                    Tempo de estudo registrado:{' '}
+                    <strong className="text-white">{Math.max(1, Math.round(secondsElapsed / 60))} min</strong>
+                  </span>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleToggleCompletion}
+                disabled={isSaving}
+                className={`
+                  px-5 sm:px-6 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-lg transition-all flex items-center gap-2 whitespace-nowrap shrink-0
+                  ${
+                    isCompleted
+                      ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
+                      : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-black hover:brightness-110'
+                  }
+                `}
+              >
+                <CheckCircle className="w-4 h-4 shrink-0" />
+                <span>{isCompleted ? 'Desmarcar Conclusão' : 'Concluir Meta (Estudo Guiado)'}</span>
+              </button>
+            </>
+          )}
         </div>
-
       </div>
     </div>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalNode, document.body);
+  }
+
+  return modalNode;
 };
+
 

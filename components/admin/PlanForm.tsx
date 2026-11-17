@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Upload, Image as ImageIcon, Loader2, Link as LinkIcon, GraduationCap, Headphones } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { X, Save, Upload, Image as ImageIcon, Loader2, Link as LinkIcon, GraduationCap, Headphones, SlidersHorizontal, ArrowUpRight } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { Plan, Category, createPlan, updatePlan, uploadPlanImage } from '../../services/planService';
 import { getSimulatedClasses, SimulatedClass } from '../../services/simulatedService';
 import { subscribeToMentors } from '../../services/mentorService';
@@ -16,6 +18,7 @@ interface PlanFormProps {
 }
 
 const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, categories, refreshData }) => {
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     title: '',
     imageUrl: '', // Mantém a URL final
@@ -160,7 +163,13 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
       };
 
       if (planToEdit && planToEdit.id) {
-        await updatePlan(planToEdit.id, planData);
+        const nextHidden = new Set(planToEdit.hiddenTabs || []);
+        if (planData.isChatDisabled) nextHidden.add('CALL');
+        else nextHidden.delete('CALL');
+        await updatePlan(planToEdit.id, {
+          ...planData,
+          hiddenTabs: Array.from(nextHidden)
+        });
       } else {
         await createPlan(planData);
       }
@@ -169,7 +178,7 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
       onClose();
     } catch (error) {
       console.error("Error saving plan:", error);
-      alert("Erro ao salvar plano. Verifique o console.");
+      toast.error("Erro ao salvar plano. Verifique os dados informados.");
     } finally {
       setLoading(false);
     }
@@ -465,7 +474,8 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
                         { id: 'MODULES', label: 'Módulos' },
                         { id: 'EDITAL', label: 'Edital' },
                         { id: 'LIVE', label: 'Ao Vivo' },
-                        { id: 'PRESENTIAL', label: 'Presencial' }
+                        { id: 'PRESENTIAL', label: 'Abas Presenciais' },
+                        { id: 'ANNOUNCEMENTS', label: 'Avisos' }
                       ].map(tab => {
                         const isChecked = linkedCourse.visibleTabs?.includes(tab.id);
                         return (
@@ -500,6 +510,31 @@ const PlanForm: React.FC<PlanFormProps> = ({ isOpen, onClose, planToEdit, catego
               )}
             </div>
           </div>
+
+          {planToEdit?.id && (
+            <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-500/30 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-[10px] font-black text-emerald-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <SlidersHorizontal size={12} />
+                  Abas do Plano & Turma Presencial
+                </h4>
+                <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">
+                  Oculte abas nativas (Configurações, Metas, Calendário) ou puxe o Cronograma e Metas de Hoje de uma Turma Presencial.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  navigate(`/admin/planos/${planToEdit.id}?tab=navigation`);
+                }}
+                className="px-3 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-300 text-[10px] font-black uppercase tracking-wider shrink-0 flex items-center gap-1.5 transition-colors"
+              >
+                <span>Configurar</span>
+                <ArrowUpRight size={12} />
+              </button>
+            </div>
+          )}
 
           <div className="space-y-2">
             <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Link de Venda / Página</label>

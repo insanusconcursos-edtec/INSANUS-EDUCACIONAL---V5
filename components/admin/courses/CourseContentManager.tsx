@@ -13,9 +13,10 @@ import { AdminCourseStudentsTab } from './AdminCourseStudentsTab'; // Importando
 import { CourseAnnouncementsTab } from './CourseAnnouncementsTab'; // Importando a Aba de Avisos
 import { 
   Layout, FileText, Users, Settings, Code, Megaphone, Layers, ArrowLeft, Plus, 
-  ChevronDown, ChevronRight, Edit2, Trash2, ArrowUp, ArrowDown, FolderPlus 
+  ChevronDown, ChevronRight, Edit2, Trash2, ArrowUp, ArrowDown, FolderPlus, SlidersHorizontal 
 } from 'lucide-react';
 import { AdminCourseMaintenanceTab } from './AdminCourseMaintenanceTab'; // Nova Aba de Manutenção
+import { AdminCourseNavigationTab } from './AdminCourseNavigationTab';
 import { ExportCourseStructureModal } from './modals/ExportCourseStructureModal';
 import { MigrateModuleModal } from './modals/MigrateModuleModal';
 import { CopyModuleModal } from './modals/CopyModuleModal';
@@ -24,10 +25,16 @@ import { motion, AnimatePresence } from 'motion/react';
 interface CourseContentManagerProps {
   course: OnlineCourse;
   onBack: () => void;
+  onCourseUpdated?: (updated: OnlineCourse) => void;
 }
 
-export function CourseContentManager({ course, onBack }: CourseContentManagerProps) {
-  const [activeTab, setActiveTab] = useState<'MODULES' | 'EDITAL' | 'STUDENTS' | 'ANNOUNCEMENTS' | 'MAINTENANCE'>('MODULES');
+export function CourseContentManager({ course, onBack, onCourseUpdated }: CourseContentManagerProps) {
+  const [currentCourse, setCurrentCourse] = useState<OnlineCourse>(course);
+  const [activeTab, setActiveTab] = useState<'MODULES' | 'EDITAL' | 'NAVIGATION' | 'STUDENTS' | 'ANNOUNCEMENTS' | 'MAINTENANCE'>('MODULES');
+
+  useEffect(() => {
+    setCurrentCourse(course);
+  }, [course]);
 
   // --- ESTADOS DE SESSÕES, BLOCOS E MÓDULOS ---
   const [sections, setSections] = useState<CourseSection[]>([]);
@@ -298,7 +305,7 @@ export function CourseContentManager({ course, onBack }: CourseContentManagerPro
           </div>
 
           {/* Abas de Navegação */}
-          <div className="flex gap-1 bg-zinc-900/50 p-1 rounded-lg border border-zinc-800 w-fit">
+          <div className="flex flex-wrap gap-1 bg-zinc-900/50 p-1 rounded-lg border border-zinc-800 w-fit">
               <button 
                   onClick={() => setActiveTab('MODULES')}
                   className={`px-4 py-2 rounded-md text-xs font-bold uppercase flex items-center gap-2 transition-all ${activeTab === 'MODULES' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
@@ -310,6 +317,12 @@ export function CourseContentManager({ course, onBack }: CourseContentManagerPro
                   className={`px-4 py-2 rounded-md text-xs font-bold uppercase flex items-center gap-2 transition-all ${activeTab === 'EDITAL' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
               >
                   <FileText size={14} /> Edital Verticalizado
+              </button>
+              <button 
+                  onClick={() => setActiveTab('NAVIGATION')}
+                  className={`px-4 py-2 rounded-md text-xs font-bold uppercase flex items-center gap-2 transition-all ${activeTab === 'NAVIGATION' ? 'bg-emerald-600 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+              >
+                  <SlidersHorizontal size={14} /> Abas & Presencial
               </button>
               <button 
                   onClick={() => setActiveTab('STUDENTS')}
@@ -335,13 +348,21 @@ export function CourseContentManager({ course, onBack }: CourseContentManagerPro
       {/* Conteúdo da Aba */}
       <div className={`flex-1 ${activeTab === 'MODULES' ? 'overflow-hidden' : ''}`}>
           {activeTab === 'EDITAL' ? (
-              <AdminCourseEditalManager courseId={course.id} />
+              <AdminCourseEditalManager courseId={currentCourse.id} />
+          ) : activeTab === 'NAVIGATION' ? (
+              <AdminCourseNavigationTab
+                course={currentCourse}
+                onCourseUpdated={(updated) => {
+                  setCurrentCourse(updated);
+                  if (onCourseUpdated) onCourseUpdated(updated);
+                }}
+              />
           ) : activeTab === 'STUDENTS' ? (
-              <AdminCourseStudentsTab courseId={course.id} />
+              <AdminCourseStudentsTab courseId={currentCourse.id} />
           ) : activeTab === 'ANNOUNCEMENTS' ? (
-              <CourseAnnouncementsTab courseId={course.id} />
+              <CourseAnnouncementsTab courseId={currentCourse.id} />
           ) : activeTab === 'MAINTENANCE' ? (
-              <AdminCourseMaintenanceTab course={course} />
+              <AdminCourseMaintenanceTab course={currentCourse} />
           ) : (
              <div className="space-y-6 h-full overflow-y-auto custom-scrollbar p-1">
                 {/* Sub-header de navegação quando dentro de um Bloco */}
@@ -472,7 +493,7 @@ export function CourseContentManager({ course, onBack }: CourseContentManagerPro
                       <div className="text-center py-20 border border-dashed border-purple-900/50 rounded-xl bg-purple-950/10">
                         <Layers size={36} className="text-purple-400 mx-auto mb-3 opacity-60" />
                         <p className="text-gray-300 font-bold text-sm">Nenhum módulo vinculado a este bloco ainda.</p>
-                        <p className="text-gray-500 text-xs mt-1">Clique em "Novo Módulo neste Bloco" acima para adicionar.</p>
+                        <p className="text-gray-500 text-xs mt-1">Clique em &quot;Novo Módulo neste Bloco&quot; acima para adicionar.</p>
                       </div>
                     ) : (
                       <div className="flex gap-6 overflow-x-auto pb-6 scrollbar-thin scrollbar-thumb-purple-900 scrollbar-track-transparent px-1">

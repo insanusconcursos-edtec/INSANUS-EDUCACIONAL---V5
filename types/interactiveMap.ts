@@ -17,6 +17,7 @@ export interface MindmapKeyNumber {
 }
 
 export interface MindmapNodeDetail {
+  pega_visao?: string;
   resumo?: string;
   lei_seca?: string[];
   checklist?: string[];
@@ -60,6 +61,13 @@ export interface InteractiveQuestao {
   numero: number;
   bateria_id: number | string;
   banca?: string;
+  banca_nome?: string;
+  orgao?: string;
+  cargo?: string;
+  ano?: string | number;
+  artigo?: string;
+  artigos?: string[] | string;
+  lei?: string;
   enunciado?: string;
   enunciation?: string;
   alternativas?: Record<string, string>; // { A: "...", B: "...", ... }

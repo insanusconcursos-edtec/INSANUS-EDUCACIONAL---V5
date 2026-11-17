@@ -131,6 +131,10 @@ export function AdminCoursesTab() {
     return (
       <CourseContentManager 
         course={managingCourse} 
+        onCourseUpdated={(updated) => {
+          setManagingCourse(updated);
+          setCourses((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+        }}
         onBack={() => {
           setManagingCourse(null);
           loadData(); // Recarrega dados ao voltar para refletir mudanças
