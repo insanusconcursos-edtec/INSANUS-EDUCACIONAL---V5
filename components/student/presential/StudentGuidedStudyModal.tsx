@@ -235,24 +235,65 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
             {isInteractiveMap && meta.description && !showOrientationBanner && (
               <button
                 type="button"
                 onClick={() => setShowOrientationBanner(true)}
-                className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
                 title="Exibir orientação do administrador"
               >
                 <Info className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden sm:inline">Orientação</span>
+                <span className="hidden md:inline">Orientação</span>
               </button>
             )}
 
+            {isInteractiveMap && isAdminPreview && (
+              <span className="hidden md:inline-flex items-center px-2.5 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-[11px] font-semibold text-zinc-400 whitespace-nowrap">
+                Prévia Admin
+              </span>
+            )}
+
             {!isAdminPreview && (
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-300 tabular-nums">
+              <div
+                className="flex items-center gap-2 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-zinc-300 tabular-nums"
+                title={`Tempo de estudo registrado: ${Math.max(1, Math.round(secondsElapsed / 60))} min`}
+              >
                 <Clock className="w-4 h-4 text-amber-400 shrink-0" />
                 <span className="font-mono font-bold text-white">{formatTimer(secondsElapsed)}</span>
               </div>
+            )}
+
+            {isInteractiveMap && !isAdminPreview && (
+              <button
+                type="button"
+                onClick={handleToggleCompletion}
+                disabled={isSaving}
+                title={
+                  isCompleted
+                    ? 'Meta concluída! Clique caso deseje desmarcar a conclusão.'
+                    : `Registrar ${Math.max(1, Math.round(secondsElapsed / 60))} min e concluir meta`
+                }
+                className={`px-3.5 sm:px-4 py-1.5 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 disabled:opacity-60 ${
+                  isCompleted
+                    ? 'bg-emerald-500/15 hover:bg-zinc-800 text-emerald-400 hover:text-zinc-200 border border-emerald-500/35 hover:border-zinc-700'
+                    : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-black hover:brightness-110 shadow-md shadow-emerald-950/50'
+                }`}
+              >
+                {isSaving ? (
+                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                ) : (
+                  <CheckCircle className="w-4 h-4 shrink-0" />
+                )}
+                {isCompleted ? (
+                  <span>Meta Concluída</span>
+                ) : (
+                  <>
+                    <span className="hidden xl:inline">Concluir Meta (Estudo Guiado)</span>
+                    <span className="xl:hidden">Concluir Meta</span>
+                  </>
+                )}
+              </button>
             )}
 
             <button
@@ -512,59 +553,61 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
           </div>
         )}
 
-        {/* Modal Footer */}
-        <div
-          className={`px-4 sm:px-6 border-t border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950 shrink-0 ${
-            isInteractiveMap ? 'py-2.5' : 'py-3.5'
-          }`}
-        >
-          {isAdminPreview ? (
-            <>
-              <span className="text-xs text-zinc-400">
-                Pré-visualização do conteúdo da meta pelo Administrador
-              </span>
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-xs font-bold transition-colors whitespace-nowrap shrink-0"
-              >
-                Fechar Visualização
-              </button>
-            </>
-          ) : (
-            <>
-              <div className="text-xs text-zinc-400 tabular-nums">
-                {isCompleted ? (
-                  <span className="text-emerald-400 font-bold flex items-center gap-1.5">
-                    <CheckCircle className="w-4 h-4 shrink-0" /> Meta Concluída com sucesso!
-                  </span>
-                ) : (
-                  <span>
-                    Tempo de estudo registrado:{' '}
-                    <strong className="text-white">{Math.max(1, Math.round(secondsElapsed / 60))} min</strong>
-                  </span>
-                )}
-              </div>
+        {/* Modal Footer (apenas para metas convencionais; metas .JSON usam o topo para liberar 100% da área útil do player) */}
+        {!isInteractiveMap && (
+          <div className="px-4 sm:px-6 py-3.5 border-t border-zinc-800 flex items-center justify-between gap-3 bg-zinc-950 shrink-0">
+            {isAdminPreview ? (
+              <>
+                <span className="text-xs text-zinc-400">
+                  Pré-visualização do conteúdo da meta pelo Administrador
+                </span>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-xs font-bold transition-colors whitespace-nowrap shrink-0"
+                >
+                  Fechar Visualização
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="text-xs text-zinc-400 tabular-nums">
+                  {isCompleted ? (
+                    <span className="text-emerald-400 font-bold flex items-center gap-1.5">
+                      <CheckCircle className="w-4 h-4 shrink-0" /> Meta Concluída com sucesso!
+                    </span>
+                  ) : (
+                    <span>
+                      Tempo de estudo registrado:{' '}
+                      <strong className="text-white">
+                        {Math.max(1, Math.round(secondsElapsed / 60))} min
+                      </strong>
+                    </span>
+                  )}
+                </div>
 
-              <button
-                type="button"
-                onClick={handleToggleCompletion}
-                disabled={isSaving}
-                className={`
-                  px-5 sm:px-6 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-lg transition-all flex items-center gap-2 whitespace-nowrap shrink-0
-                  ${
-                    isCompleted
-                      ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
-                      : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-black hover:brightness-110'
-                  }
-                `}
-              >
-                <CheckCircle className="w-4 h-4 shrink-0" />
-                <span>{isCompleted ? 'Desmarcar Conclusão' : 'Concluir Meta (Estudo Guiado)'}</span>
-              </button>
-            </>
-          )}
-        </div>
+                <button
+                  type="button"
+                  onClick={handleToggleCompletion}
+                  disabled={isSaving}
+                  className={`
+                    px-5 sm:px-6 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-lg transition-all flex items-center gap-2 whitespace-nowrap shrink-0
+                    ${
+                      isCompleted
+                        ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
+                        : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-black hover:brightness-110'
+                    }
+                  `}
+                >
+                  <CheckCircle className="w-4 h-4 shrink-0" />
+                  <span>
+                    {isCompleted ? 'Desmarcar Conclusão' : 'Concluir Meta (Estudo Guiado)'}
+                  </span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
