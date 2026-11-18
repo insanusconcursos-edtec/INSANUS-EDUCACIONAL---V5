@@ -38,7 +38,8 @@ import {
   Scale,
   Zap,
   Maximize2,
-  ExternalLink
+  ExternalLink,
+  Sparkles
 } from 'lucide-react';
 import { GuidedStudyMeta, GuidedStudyProgress } from '../../../types/guidedStudy';
 import { guidedStudyService } from '../../../services/guidedStudyService';
@@ -242,10 +243,14 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
   };
 
   const getEventModules = (event: ClassScheduleEvent) => {
+    if (event.allocationMode === 'FREE_REVIEW' || event.topicId === 'free_review') {
+      return [];
+    }
+
     const rawLinks =
       event.linkedModules && event.linkedModules.length > 0
         ? event.linkedModules
-        : event.topicId && event.moduleId && event.moduleId !== 'extra'
+        : event.topicId && event.moduleId && event.moduleId !== 'extra' && event.moduleId !== 'free_review'
           ? [{ topicId: event.topicId, moduleId: event.moduleId, moduleIndex: event.moduleIndex }]
           : [];
 
@@ -656,6 +661,15 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                                     AO VIVO • PORTAL
                                   </span>
                                 )}
+                                {event.allocationMode === 'FREE_REVIEW' && (
+                                  <span
+                                    className="text-[8px] font-bold text-purple-200 bg-purple-950/80 px-1.5 py-0.5 rounded border border-purple-500/40 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap"
+                                    title="Aula de Revisão / Atividade Complementar"
+                                  >
+                                    <Sparkles className="w-2.5 h-2.5 shrink-0 text-purple-400" />
+                                    REVISÃO
+                                  </span>
+                                )}
                                 {event.status === 'COMPLETED' && (
                                   <span className="text-[8px] font-bold text-emerald-500 bg-emerald-950/50 px-1 py-0.5 rounded border border-emerald-900/50 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap" title="Concluído">
                                     <CheckCircle className="w-2 h-2 shrink-0" />
@@ -692,8 +706,15 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                                       e.stopPropagation();
                                       const params: Record<string, string> = {};
                                       if (event.subjectId) params.subjectId = event.subjectId;
-                                      if (event.topicId && event.topicId !== 'extra') params.topicId = event.topicId;
-                                      if (event.moduleId && event.moduleId !== 'extra' && !event.moduleId.startsWith('topic-')) {
+                                      if (event.topicId && event.topicId !== 'extra' && event.topicId !== 'free_review') {
+                                        params.topicId = event.topicId;
+                                      }
+                                      if (
+                                        event.moduleId &&
+                                        event.moduleId !== 'extra' &&
+                                        event.moduleId !== 'free_review' &&
+                                        !event.moduleId.startsWith('topic-')
+                                      ) {
                                         params.moduleId = event.moduleId;
                                       }
                                       navigateToPresentialTab('PLANNING', params);
@@ -731,7 +752,16 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                                 )}
                               </div>
                               
-                              {hasMultipleModules ? (
+                              {event.allocationMode === 'FREE_REVIEW' || event.topicId === 'free_review' ? (
+                                <div>
+                                  <span className="text-[10px] text-purple-400 uppercase font-bold block mb-0.5">
+                                    Atividade / Revisão
+                                  </span>
+                                  <p className="text-[11px] text-zinc-200 font-medium leading-tight">
+                                    {event.customActivityTitle || 'Aula Extra / Revisão'}
+                                  </p>
+                                </div>
+                              ) : hasMultipleModules ? (
                                 <div>
                                   <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-1 tabular-nums">
                                     Módulos desta Aula ({eventModules.length})
@@ -790,15 +820,19 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                                 </div>
                               )}
 
-                              {!spansMultipleTopics && event.topicId && event.topicId !== 'extra' && (
-                                <div>
-                                  <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Assunto</span>
-                                  <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
-                                    <BookOpen className="w-3 h-3 text-zinc-500 shrink-0" />
-                                    <span>{getTopicName(event.topicId)}</span>
+                              {!spansMultipleTopics &&
+                                event.topicId &&
+                                event.topicId !== 'extra' &&
+                                event.topicId !== 'free_review' &&
+                                event.allocationMode !== 'FREE_REVIEW' && (
+                                  <div>
+                                    <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Assunto</span>
+                                    <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                                      <BookOpen className="w-3 h-3 text-zinc-500 shrink-0" />
+                                      <span>{getTopicName(event.topicId)}</span>
+                                    </div>
                                   </div>
-                                </div>
-                              )}
+                                )}
 
                               <div>
                                 <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Professor</span>

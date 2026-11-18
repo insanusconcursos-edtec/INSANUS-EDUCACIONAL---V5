@@ -14,6 +14,8 @@ export interface ScheduledModuleLink {
 
 export type ScheduleEventType = 'CLASS' | 'SIMULADO';
 
+export type ClassAllocationMode = 'AUTO' | 'MANUAL_PIN' | 'FREE_REVIEW';
+
 export interface ClassScheduleEvent {
   id: string;
   classId: string;
@@ -27,9 +29,13 @@ export interface ClassScheduleEvent {
   subjectId: string;
   topicId: string;
   moduleId: string;
+  moduleIndex?: string; // Ex: '1/2', '2/2', 'Extra', 'Revisão / Extra'
   linkedModules?: ScheduledModuleLink[]; // Todos os módulos trabalhados neste tempo de aula (1 ou mais)
   extraModulesCount?: number; // Quantidade de slots extras puxados sob demanda no cronograma
   consumedSlotsCount?: number; // Total de tempos/slots da grade consumidos por este evento
+  allocationMode?: ClassAllocationMode; // 'AUTO' (fila padrão), 'MANUAL_PIN' (fura-fila fixado) ou 'FREE_REVIEW' (revisão/extra livre)
+  pinnedSlotKeys?: string[]; // Chaves determinísticas dos slots fixados manualmente quando allocationMode === 'MANUAL_PIN'
+  customActivityTitle?: string; // Título descritivo quando allocationMode === 'FREE_REVIEW'
 
   // Metadados exclusivos de Simulado Presencial / Turma (quando eventType === 'SIMULADO')
   simulatedClassId?: string;
@@ -69,6 +75,9 @@ export interface ScheduleException {
   substituteTeacherId?: string; // Quem vai assumir (apenas para substituição/alteração)
   isLiveEvent?: boolean; // Usado quando type === 'MODALITY_CHANGE'
   extraModulesCount?: number; // Usado quando type === 'ADJUST_MODULES'
+  allocationMode?: ClassAllocationMode; // Usado quando type === 'ADJUST_MODULES'
+  pinnedSlotKeys?: string[]; // Usado quando type === 'ADJUST_MODULES' e allocationMode === 'MANUAL_PIN'
+  customActivityTitle?: string; // Usado quando type === 'ADJUST_MODULES' e allocationMode === 'FREE_REVIEW'
   type: ExceptionType;
 }
 

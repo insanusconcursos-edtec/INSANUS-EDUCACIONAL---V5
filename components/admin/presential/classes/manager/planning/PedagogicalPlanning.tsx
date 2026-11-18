@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, FileText, CheckCircle, Clock, AlertCircle, Globe, Video, CheckCircle2, Layers, Link2, Radio } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileText, CheckCircle, Clock, AlertCircle, Globe, Video, CheckCircle2, Layers, Link2, Radio, Pin } from 'lucide-react';
 import { Subject, SubjectGroup, Topic, Module } from '../../../../../../types/curriculum';
 import { ClassScheduleEvent } from '../../../../../../types/schedule';
 import { Teacher } from '../../../../../../types/teacher';
@@ -627,6 +627,12 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
                                                         {uniqueEventModuleCount > 1 && (
                                                           <span className="text-amber-400/90 tabular-nums">
                                                             · Aula conjunta ({uniqueEventModuleCount} módulos)
+                                                          </span>
+                                                        )}
+                                                        {event.allocationMode === 'MANUAL_PIN' && (
+                                                          <span className="px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 flex items-center gap-1">
+                                                            <Pin className="w-2.5 h-2.5" />
+                                                            Fixada no cronograma
                                                           </span>
                                                         )}
                                                         {event.isSubstitute && (

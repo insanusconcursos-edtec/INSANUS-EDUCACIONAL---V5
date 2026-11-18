@@ -1,12 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ClassScheduleEvent, ScheduleGap, ScheduleException, ExceptionType } from '../../../../../../types/schedule';
+import { ClassAllocationMode, ClassScheduleEvent, ScheduleGap, ScheduleException, ExceptionType } from '../../../../../../types/schedule';
 import { Teacher } from '../../../../../../types/teacher';
 import { Subject, Topic } from '../../../../../../types/curriculum';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertTriangle, ChevronDown, ChevronUp, LayoutGrid, List, Edit2, X, Check, CheckCircle, Loader2, BookOpen, Target, Trash2, Radio, MapPin, Plus, Minus, Layers, Trophy, DoorOpen, Lock, Play, Flag, FileJson, FileText, Video, HelpCircle, Scale, Zap, Maximize2, ExternalLink } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertTriangle, ChevronDown, ChevronUp, LayoutGrid, List, Edit2, X, Check, CheckCircle, Loader2, BookOpen, Target, Trash2, Radio, MapPin, Plus, Minus, Layers, Trophy, DoorOpen, Lock, Play, Flag, FileJson, FileText, Video, HelpCircle, Scale, Zap, Maximize2, ExternalLink, Pin, Sparkles } from 'lucide-react';
 
 import { checkTeacherAvailability } from '../../../../../../utils/scheduler/ResourceValidator';
-import { buildSubjectSlotUnits, mergeConsumedSlotModules } from '../../../../../../utils/scheduler/ContentResolver';
+import { mergeConsumedSlotModules, previewAutoAllocationForEvent } from '../../../../../../utils/scheduler/ContentResolver';
 
 import { Class } from '../../../../../../types/class';
 import { classService } from '../../../../../../services/classService';
@@ -14,6 +14,7 @@ import { GuidedStudyMeta } from '../../../../../../types/guidedStudy';
 import { guidedStudyService } from '../../../../../../services/guidedStudyService';
 
 import { AddManualAppointmentModal } from './AddManualAppointmentModal';
+import { SubjectCurriculumSlotPicker } from './SubjectCurriculumSlotPicker';
 import { AddSimuladoAppointmentModal, formatSimuladoDuration } from './AddSimuladoAppointmentModal';
 import { AddGuidedStudyMetaModal } from './AddGuidedStudyMetaModal';
 import { StudentGuidedStudyModal } from '../../../../../student/presential/StudentGuidedStudyModal';
@@ -48,7 +49,10 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
   const [editingEvent, setEditingEvent] = useState<ClassScheduleEvent | null>(null);
   const [selectedSubstituteId, setSelectedSubstituteId] = useState('');
   const [actionType, setActionType] = useState<ExceptionType>('SUBSTITUTION');
+  const [adjustedAllocationMode, setAdjustedAllocationMode] = useState<ClassAllocationMode>('AUTO');
   const [adjustedExtraModules, setAdjustedExtraModules] = useState<number>(0);
+  const [adjustedPinnedSlotKeys, setAdjustedPinnedSlotKeys] = useState<string[]>([]);
+  const [adjustedCustomTitle, setAdjustedCustomTitle] = useState<string>('');
   const [forceConfirmData, setForceConfirmData] = useState<{ teacherId: string, details: string } | null>(null);
   const [selectedDateForManual, setSelectedDateForManual] = useState<string | null>(null);
   const [manualAppointmentIsLive, setManualAppointmentIsLive] = useState<boolean>(false);
@@ -115,12 +119,22 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
 
   const todayString = toLocalISODate();
 
-  // Sync selected substitute and extra modules when editing event changes
+  // Sync selected substitute and allocation state when editing event changes
   useEffect(() => {
     if (editingEvent) {
+      const currentMode: ClassAllocationMode = editingEvent.allocationMode || 'AUTO';
       setSelectedSubstituteId(editingEvent.teacherId || '');
-      setActionType('SUBSTITUTION'); // Reset to default
-      setAdjustedExtraModules(Math.max(0, Number(editingEvent.extraModulesCount) || 0));
+      setActionType('SUBSTITUTION');
+      setAdjustedAllocationMode(currentMode);
+      setAdjustedExtraModules(
+        currentMode === 'AUTO' ? Math.max(0, Number(editingEvent.extraModulesCount) || 0) : 0
+      );
+      setAdjustedPinnedSlotKeys(
+        currentMode === 'MANUAL_PIN' && Array.isArray(editingEvent.pinnedSlotKeys)
+          ? editingEvent.pinnedSlotKeys
+          : []
+      );
+      setAdjustedCustomTitle(editingEvent.customActivityTitle || '');
       setForceConfirmData(null);
     }
   }, [editingEvent]);
@@ -335,10 +349,14 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
   };
 
   const getEventModules = (event: ClassScheduleEvent) => {
+    if (event.allocationMode === 'FREE_REVIEW' || event.topicId === 'free_review') {
+      return [];
+    }
+
     const rawLinks =
       event.linkedModules && event.linkedModules.length > 0
         ? event.linkedModules
-        : event.topicId && event.moduleId && event.moduleId !== 'extra'
+        : event.topicId && event.moduleId && event.moduleId !== 'extra' && event.moduleId !== 'free_review'
           ? [{ topicId: event.topicId, moduleId: event.moduleId, moduleIndex: event.moduleIndex }]
           : [];
 
@@ -373,30 +391,13 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
       };
     }
 
-    const slotUnits = buildSubjectSlotUnits(editingEvent.subjectId, topics, true);
-    const subjectEventsSorted = events
-      .filter((e) => e.subjectId === editingEvent.subjectId)
-      .sort(
-        (a, b) =>
-          new Date(`${a.date}T${a.startTime}`).getTime() -
-          new Date(`${b.date}T${b.startTime}`).getTime()
-      );
-
-    let startSlotIndex = 0;
-    for (const ev of subjectEventsSorted) {
-      if (ev.id === editingEvent.id) break;
-      const consumed = ev.isOverflow
-        ? 0
-        : ev.consumedSlotsCount !== undefined
-          ? ev.consumedSlotsCount
-          : 1 + Math.max(0, Number(ev.extraModulesCount) || 0);
-      startSlotIndex += consumed;
-    }
-
-    const remainingAvailableSlots = Math.max(0, slotUnits.length - startSlotIndex);
-    const maxExtraSlots = Math.max(0, remainingAvailableSlots - 1);
-    const effectiveSlots = 1 + Math.max(0, adjustedExtraModules);
-    const consumedUnits = slotUnits.slice(startSlotIndex, startSlotIndex + effectiveSlots);
+    const { maxExtraSlots, remainingAvailableSlots, consumedUnits } = previewAutoAllocationForEvent(
+      events,
+      editingEvent.id,
+      editingEvent.subjectId,
+      adjustedExtraModules,
+      topics
+    );
     const mergedLinks = mergeConsumedSlotModules(consumedUnits);
 
     const seen = new Set<string>();
@@ -801,6 +802,24 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                                     AO VIVO • PORTAL
                                   </span>
                                 )}
+                                {event.allocationMode === 'MANUAL_PIN' && (
+                                  <span
+                                    className="text-[8px] font-bold text-indigo-200 bg-indigo-950/80 px-1.5 py-0.5 rounded border border-indigo-500/45 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap"
+                                    title="Assunto/Módulo fixado fora da ordem padrão (Fura-Fila)"
+                                  >
+                                    <Pin className="w-2.5 h-2.5 shrink-0 text-indigo-400" />
+                                    FIXADO
+                                  </span>
+                                )}
+                                {event.allocationMode === 'FREE_REVIEW' && (
+                                  <span
+                                    className="text-[8px] font-bold text-purple-200 bg-purple-950/80 px-1.5 py-0.5 rounded border border-purple-500/45 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap"
+                                    title="Aula Extra / Revisão (não consome a fila sequencial)"
+                                  >
+                                    <Sparkles className="w-2.5 h-2.5 shrink-0 text-purple-400" />
+                                    REVISÃO / EXTRA
+                                  </span>
+                                )}
                                 {event.status === 'COMPLETED' && (
                                   <span className="text-[8px] font-bold text-emerald-500 bg-emerald-950/50 px-1 py-0.5 rounded border border-emerald-900/50 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap">
                                     <CheckCircle className="w-2 h-2 shrink-0" />
@@ -837,8 +856,15 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                                     const newParams = new URLSearchParams(searchParams);
                                     newParams.set('tab', 'PLANNING');
                                     if (event.subjectId) newParams.set('subjectId', event.subjectId);
-                                    if (event.topicId && event.topicId !== 'extra') newParams.set('topicId', event.topicId);
-                                    if (event.moduleId && event.moduleId !== 'extra' && !event.moduleId.startsWith('topic-')) {
+                                    if (event.topicId && event.topicId !== 'extra' && event.topicId !== 'free_review') {
+                                      newParams.set('topicId', event.topicId);
+                                    }
+                                    if (
+                                      event.moduleId &&
+                                      event.moduleId !== 'extra' &&
+                                      event.moduleId !== 'free_review' &&
+                                      !event.moduleId.startsWith('topic-')
+                                    ) {
                                       newParams.set('moduleId', event.moduleId);
                                     }
                                     setSearchParams(newParams);
@@ -874,7 +900,19 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                                 )}
                               </div>
                               
-                              {hasMultipleModules ? (
+                              {event.allocationMode === 'FREE_REVIEW' || event.topicId === 'free_review' ? (
+                                <div>
+                                  <span className="text-[10px] text-purple-400 uppercase font-bold block mb-0.5">
+                                    Atividade / Revisão Livre
+                                  </span>
+                                  <p className="text-[11px] text-zinc-200 font-medium leading-tight">
+                                    {event.customActivityTitle || 'Aula Extra / Revisão'}
+                                  </p>
+                                  <p className="text-[9px] text-zinc-500 mt-0.5">
+                                    Não consome a fila sequencial da disciplina
+                                  </p>
+                                </div>
+                              ) : hasMultipleModules ? (
                                 <div>
                                   <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-1 tabular-nums">
                                     Módulos desta Aula ({eventModules.length})
@@ -929,6 +967,11 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                                     {eventModules[0]?.moduleName ||
                                       (isOverflow ? 'Aula extra além da carga prevista' : getModuleName(event.topicId, event.moduleId))}
                                   </p>
+                                  {eventModules[0]?.topicName && eventModules[0].topicName !== eventModules[0].moduleName && (
+                                    <p className="text-[9px] text-zinc-500 mt-0.5 truncate">
+                                      Assunto: {eventModules[0].topicName}
+                                    </p>
+                                  )}
                                 </div>
                               )}
 
@@ -1432,6 +1475,14 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
 
   const handleSaveEdit = () => {
     if (editingEvent && onAddException) {
+      if (
+        actionType === 'ADJUST_MODULES' &&
+        adjustedAllocationMode === 'MANUAL_PIN' &&
+        adjustedPinnedSlotKeys.length === 0
+      ) {
+        return;
+      }
+
       const newException: ScheduleException = {
         id: Date.now().toString(),
         eventId: editingEvent.id,
@@ -1440,17 +1491,38 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
         originalTeacherId: editingEvent.teacherId,
         substituteTeacherId: actionType === 'SUBSTITUTION' ? selectedSubstituteId : undefined,
         isLiveEvent: actionType === 'MODALITY_CHANGE' ? !editingEvent.isLiveEvent : editingEvent.isLiveEvent,
-        extraModulesCount: actionType === 'ADJUST_MODULES' ? adjustedExtraModules : editingEvent.extraModulesCount,
+        allocationMode:
+          actionType === 'ADJUST_MODULES' ? adjustedAllocationMode : editingEvent.allocationMode,
+        extraModulesCount:
+          actionType === 'ADJUST_MODULES'
+            ? adjustedAllocationMode === 'AUTO'
+              ? adjustedExtraModules
+              : 0
+            : editingEvent.extraModulesCount,
+        pinnedSlotKeys:
+          actionType === 'ADJUST_MODULES'
+            ? adjustedAllocationMode === 'MANUAL_PIN'
+              ? adjustedPinnedSlotKeys
+              : undefined
+            : editingEvent.pinnedSlotKeys,
+        customActivityTitle:
+          actionType === 'ADJUST_MODULES'
+            ? adjustedAllocationMode === 'FREE_REVIEW'
+              ? adjustedCustomTitle.trim() || 'Aula Extra / Revisão'
+              : undefined
+            : editingEvent.customActivityTitle,
         type: actionType
       };
       onAddException(newException);
       setEditingEvent(null);
       setSelectedSubstituteId('');
       setActionType('SUBSTITUTION');
+      setAdjustedAllocationMode('AUTO');
       setAdjustedExtraModules(0);
+      setAdjustedPinnedSlotKeys([]);
+      setAdjustedCustomTitle('');
     } else {
-        // If no change or no handler, just close
-        setEditingEvent(null);
+      setEditingEvent(null);
     }
   };
 
@@ -1732,7 +1804,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
       {/* Edit Modal */}
       {editingEvent && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
             <div className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/50 shrink-0">
               <h3 className="text-lg font-bold text-white flex items-center gap-2">
                 <Edit2 className="w-5 h-5 text-brand-red" />
@@ -1785,7 +1857,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                 <div className="pt-2 border-t border-zinc-700/50 mt-2">
                   <p className="text-[10px] text-zinc-400 italic text-center">
                     {actionType === 'ADJUST_MODULES'
-                      ? '* O ajuste de módulos aplica-se exclusivamente a este tempo de aula e reordena a fila seguinte da disciplina.'
+                      ? '* Esta configuração aplica-se exclusivamente a este tempo de aula, preservando a ordem dos demais tempos.'
                       : '* Atenção: Esta alteração será aplicada a todas as aulas (tempos) deste encontro.'}
                   </p>
                 </div>
@@ -1805,14 +1877,14 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
 
                   <button
                     onClick={() => setActionType('ADJUST_MODULES')}
-                    className={`p-3 rounded-lg border text-left transition-all ${actionType === 'ADJUST_MODULES' ? 'bg-amber-950/30 border-amber-500 ring-1 ring-amber-500' : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800'}`}
+                    className={`p-3 rounded-lg border text-left transition-all ${actionType === 'ADJUST_MODULES' ? 'bg-indigo-950/30 border-indigo-500 ring-1 ring-indigo-500' : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800'}`}
                   >
                     <div className="font-medium text-sm text-white flex items-center gap-1.5">
                       <Layers className="w-4 h-4 text-amber-400 shrink-0" />
-                      <span>Ajustar Módulos desta Aula (Neste Tempo)</span>
+                      <span>Definir / Ajustar Assunto e Módulo (Fura-Fila ou Fila)</span>
                     </div>
                     <div className="text-xs text-zinc-500">
-                      Puxa mais tópicos/módulos da fila sequencial para este tempo e adianta as aulas seguintes.
+                      Antecipe um assunto futuro sem quebrar a ordem, puxe mais módulos da fila ou marque revisão livre.
                     </div>
                   </button>
 
@@ -1848,85 +1920,173 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                 </div>
               </div>
 
-              {/* Adjust Modules Control */}
+              {/* Adjust Modules / Smart Pin / Free Review Control */}
               {actionType === 'ADJUST_MODULES' && (
                 <div className="space-y-3 pt-3 border-t border-zinc-800 animate-in fade-in duration-150">
-                  <div className="flex items-center justify-between gap-3 bg-zinc-950/60 border border-zinc-800 rounded-lg p-3">
-                    <div className="min-w-0">
-                      <span className="text-xs font-bold text-zinc-200 block">
-                        Slots da fila consumidos neste tempo
-                      </span>
-                      <span className="text-[11px] text-zinc-500 block">
-                        1 padrão {adjustedExtraModules > 0 ? `+ ${adjustedExtraModules} extra(s) puxado(s) da sequência` : '(padrão da grade)'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => setAdjustedExtraModules((prev) => Math.max(0, prev - 1))}
-                        disabled={adjustedExtraModules <= 0}
-                        className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center text-zinc-200 border border-zinc-700 transition-colors shrink-0"
-                        title="Reduzir módulos puxados neste tempo"
-                      >
-                        <Minus className="w-3.5 h-3.5" />
-                      </button>
-                      <span className="min-w-[2.25rem] text-center text-sm font-black text-amber-400 tabular-nums">
-                        {1 + adjustedExtraModules}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAdjustedExtraModules((prev) =>
-                            Math.min(Math.max(prev, adjustModulesPreview.maxExtraSlots), prev + 1)
-                          )
-                        }
-                        disabled={adjustedExtraModules >= adjustModulesPreview.maxExtraSlots}
-                        className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center text-zinc-200 border border-zinc-700 transition-colors shrink-0"
-                        title="Puxar próximo módulo da fila para esta aula"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                  <div className="grid grid-cols-3 gap-1.5 p-1 bg-zinc-950 rounded-lg border border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => setAdjustedAllocationMode('AUTO')}
+                      className={`py-2 px-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
+                        adjustedAllocationMode === 'AUTO'
+                          ? 'bg-zinc-800 text-white border border-zinc-700 shadow-sm'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      <Layers className="w-3 h-3 text-amber-400 shrink-0" />
+                      <span className="truncate">Fila Automática</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setAdjustedAllocationMode('MANUAL_PIN')}
+                      className={`py-2 px-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
+                        adjustedAllocationMode === 'MANUAL_PIN'
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      <Pin className="w-3 h-3 shrink-0" />
+                      <span className="truncate">Fura-Fila</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setAdjustedAllocationMode('FREE_REVIEW')}
+                      className={`py-2 px-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
+                        adjustedAllocationMode === 'FREE_REVIEW'
+                          ? 'bg-purple-600 text-white shadow-sm'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      <Sparkles className="w-3 h-3 shrink-0" />
+                      <span className="truncate">Revisão / Extra</span>
+                    </button>
                   </div>
 
-                  <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg p-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider tabular-nums">
-                        Módulos previstos neste tempo ({adjustModulesPreview.previewModules.length})
-                      </span>
-                    </div>
+                  {adjustedAllocationMode === 'AUTO' && (
+                    <>
+                      {editingEvent.allocationMode && editingEvent.allocationMode !== 'AUTO' && (
+                        <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-[11px] text-emerald-200">
+                          Ao salvar, esta aula deixará de ser manual e voltará a seguir automaticamente a fila sequencial da disciplina.
+                        </div>
+                      )}
 
-                    {adjustModulesPreview.previewModules.length === 0 ? (
-                      <p className="text-xs text-zinc-500 italic">
-                        Não há módulos pendentes na fila desta disciplina para este horário.
-                      </p>
-                    ) : (
-                      <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-zinc-700">
-                        {adjustModulesPreview.previewModules.map((mod, idx) => (
-                          <div
-                            key={`${mod.moduleId}-${idx}`}
-                            className="flex items-start gap-2 text-xs p-2 rounded bg-zinc-900/80 border border-zinc-800/80"
+                      <div className="flex items-center justify-between gap-3 bg-zinc-950/60 border border-zinc-800 rounded-lg p-3">
+                        <div className="min-w-0">
+                          <span className="text-xs font-bold text-zinc-200 block">
+                            Slots da fila consumidos neste tempo
+                          </span>
+                          <span className="text-[11px] text-zinc-500 block">
+                            1 padrão {adjustedExtraModules > 0 ? `+ ${adjustedExtraModules} extra(s) puxado(s) da sequência` : '(padrão da grade)'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setAdjustedExtraModules((prev) => Math.max(0, prev - 1))}
+                            disabled={adjustedExtraModules <= 0}
+                            className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center text-zinc-200 border border-zinc-700 transition-colors shrink-0"
+                            title="Reduzir módulos puxados neste tempo"
                           >
-                            <span className="font-bold text-amber-400 tabular-nums shrink-0">
-                              {idx + 1}.
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <p className="text-zinc-200 font-medium leading-snug break-words">
-                                {mod.moduleName}
-                              </p>
-                              <p className="text-[10px] text-zinc-500 truncate">
-                                Assunto: {mod.topicName}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="min-w-[2.25rem] text-center text-sm font-black text-amber-400 tabular-nums">
+                            {1 + adjustedExtraModules}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setAdjustedExtraModules((prev) =>
+                                Math.min(Math.max(prev, adjustModulesPreview.maxExtraSlots), prev + 1)
+                              )
+                            }
+                            disabled={adjustedExtraModules >= adjustModulesPreview.maxExtraSlots}
+                            className="w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center text-zinc-200 border border-zinc-700 transition-colors shrink-0"
+                            title="Puxar próximo módulo da fila para esta aula"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                    )}
 
-                    <p className="text-[11px] text-zinc-500 leading-relaxed pt-1">
-                      Ao salvar, as próximas aulas desta disciplina serão automaticamente reajustadas em efeito dominó. Lembre-se de clicar em <strong className="text-zinc-300">Salvar Cronograma Definitivo</strong> para gravar.
-                    </p>
-                  </div>
+                      <div className="bg-zinc-950/40 border border-zinc-800 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider tabular-nums">
+                            Módulos previstos neste tempo ({adjustModulesPreview.previewModules.length})
+                          </span>
+                        </div>
+
+                        {adjustModulesPreview.previewModules.length === 0 ? (
+                          <p className="text-xs text-zinc-500 italic">
+                            Não há módulos pendentes na fila desta disciplina para este horário.
+                          </p>
+                        ) : (
+                          <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-zinc-700">
+                            {adjustModulesPreview.previewModules.map((mod, idx) => (
+                              <div
+                                key={`${mod.moduleId}-${idx}`}
+                                className="flex items-start gap-2 text-xs p-2 rounded bg-zinc-900/80 border border-zinc-800/80"
+                              >
+                                <span className="font-bold text-amber-400 tabular-nums shrink-0">
+                                  {idx + 1}.
+                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-zinc-200 font-medium leading-snug break-words">
+                                    {mod.moduleName}
+                                  </p>
+                                  <p className="text-[10px] text-zinc-500 truncate">
+                                    Assunto: {mod.topicName}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        <p className="text-[11px] text-zinc-500 leading-relaxed pt-1">
+                          Ao salvar, as próximas aulas automáticas serão reajustadas. Lembre-se de clicar em <strong className="text-zinc-300">Salvar Cronograma Definitivo</strong> para gravar.
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  {adjustedAllocationMode === 'MANUAL_PIN' && (
+                    <div className="space-y-2.5 bg-zinc-950/40 border border-indigo-500/25 rounded-lg p-3">
+                      <p className="text-[11px] text-indigo-200 leading-relaxed">
+                        Selecione qual assunto/módulo futuro (ou fora da sequência) o professor ministrará neste tempo. Os assuntos anteriores pulados permanecerão no topo da fila para as próximas aulas e este módulo não se repetirá depois.
+                      </p>
+
+                      <SubjectCurriculumSlotPicker
+                        subjectId={editingEvent.subjectId}
+                        topics={topics}
+                        existingEvents={events}
+                        currentEventId={editingEvent.id}
+                        selectedSlotKeys={adjustedPinnedSlotKeys}
+                        onChange={setAdjustedPinnedSlotKeys}
+                      />
+                    </div>
+                  )}
+
+                  {adjustedAllocationMode === 'FREE_REVIEW' && (
+                    <div className="space-y-2.5 bg-zinc-950/40 border border-purple-500/25 rounded-lg p-3">
+                      <p className="text-[11px] text-purple-200 leading-relaxed">
+                        Ideal para revisões gerais, resolução de questões ou aulas complementares. Não consome nenhum módulo da grade e não altera a ordem das aulas seguintes.
+                      </p>
+                      <div>
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase block mb-1">
+                          Título / Tema da Aula (Opcional)
+                        </label>
+                        <input
+                          type="text"
+                          value={adjustedCustomTitle}
+                          onChange={(e) => setAdjustedCustomTitle(e.target.value)}
+                          placeholder="Ex: Revisão Geral e Resolução de Questões"
+                          className="w-full bg-zinc-950 border border-zinc-800 focus:border-purple-500 rounded-lg px-3 py-2 text-xs text-white placeholder:text-zinc-500 outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2051,7 +2211,12 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                 </button>
                 <button
                   onClick={handleSaveEdit}
-                  className="flex items-center gap-2 px-4 py-2 bg-brand-red text-white rounded-lg hover:bg-red-600 font-medium shadow-lg shadow-brand-red/20 transition-all whitespace-nowrap shrink-0"
+                  disabled={
+                    actionType === 'ADJUST_MODULES' &&
+                    adjustedAllocationMode === 'MANUAL_PIN' &&
+                    adjustedPinnedSlotKeys.length === 0
+                  }
+                  className="flex items-center gap-2 px-4 py-2 bg-brand-red text-white rounded-lg hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-lg shadow-brand-red/20 transition-all whitespace-nowrap shrink-0"
                 >
                   <Check className="w-4 h-4" />
                   Salvar Ajuste
@@ -2227,6 +2392,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
           teachers={teachers}
           subjects={subjects}
           topics={topics}
+          existingEvents={events}
           isHoliday={gaps.some(g => g.date === selectedDateForManual && g.reason === 'HOLIDAY')}
           initialIsLiveEvent={manualAppointmentIsLive}
           onClose={() => {

@@ -18,6 +18,8 @@ export const sanitizeSchedule = (
   return events.filter(event => {
     // Eventos de simulado são independentes dos tópicos/módulos de disciplinas
     if (event.eventType === 'SIMULADO') return true;
+    // Aulas extras/revisões livres não consomem nem dependem de módulos específicos
+    if (event.allocationMode === 'FREE_REVIEW' || event.topicId === 'free_review') return true;
     // Se o evento não for uma aula padrão (ex: feriado, lacuna), mantenha-o.
     if (!event.topicId || !event.moduleId) return true; 
 

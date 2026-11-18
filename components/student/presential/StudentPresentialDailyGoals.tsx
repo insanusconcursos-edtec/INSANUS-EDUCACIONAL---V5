@@ -31,7 +31,8 @@ import {
   ExternalLink,
   MessageSquare,
   ArrowUpRight,
-  Layers
+  Layers,
+  Sparkles
 } from 'lucide-react';
 import { classScheduleService } from '../../../services/classScheduleService';
 import { curriculumService } from '../../../services/curriculumService';
@@ -234,10 +235,14 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
 
   const getEventModules = useCallback(
     (event: ClassScheduleEvent) => {
+      if (event.allocationMode === 'FREE_REVIEW' || event.topicId === 'free_review') {
+        return [];
+      }
+
       const rawLinks =
         event.linkedModules && event.linkedModules.length > 0
           ? event.linkedModules
-          : event.topicId && event.moduleId && event.moduleId !== 'extra'
+          : event.topicId && event.moduleId && event.moduleId !== 'extra' && event.moduleId !== 'free_review'
             ? [{ topicId: event.topicId, moduleId: event.moduleId, moduleIndex: event.moduleIndex }]
             : [];
 
@@ -883,6 +888,11 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
               • {indexInDay + 1}º TEMPO{shiftLabel ? ` (${shiftLabel})` : ''}
             </span>
 
+            {event.allocationMode === 'FREE_REVIEW' && (
+              <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/35 flex items-center gap-1">
+                <Sparkles size={10} /> REVISÃO / EXTRA
+              </span>
+            )}
             {event.isSubstitute && (
               <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-yellow-500 text-black">
                 SUBST.
@@ -926,8 +936,18 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
             <span className="font-semibold truncate">{teacherName}</span>
           </div>
 
-          {/* Lista de Tópicos / Módulos Trabalhados na Aula */}
-          {eventModules.length > 0 && (
+          {/* Lista de Tópicos / Módulos Trabalhados na Aula ou Revisão Livre */}
+          {(event.allocationMode === 'FREE_REVIEW' || event.topicId === 'free_review') ? (
+            <div className="mt-3 p-3 rounded-xl bg-purple-950/20 border border-purple-500/25 space-y-1">
+              <span className="text-[9px] font-black uppercase tracking-widest text-purple-300 flex items-center gap-1">
+                <Sparkles size={11} />
+                ATIVIDADE / REVISÃO PROGRAMADA
+              </span>
+              <p className="text-xs font-semibold text-zinc-100 leading-snug break-words">
+                {event.customActivityTitle || 'Aula Extra / Revisão'}
+              </p>
+            </div>
+          ) : eventModules.length > 0 ? (
             <div className="mt-3 p-3 rounded-xl bg-black/35 border border-zinc-800/90 space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500 flex items-center gap-1">
@@ -955,7 +975,7 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Rodapé de Ação */}
@@ -986,8 +1006,15 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
               onClick={() => {
                 const params: Record<string, string> = {};
                 if (event.subjectId) params.subjectId = event.subjectId;
-                if (event.topicId && event.topicId !== 'extra') params.topicId = event.topicId;
-                if (event.moduleId && event.moduleId !== 'extra' && !event.moduleId.startsWith('topic-')) {
+                if (event.topicId && event.topicId !== 'extra' && event.topicId !== 'free_review') {
+                  params.topicId = event.topicId;
+                }
+                if (
+                  event.moduleId &&
+                  event.moduleId !== 'extra' &&
+                  event.moduleId !== 'free_review' &&
+                  !event.moduleId.startsWith('topic-')
+                ) {
                   params.moduleId = event.moduleId;
                 }
                 onSwitchTab('PLANNING', params);

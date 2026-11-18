@@ -123,9 +123,18 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
               isLiveEvent: Boolean(newException.isLiveEvent)
             };
           } else if (newException.type === 'ADJUST_MODULES') {
+            const nextMode = newException.allocationMode || 'AUTO';
             updated[eventIndex] = {
               ...updated[eventIndex],
-              extraModulesCount: Math.max(0, Number(newException.extraModulesCount) || 0)
+              allocationMode: nextMode,
+              extraModulesCount:
+                nextMode === 'AUTO' ? Math.max(0, Number(newException.extraModulesCount) || 0) : 0,
+              pinnedSlotKeys:
+                nextMode === 'MANUAL_PIN' ? newException.pinnedSlotKeys || [] : undefined,
+              customActivityTitle:
+                nextMode === 'FREE_REVIEW'
+                  ? (newException.customActivityTitle || '').trim() || 'Aula Extra / Revisão'
+                  : undefined,
             };
           } else {
             updated[eventIndex] = {
@@ -140,17 +149,27 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
         return prev;
       }
 
-      // Ajuste de módulos atua especificamente no tempo (aula) selecionado, deslizando a fila dos demais tempos
+      // Ajuste de módulos atua especificamente no tempo (aula) selecionado, deslizando/desviando a fila dos demais tempos
       if (newException.type === 'ADJUST_MODULES') {
-        const nextExtra = Math.max(0, Number(newException.extraModulesCount) || 0);
+        const nextMode = newException.allocationMode || 'AUTO';
+        const buildModulePatch = (item: any) => ({
+          ...item,
+          allocationMode: nextMode,
+          extraModulesCount:
+            nextMode === 'AUTO' ? Math.max(0, Number(newException.extraModulesCount) || 0) : 0,
+          pinnedSlotKeys:
+            nextMode === 'MANUAL_PIN' ? newException.pinnedSlotKeys || [] : undefined,
+          customActivityTitle:
+            nextMode === 'FREE_REVIEW'
+              ? (newException.customActivityTitle || '').trim() || 'Aula Extra / Revisão'
+              : undefined,
+        });
+
         let matchedById = false;
         const updatedById = prev.map(e => {
           if (e.id && e.id === originalEvent.id) {
             matchedById = true;
-            return {
-              ...e,
-              extraModulesCount: nextExtra
-            };
+            return buildModulePatch(e);
           }
           return e;
         });
@@ -167,10 +186,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
             e.subjectId === originalEvent.subjectId
           ) {
             matchedFallback = true;
-            return {
-              ...e,
-              extraModulesCount: nextExtra
-            };
+            return buildModulePatch(e);
           }
           return e;
         });
