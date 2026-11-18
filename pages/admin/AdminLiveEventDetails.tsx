@@ -4,6 +4,8 @@ import { ArrowLeft, Info, FileText, MessageSquare, Video, Trash2, Upload, Plus }
 import { LiveEvent, LiveEventMaterial } from '../../types/liveEvent';
 import { liveEventService } from '../../services/liveEventService';
 import { LiveEventFormModal } from '../../components/admin/liveEvents/LiveEventFormModal';
+import { ConfirmationModal } from '../../components/admin/ui/ConfirmationModal';
+import toast from 'react-hot-toast';
 
 type TabType = 'info' | 'materials' | 'chat';
 
@@ -15,6 +17,7 @@ export const AdminLiveEventDetails: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('info');
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isUploadingMaterial, setIsUploadingMaterial] = useState(false);
+  const [materialToDelete, setMaterialToDelete] = useState<LiveEventMaterial | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -57,9 +60,10 @@ export const AdminLiveEventDetails: React.FC = () => {
       const title = file.name.replace(/\.[^/.]+$/, ""); // Remove extension
       await liveEventService.uploadMaterial(event.id, file, title);
       await loadEvent(event.id); // Reload to get the new material
+      toast.success('Material enviado com sucesso!');
     } catch (error) {
       console.error("Error uploading material:", error);
-      alert("Erro ao fazer upload do material.");
+      toast.error("Erro ao fazer upload do material.");
     } finally {
       setIsUploadingMaterial(false);
       if (fileInputRef.current) {
@@ -68,17 +72,22 @@ export const AdminLiveEventDetails: React.FC = () => {
     }
   };
 
-  const handleDeleteMaterial = async (material: LiveEventMaterial) => {
+  const handleDeleteMaterial = (material: LiveEventMaterial) => {
     if (!event?.id) return;
-    
-    if (window.confirm(`Tem certeza que deseja excluir o material "${material.title}"?`)) {
-      try {
-        await liveEventService.deleteMaterial(event.id, material);
-        await loadEvent(event.id); // Reload to update the list
-      } catch (error) {
-        console.error("Error deleting material:", error);
-        alert("Erro ao excluir o material.");
-      }
+    setMaterialToDelete(material);
+  };
+
+  const confirmDeleteMaterial = async () => {
+    if (!event?.id || !materialToDelete) return;
+    try {
+      await liveEventService.deleteMaterial(event.id, materialToDelete);
+      await loadEvent(event.id);
+      toast.success('Material excluído com sucesso!');
+    } catch (error) {
+      console.error('Error deleting material:', error);
+      toast.error('Erro ao excluir o material.');
+    } finally {
+      setMaterialToDelete(null);
     }
   };
 
@@ -319,7 +328,7 @@ export const AdminLiveEventDetails: React.FC = () => {
             <h3 className="text-lg font-bold text-white mb-2">Moderação do Chat</h3>
             <p className="text-zinc-400 mb-6">Acompanhe e modere as mensagens dos alunos durante a transmissão.</p>
             <button 
-              onClick={() => window.open(`/admin/eventos-ao-vivo/sala/${event.id}`, '_blank')}
+              onClick={() => navigate(`/admin/eventos-ao-vivo/sala/${event.id}`)}
               className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-bold transition-colors shadow-lg shadow-blue-900/20 flex items-center gap-2 mx-auto"
             >
               <Video size={18} />
@@ -335,6 +344,20 @@ export const AdminLiveEventDetails: React.FC = () => {
         onClose={() => setIsEditModalOpen(false)}
         onSave={handleSaveEvent}
         initialData={event}
+      />
+
+      <ConfirmationModal
+        isOpen={!!materialToDelete}
+        title="Excluir Material"
+        message={
+          materialToDelete
+            ? `Tem certeza que deseja excluir o material "${materialToDelete.title}"?`
+            : ''
+        }
+        onConfirm={confirmDeleteMaterial}
+        onCancel={() => setMaterialToDelete(null)}
+        confirmText="Excluir"
+        isDanger={true}
       />
     </div>
   );

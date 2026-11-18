@@ -292,5 +292,22 @@ export const liveEventService = {
   endLiveEvent: async (eventId: string): Promise<void> => {
     const docRef = doc(db, COLLECTION_NAME, eventId);
     await updateDoc(docRef, { status: 'ended' });
+  },
+
+  grantPresentialClassAccess: async (eventIds: string[], classId: string): Promise<void> => {
+    if (!classId || !eventIds.length) return;
+    const uniqueIds = Array.from(new Set(eventIds.filter(Boolean)));
+    await Promise.all(
+      uniqueIds.map(async eventId => {
+        try {
+          const docRef = doc(db, COLLECTION_NAME, eventId);
+          await updateDoc(docRef, {
+            'accessControl.presentialClasses': arrayUnion(classId),
+          });
+        } catch (error) {
+          console.error(`Error granting class access to live event ${eventId}:`, error);
+        }
+      })
+    );
   }
 };

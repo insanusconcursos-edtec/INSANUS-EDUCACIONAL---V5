@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize, RefreshCw, AlertCircle } from 'lucide-react';
 
 interface Props {
   videoId: string;
@@ -44,6 +44,7 @@ interface YTPlayer {
 
 interface YTPlayerOptions {
   videoId: string;
+  host?: string;
   playerVars?: Record<string, string | number | boolean>;
   events?: {
     onReady?: (event: { target: YTPlayer }) => void;
@@ -71,6 +72,9 @@ export const AlternativeYouTubePlayer: React.FC<Props> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isSeeking, setIsSeeking] = useState(false);
+  const [fallbackToDirectEmbed, setFallbackToDirectEmbed] = useState(false);
+  const [playerErrorCode, setPlayerErrorCode] = useState<number | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const formatTime = (timeInSeconds: number) => {
     if (isNaN(timeInSeconds) || timeInSeconds === 0) return '00:00';
@@ -82,6 +86,13 @@ export const AlternativeYouTubePlayer: React.FC<Props> = ({
   };
 
   useEffect(() => {
+    setFallbackToDirectEmbed(false);
+    setPlayerErrorCode(null);
+  }, [videoId]);
+
+  useEffect(() => {
+    if (fallbackToDirectEmbed || playerErrorCode !== null) return;
+
     // 1. Injeta o script da API do YouTube se não existir
     if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
       const tag = document.createElement('script');
@@ -121,8 +132,8 @@ export const AlternativeYouTubePlayer: React.FC<Props> = ({
           disablekb: 1,
           modestbranding: 1,
           rel: 0,
-          showinfo: 0,
           iv_load_policy: 3,
+          playsinline: 1,
           enablejsapi: 1,
           autoplay: 0,
           mute: 0,
@@ -144,14 +155,38 @@ export const AlternativeYouTubePlayer: React.FC<Props> = ({
             const { PLAYING, PAUSED, ENDED, BUFFERING } = window.YT.PlayerState;
             if (event.data === PLAYING || event.data === BUFFERING) {
               setIsPlaying(true);
-              if (!hasStarted) setHasStarted(true); 
+              setHasStarted(true);
             } else if (event.data === PAUSED || event.data === ENDED) {
               setIsPlaying(false);
             }
           },
           onError: (error) => {
-            console.error("YouTube Player Error:", error.data);
             isInitializing.current = false;
+            const code = Number(error?.data);
+
+            // Destrói instância JS com falha antes de alternar para fallback
+            if (playerRef.current && typeof playerRef.current.destroy === 'function') {
+              try {
+                playerRef.current.destroy();
+              } catch {
+                // ignore cleanup error
+              }
+              playerRef.current = null;
+            }
+
+            // Código 5 (HTML5 MSE Error - comum quando uma live no YouTube encerra a transmissão,
+            // entra em processamento DVR ou sofre restrição de ponte JS em iframe aninhado)
+            // ou Código 2: faz fallback transparente para o embed HTML5 direto do YouTube.
+            if (code === 5 || code === 2) {
+              console.warn(
+                `[YouTube Player] Alternando para modo de incorporação direta (código ${code}).`
+              );
+              setFallbackToDirectEmbed(true);
+              return;
+            }
+
+            console.warn(`[YouTube Player] Vídeo indisponível para reprodução (código ${code}).`);
+            setPlayerErrorCode(code || -1);
           }
         }
       });
@@ -175,8 +210,8 @@ export const AlternativeYouTubePlayer: React.FC<Props> = ({
       if (playerRef.current && typeof playerRef.current.destroy === 'function') {
         try {
           playerRef.current.destroy();
-        } catch (error) {
-          console.error("Error destroying player:", error);
+        } catch {
+          // ignore cleanup error
         }
         playerRef.current = null;
       }
@@ -184,7 +219,7 @@ export const AlternativeYouTubePlayer: React.FC<Props> = ({
       setIsReady(false);
       setHasStarted(false); // Reset interaction state for new video
     };
-  }, [videoId]);
+  }, [videoId, fallbackToDirectEmbed, playerErrorCode, retryNonce]);
 
   useEffect(() => {
     let timeInterval: NodeJS.Timeout;
@@ -285,6 +320,62 @@ export const AlternativeYouTubePlayer: React.FC<Props> = ({
       playerRef.current.seekTo(newTime, true); // O 'true' permite buscar antes de carregar o buffer
     }
   };
+
+  if (playerErrorCode !== null) {
+    const isEmbedRestricted = playerErrorCode === 101 || playerErrorCode === 150;
+    return (
+      <div
+        ref={containerRef}
+        className="relative w-full h-full bg-zinc-950 border border-zinc-800 rounded-lg flex flex-col items-center justify-center p-6 text-center gap-3"
+        onContextMenu={(e) => (preventSharing ? e.preventDefault() : undefined)}
+      >
+        <AlertCircle className="w-10 h-10 text-amber-400" />
+        <div className="space-y-1 max-w-md">
+          <h4 className="text-sm font-bold text-white uppercase tracking-wider">
+            {isEmbedRestricted
+              ? 'Incorporação restrita no YouTube'
+              : 'Transmissão indisponível no momento'}
+          </h4>
+          <p className="text-xs text-zinc-400 leading-relaxed">
+            {isEmbedRestricted
+              ? 'Verifique nas configurações da transmissão no YouTube Studio se a opção "Permitir incorporação" está ativada e se o vídeo está como Público ou Não listado.'
+              : 'A transmissão pode ter sido encerrada no YouTube ou o link do vídeo foi alterado.'}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setPlayerErrorCode(null);
+            setFallbackToDirectEmbed(false);
+            setRetryNonce(n => n + 1);
+          }}
+          className="mt-1 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-white transition-colors"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          Recarregar Player
+        </button>
+      </div>
+    );
+  }
+
+  if (fallbackToDirectEmbed) {
+    return (
+      <div
+        ref={containerRef}
+        className="relative w-full h-full bg-black rounded-lg overflow-hidden"
+        onContextMenu={(e) => (preventSharing ? e.preventDefault() : undefined)}
+      >
+        <iframe
+          src={`https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1&playsinline=1`}
+          title="Transmissão Ao Vivo"
+          className="w-full h-full border-0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          referrerPolicy="strict-origin-when-cross-origin"
+          allowFullScreen
+        />
+      </div>
+    );
+  }
 
   return (
     <div 

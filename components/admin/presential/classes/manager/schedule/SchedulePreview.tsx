@@ -3,18 +3,27 @@ import { useSearchParams } from 'react-router-dom';
 import { ClassAllocationMode, ClassScheduleEvent, ScheduleGap, ScheduleException, ExceptionType } from '../../../../../../types/schedule';
 import { Teacher } from '../../../../../../types/teacher';
 import { Subject, Topic } from '../../../../../../types/curriculum';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertTriangle, ChevronDown, ChevronUp, LayoutGrid, List, Edit2, X, Check, CheckCircle, Loader2, BookOpen, Target, Trash2, Radio, MapPin, Plus, Minus, Layers, Trophy, DoorOpen, Lock, Play, Flag, FileJson, FileText, Video, HelpCircle, Scale, Zap, Maximize2, ExternalLink, Pin, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertTriangle, ChevronDown, ChevronUp, LayoutGrid, List, Edit2, X, Check, CheckCircle, Loader2, BookOpen, Target, Trash2, Radio, MapPin, Plus, Minus, Layers, Trophy, DoorOpen, Lock, Play, Flag, FileJson, FileText, Video, HelpCircle, Scale, Zap, Maximize2, ExternalLink, Pin, Sparkles, Link2 } from 'lucide-react';
 
 import { checkTeacherAvailability } from '../../../../../../utils/scheduler/ResourceValidator';
-import { mergeConsumedSlotModules, previewAutoAllocationForEvent } from '../../../../../../utils/scheduler/ContentResolver';
+import {
+  buildSubjectSlotUnits,
+  distributeSlotKeysAcrossPeriods,
+  matchSlotUnitsByKeys,
+  mergeConsumedSlotModules,
+  previewAutoAllocationForEvent,
+} from '../../../../../../utils/scheduler/ContentResolver';
 
 import { Class } from '../../../../../../types/class';
 import { classService } from '../../../../../../services/classService';
 import { GuidedStudyMeta } from '../../../../../../types/guidedStudy';
 import { guidedStudyService } from '../../../../../../services/guidedStudyService';
+import { LiveEvent } from '../../../../../../types/liveEvent';
+import { liveEventService } from '../../../../../../services/liveEventService';
 
 import { AddManualAppointmentModal } from './AddManualAppointmentModal';
 import { SubjectCurriculumSlotPicker } from './SubjectCurriculumSlotPicker';
+import { LiveEventRoomPicker } from './LiveEventRoomPicker';
 import { AddSimuladoAppointmentModal, formatSimuladoDuration } from './AddSimuladoAppointmentModal';
 import { AddGuidedStudyMetaModal } from './AddGuidedStudyMetaModal';
 import { StudentGuidedStudyModal } from '../../../../../student/presential/StudentGuidedStudyModal';
@@ -53,6 +62,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
   const [adjustedExtraModules, setAdjustedExtraModules] = useState<number>(0);
   const [adjustedPinnedSlotKeys, setAdjustedPinnedSlotKeys] = useState<string[]>([]);
   const [adjustedCustomTitle, setAdjustedCustomTitle] = useState<string>('');
+  const [distributePinAcrossEncounter, setDistributePinAcrossEncounter] = useState<boolean>(true);
   const [forceConfirmData, setForceConfirmData] = useState<{ teacherId: string, details: string } | null>(null);
   const [selectedDateForManual, setSelectedDateForManual] = useState<string | null>(null);
   const [manualAppointmentIsLive, setManualAppointmentIsLive] = useState<boolean>(false);
@@ -113,11 +123,61 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
     }
   };
 
+  // Live Events Rooms State (for linking scheduled live classes to transmission rooms)
+  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
+  const [loadingLiveEvents, setLoadingLiveEvents] = useState<boolean>(false);
+  const [selectedLiveRoomId, setSelectedLiveRoomId] = useState<string>('');
+  const [selectedLiveRoomTitle, setSelectedLiveRoomTitle] = useState<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingLiveEvents(true);
+    liveEventService
+      .getLiveEvents()
+      .then(list => {
+        if (!cancelled) setLiveEvents(list);
+      })
+      .catch(err => console.error('Erro ao carregar eventos ao vivo:', err))
+      .finally(() => {
+        if (!cancelled) setLoadingLiveEvents(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [classData?.id]);
+
+  const getLinkedLiveEventLabel = (ev?: ClassScheduleEvent | null): string | undefined => {
+    if (!ev?.liveEventId) return undefined;
+    const found = liveEvents.find(le => le.id === ev.liveEventId);
+    return found?.title || ev.liveEventTitle || 'Sala de Transmissão Vinculada';
+  };
+
   useEffect(() => {
     fetchGuidedMetas();
   }, [classData?.id]);
 
   const todayString = toLocalISODate();
+
+  // Tempos consecutivos deste mesmo encontro e disciplina a partir do tempo editado
+  const encounterSubsequentEvents = useMemo(() => {
+    if (!editingEvent) return [] as ClassScheduleEvent[];
+    const targetShift = editingEvent.shift || classData?.shift || '';
+    return events
+      .filter(
+        ev =>
+          ev.eventType !== 'SIMULADO' &&
+          ev.status !== 'CANCELED' &&
+          ev.date === editingEvent.date &&
+          (ev.shift || classData?.shift || '') === targetShift &&
+          ev.subjectId === editingEvent.subjectId &&
+          ev.startTime >= editingEvent.startTime
+      )
+      .sort((a, b) => {
+        if (a.id === editingEvent.id) return -1;
+        if (b.id === editingEvent.id) return 1;
+        return a.startTime.localeCompare(b.startTime);
+      });
+  }, [editingEvent, events, classData?.shift]);
 
   // Sync selected substitute and allocation state when editing event changes
   useEffect(() => {
@@ -126,18 +186,54 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
       setSelectedSubstituteId(editingEvent.teacherId || '');
       setActionType('SUBSTITUTION');
       setAdjustedAllocationMode(currentMode);
+      setDistributePinAcrossEncounter(true);
       setAdjustedExtraModules(
         currentMode === 'AUTO' ? Math.max(0, Number(editingEvent.extraModulesCount) || 0) : 0
       );
-      setAdjustedPinnedSlotKeys(
-        currentMode === 'MANUAL_PIN' && Array.isArray(editingEvent.pinnedSlotKeys)
-          ? editingEvent.pinnedSlotKeys
-          : []
-      );
+
+      if (currentMode === 'MANUAL_PIN') {
+        const combinedKeys: string[] = [];
+        const targetShift = editingEvent.shift || classData?.shift || '';
+        const siblings = events
+          .filter(
+            ev =>
+              ev.eventType !== 'SIMULADO' &&
+              ev.status !== 'CANCELED' &&
+              ev.date === editingEvent.date &&
+              (ev.shift || classData?.shift || '') === targetShift &&
+              ev.subjectId === editingEvent.subjectId &&
+              ev.startTime >= editingEvent.startTime
+          )
+          .sort((a, b) => {
+            if (a.id === editingEvent.id) return -1;
+            if (b.id === editingEvent.id) return 1;
+            return a.startTime.localeCompare(b.startTime);
+          });
+
+        // Se os tempos consecutivos do encontro já estavam fixados juntos (ex: Parte 1/2 e Parte 2/2),
+        // pré-carrega o conjunto completo para edição unificada
+        for (const sib of siblings) {
+          if (sib.allocationMode === 'MANUAL_PIN' && Array.isArray(sib.pinnedSlotKeys)) {
+            sib.pinnedSlotKeys.forEach(k => {
+              if (!combinedKeys.includes(k)) combinedKeys.push(k);
+            });
+          } else {
+            break;
+          }
+        }
+        setAdjustedPinnedSlotKeys(combinedKeys);
+      } else {
+        setAdjustedPinnedSlotKeys([]);
+      }
+
       setAdjustedCustomTitle(editingEvent.customActivityTitle || '');
+      const initialRoomId = editingEvent.liveEventId || '';
+      const matchedRoom = initialRoomId ? liveEvents.find(le => le.id === initialRoomId) : undefined;
+      setSelectedLiveRoomId(initialRoomId);
+      setSelectedLiveRoomTitle(matchedRoom?.title || editingEvent.liveEventTitle || '');
       setForceConfirmData(null);
     }
-  }, [editingEvent]);
+  }, [editingEvent?.id, liveEvents]);
 
   // Group teachers by availability
   const { availableTeachers, unavailableTeachers, hasQualifiedTeachers } = useMemo(() => {
@@ -360,8 +456,25 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
           ? [{ topicId: event.topicId, moduleId: event.moduleId, moduleIndex: event.moduleIndex }]
           : [];
 
+    const indicesByModule = new Map<string, string[]>();
+    rawLinks.forEach(link => {
+      if (!link.moduleId) return;
+      if (!indicesByModule.has(link.moduleId)) {
+        indicesByModule.set(link.moduleId, []);
+      }
+      if (link.moduleIndex && !indicesByModule.get(link.moduleId)!.includes(link.moduleIndex)) {
+        indicesByModule.get(link.moduleId)!.push(link.moduleIndex);
+      }
+    });
+
     const seen = new Set<string>();
-    const resolved: { topicId: string; moduleId: string; topicName: string; moduleName: string }[] = [];
+    const resolved: {
+      topicId: string;
+      moduleId: string;
+      topicName: string;
+      moduleName: string;
+      partLabel?: string;
+    }[] = [];
 
     rawLinks.forEach((link) => {
       if (!link.moduleId || seen.has(link.moduleId)) return;
@@ -371,11 +484,32 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
       const moduleName =
         mod?.name ||
         (link.moduleId.startsWith('topic-') && topic?.name ? topic.name : 'Módulo desconhecido');
+
+      const indices = indicesByModule.get(link.moduleId) || [];
+      const numberedParts = indices.filter(
+        idx =>
+          idx &&
+          idx !== 'Conjunto' &&
+          idx !== '1/1' &&
+          idx !== 'Extra' &&
+          idx !== 'Revisão / Extra'
+      );
+
+      let partLabel: string | undefined;
+      if (numberedParts.length === 1) {
+        partLabel = `Parte ${numberedParts[0]}`;
+      } else if (numberedParts.length > 1) {
+        partLabel = `Partes ${numberedParts.join(', ')}`;
+      } else if (indices.includes('Conjunto')) {
+        partLabel = 'Conjunto';
+      }
+
       resolved.push({
         topicId: link.topicId,
         moduleId: link.moduleId,
         topicName: topic?.name || 'Assunto',
         moduleName,
+        partLabel,
       });
     });
 
@@ -424,6 +558,35 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
       previewModules,
     };
   }, [editingEvent, events, topics, adjustedExtraModules]);
+
+  // Pré-visualização da distribuição automática entre os tempos consecutivos do mesmo encontro no Fura-Fila
+  const encounterPinDistributionPreview = useMemo(() => {
+    if (
+      !editingEvent ||
+      adjustedAllocationMode !== 'MANUAL_PIN' ||
+      encounterSubsequentEvents.length <= 1 ||
+      adjustedPinnedSlotKeys.length <= 1
+    ) {
+      return null;
+    }
+
+    const targetCount = Math.min(encounterSubsequentEvents.length, adjustedPinnedSlotKeys.length);
+    const targetEvents = encounterSubsequentEvents.slice(0, targetCount);
+    const buckets = distributeSlotKeysAcrossPeriods(adjustedPinnedSlotKeys, targetCount);
+    const slotUnits = buildSubjectSlotUnits(editingEvent.subjectId, topics, true);
+
+    return targetEvents.map((ev, idx) => ({
+      event: ev,
+      slotKeys: buckets[idx] || [],
+      units: matchSlotUnitsByKeys(buckets[idx] || [], slotUnits),
+    }));
+  }, [
+    editingEvent,
+    adjustedAllocationMode,
+    encounterSubsequentEvents,
+    adjustedPinnedSlotKeys,
+    topics,
+  ]);
 
   const getWeekendsOfMonth = (year: number, month: number) => {
     const weekendsList: { number: number; saturday: string; sunday: string; satDay: number; sunDay: number }[] = [];
@@ -784,8 +947,13 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                         >
                           <div className="p-2">
                             <div className="flex justify-between items-center mb-1 flex-wrap gap-1">
-                              <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider tabular-nums flex items-center gap-1">
+                              <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider tabular-nums flex items-center gap-1 flex-wrap">
                                 <span>{currentTempoNumber}º Tempo</span>
+                                {eventModules[0]?.partLabel?.startsWith('Parte') && (
+                                  <span className="text-indigo-300 font-extrabold">
+                                    • {eventModules[0].partLabel}
+                                  </span>
+                                )}
                                 {hasMultipleModules && (
                                   <span className="text-amber-400/90" title={`${eventModules.length} módulos previstos nesta aula`}>
                                     • {eventModules.length} Módulos
@@ -888,9 +1056,23 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                               <div>
                                 <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Modalidade</span>
                                 {isLive ? (
-                                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-sky-300">
-                                    <Radio className="w-3 h-3 text-sky-400 shrink-0" />
-                                    <span>Evento Ao Vivo (Acompanhamento pelo Portal)</span>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-1.5 text-[11px] font-semibold text-sky-300">
+                                      <Radio className="w-3 h-3 text-sky-400 shrink-0" />
+                                      <span>Evento Ao Vivo (Acompanhamento pelo Portal)</span>
+                                    </div>
+                                    {event.liveEventId ? (
+                                      <div className="flex items-center gap-1.5 text-[10px] text-sky-200 bg-sky-950/50 border border-sky-500/30 rounded px-2 py-1">
+                                        <Link2 className="w-3 h-3 text-sky-400 shrink-0" />
+                                        <span className="truncate" title={getLinkedLiveEventLabel(event)}>
+                                          Sala: <strong>{getLinkedLiveEventLabel(event)}</strong>
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div className="text-[10px] text-amber-300/80 italic">
+                                        Nenhuma sala específica vinculada (vincule em Gerenciar Encontro)
+                                      </div>
+                                    )}
                                   </div>
                                 ) : (
                                   <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
@@ -924,19 +1106,41 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                                         className="flex items-start justify-between gap-1.5 py-1 border-b border-zinc-800 last:border-0"
                                       >
                                         <div className="min-w-0 flex-1">
-                                          <p className="text-[11px] text-zinc-200 leading-snug break-words">
-                                            <span className="text-amber-400/90 font-bold tabular-nums mr-1">
+                                          <div className="text-[11px] text-zinc-200 leading-snug break-words flex items-center gap-1 flex-wrap">
+                                            <span className="text-amber-400/90 font-bold tabular-nums">
                                               {modIdx + 1}.
                                             </span>
-                                            {modItem.moduleName}
-                                          </p>
-                                          {spansMultipleTopics && (
+                                            <span>{modItem.moduleName}</span>
+                                            {modItem.partLabel && (
+                                              <span
+                                                className={`text-[8px] font-bold uppercase px-1 py-0.5 rounded border tabular-nums ${
+                                                  modItem.partLabel === 'Conjunto'
+                                                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                                    : 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
+                                                }`}
+                                              >
+                                                {modItem.partLabel}
+                                              </span>
+                                            )}
+                                          </div>
+                                          {spansMultipleTopics ? (
                                             <p
                                               className="text-[9px] text-zinc-500 leading-tight mt-0.5 truncate"
                                               title={modItem.topicName}
                                             >
                                               Assunto: {modItem.topicName}
                                             </p>
+                                          ) : (
+                                            modIdx === 0 &&
+                                            modItem.topicName &&
+                                            modItem.topicName !== modItem.moduleName && (
+                                              <p
+                                                className="text-[9px] text-zinc-500 leading-tight mt-0.5 truncate"
+                                                title={modItem.topicName}
+                                              >
+                                                Assunto: {modItem.topicName}
+                                              </p>
+                                            )
                                           )}
                                         </div>
                                         <button
@@ -963,10 +1167,17 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                               ) : (
                                 <div>
                                   <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Módulo</span>
-                                  <p className="text-[11px] text-zinc-300 leading-tight">
-                                    {eventModules[0]?.moduleName ||
-                                      (isOverflow ? 'Aula extra além da carga prevista' : getModuleName(event.topicId, event.moduleId))}
-                                  </p>
+                                  <div className="text-[11px] text-zinc-300 leading-tight flex items-center gap-1.5 flex-wrap">
+                                    <span>
+                                      {eventModules[0]?.moduleName ||
+                                        (isOverflow ? 'Aula extra além da carga prevista' : getModuleName(event.topicId, event.moduleId))}
+                                    </span>
+                                    {eventModules[0]?.partLabel && (
+                                      <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-200 border border-indigo-500/40 tabular-nums">
+                                        {eventModules[0].partLabel}
+                                      </span>
+                                    )}
+                                  </div>
                                   {eventModules[0]?.topicName && eventModules[0].topicName !== eventModules[0].moduleName && (
                                     <p className="text-[9px] text-zinc-500 mt-0.5 truncate">
                                       Assunto: {eventModules[0].topicName}
@@ -1483,6 +1694,12 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
         return;
       }
 
+      const shouldDistributePins =
+        actionType === 'ADJUST_MODULES' &&
+        adjustedAllocationMode === 'MANUAL_PIN' &&
+        distributePinAcrossEncounter &&
+        Boolean(encounterPinDistributionPreview && encounterPinDistributionPreview.length > 1);
+
       const newException: ScheduleException = {
         id: Date.now().toString(),
         eventId: editingEvent.id,
@@ -1490,7 +1707,30 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
         meetingNumber: editingEvent.meetingNumber,
         originalTeacherId: editingEvent.teacherId,
         substituteTeacherId: actionType === 'SUBSTITUTION' ? selectedSubstituteId : undefined,
-        isLiveEvent: actionType === 'MODALITY_CHANGE' ? !editingEvent.isLiveEvent : editingEvent.isLiveEvent,
+        isLiveEvent:
+          actionType === 'LINK_LIVE_EVENT'
+            ? true
+            : actionType === 'MODALITY_CHANGE'
+              ? !editingEvent.isLiveEvent
+              : editingEvent.isLiveEvent,
+        liveEventId:
+          actionType === 'LINK_LIVE_EVENT'
+            ? selectedLiveRoomId || null
+            : actionType === 'MODALITY_CHANGE'
+              ? !editingEvent.isLiveEvent
+                ? selectedLiveRoomId || null
+                : null
+              : editingEvent.liveEventId,
+        liveEventTitle:
+          actionType === 'LINK_LIVE_EVENT'
+            ? selectedLiveRoomId
+              ? selectedLiveRoomTitle || null
+              : null
+            : actionType === 'MODALITY_CHANGE'
+              ? !editingEvent.isLiveEvent && selectedLiveRoomId
+                ? selectedLiveRoomTitle || null
+                : null
+              : editingEvent.liveEventTitle,
         allocationMode:
           actionType === 'ADJUST_MODULES' ? adjustedAllocationMode : editingEvent.allocationMode,
         extraModulesCount:
@@ -1502,9 +1742,19 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
         pinnedSlotKeys:
           actionType === 'ADJUST_MODULES'
             ? adjustedAllocationMode === 'MANUAL_PIN'
-              ? adjustedPinnedSlotKeys
+              ? shouldDistributePins && encounterPinDistributionPreview
+                ? encounterPinDistributionPreview[0].slotKeys
+                : adjustedPinnedSlotKeys
               : undefined
             : editingEvent.pinnedSlotKeys,
+        periodPinAssignments:
+          shouldDistributePins && encounterPinDistributionPreview
+            ? encounterPinDistributionPreview.map(item => ({
+                eventId: item.event.id,
+                startTime: item.event.startTime,
+                pinnedSlotKeys: item.slotKeys,
+              }))
+            : undefined,
         customActivityTitle:
           actionType === 'ADJUST_MODULES'
             ? adjustedAllocationMode === 'FREE_REVIEW'
@@ -1521,6 +1771,9 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
       setAdjustedExtraModules(0);
       setAdjustedPinnedSlotKeys([]);
       setAdjustedCustomTitle('');
+      setDistributePinAcrossEncounter(true);
+      setSelectedLiveRoomId('');
+      setSelectedLiveRoomTitle('');
     } else {
       setEditingEvent(null);
     }
@@ -1854,6 +2107,26 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                     </span>
                   )}
                 </div>
+                {editingEvent.isLiveEvent && (
+                  <div className="flex justify-between items-center gap-3">
+                    <span className="text-xs font-bold text-zinc-500 uppercase shrink-0">
+                      Sala Ao Vivo
+                    </span>
+                    {editingEvent.liveEventId ? (
+                      <span
+                        className="text-xs font-bold text-sky-200 flex items-center gap-1.5 text-right truncate max-w-[65%]"
+                        title={getLinkedLiveEventLabel(editingEvent)}
+                      >
+                        <Link2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                        <span className="truncate">{getLinkedLiveEventLabel(editingEvent)}</span>
+                      </span>
+                    ) : (
+                      <span className="text-xs font-medium text-amber-300/90 text-right">
+                        Nenhuma sala vinculada
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div className="pt-2 border-t border-zinc-700/50 mt-2">
                   <p className="text-[10px] text-zinc-400 italic text-center">
                     {actionType === 'ADJUST_MODULES'
@@ -1874,6 +2147,25 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                     <div className="font-medium text-sm text-white">Substituir Professor</div>
                     <div className="text-xs text-zinc-500">Gera custo adicional. Altera o professor deste encontro.</div>
                   </button>
+
+                  {editingEvent.isLiveEvent && (
+                    <button
+                      onClick={() => setActionType('LINK_LIVE_EVENT')}
+                      className={`p-3 rounded-lg border text-left transition-all ${actionType === 'LINK_LIVE_EVENT' ? 'bg-sky-950/35 border-sky-500 ring-1 ring-sky-500' : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800'}`}
+                    >
+                      <div className="font-medium text-sm text-white flex items-center gap-1.5">
+                        <Link2 className="w-4 h-4 text-sky-400 shrink-0" />
+                        <span>
+                          {editingEvent.liveEventId
+                            ? 'Alterar / Gerenciar Sala de Evento Ao Vivo'
+                            : 'Vincular Sala de Evento Ao Vivo'}
+                        </span>
+                      </div>
+                      <div className="text-xs text-zinc-500">
+                        Referencia um evento ao vivo criado para liberar o acesso direto à sala de transmissão no cronograma do aluno.
+                      </div>
+                    </button>
+                  )}
 
                   <button
                     onClick={() => setActionType('ADJUST_MODULES')}
@@ -1919,6 +2211,35 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                   </button>
                 </div>
               </div>
+
+              {/* Link Live Event Room Picker (Direct Link or Modality Conversion to Live) */}
+              {(actionType === 'LINK_LIVE_EVENT' ||
+                (actionType === 'MODALITY_CHANGE' && !editingEvent.isLiveEvent)) && (
+                <div className="space-y-2.5 pt-3 border-t border-zinc-800 animate-in fade-in duration-150">
+                  <div className="p-3.5 rounded-xl bg-sky-950/20 border border-sky-500/30 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-bold text-sky-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <Link2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                        <span>Sala de Transmissão (Eventos Ao Vivo)</span>
+                      </label>
+                      {actionType === 'MODALITY_CHANGE' && (
+                        <span className="text-[10px] font-semibold text-zinc-400">Opcional</span>
+                      )}
+                    </div>
+                    <LiveEventRoomPicker
+                      liveEvents={liveEvents}
+                      loading={loadingLiveEvents}
+                      classId={classData.id}
+                      targetDate={editingEvent.date}
+                      selectedLiveEventId={selectedLiveRoomId}
+                      onChange={(id, title) => {
+                        setSelectedLiveRoomId(id);
+                        setSelectedLiveRoomTitle(title);
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Adjust Modules / Smart Pin / Free Review Control */}
               {actionType === 'ADJUST_MODULES' && (
@@ -2054,7 +2375,20 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                   {adjustedAllocationMode === 'MANUAL_PIN' && (
                     <div className="space-y-2.5 bg-zinc-950/40 border border-indigo-500/25 rounded-lg p-3">
                       <p className="text-[11px] text-indigo-200 leading-relaxed">
-                        Selecione qual assunto/módulo futuro (ou fora da sequência) o professor ministrará neste tempo. Os assuntos anteriores pulados permanecerão no topo da fila para as próximas aulas e este módulo não se repetirá depois.
+                        {encounterSubsequentEvents.length > 1 ? (
+                          <>
+                            Selecione o assunto/módulo futuro abaixo. Ao marcar um conteúdo com{' '}
+                            <strong>2+ aulas</strong>, ele pode ser distribuído automaticamente
+                            entre os tempos deste encontro (Parte 1/2, Parte 2/2).
+                          </>
+                        ) : (
+                          <>
+                            Selecione qual assunto/módulo futuro (ou fora da sequência) o professor
+                            ministrará neste tempo. Os assuntos anteriores pulados permanecerão no
+                            topo da fila para as próximas aulas e este módulo não se repetirá
+                            depois.
+                          </>
+                        )}
                       </p>
 
                       <SubjectCurriculumSlotPicker
@@ -2062,9 +2396,73 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                         topics={topics}
                         existingEvents={events}
                         currentEventId={editingEvent.id}
+                        ignoredEventIds={
+                          distributePinAcrossEncounter && encounterSubsequentEvents.length > 1
+                            ? new Set(encounterSubsequentEvents.map(ev => ev.id))
+                            : undefined
+                        }
                         selectedSlotKeys={adjustedPinnedSlotKeys}
                         onChange={setAdjustedPinnedSlotKeys}
                       />
+
+                      {encounterPinDistributionPreview && encounterPinDistributionPreview.length > 1 && (
+                        <div className="p-2.5 rounded-lg bg-zinc-950/90 border border-indigo-500/35 space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => setDistributePinAcrossEncounter(prev => !prev)}
+                            className="w-full flex items-center justify-between gap-2 text-left"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div
+                                className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
+                                  distributePinAcrossEncounter
+                                    ? 'bg-indigo-500 border-indigo-400 text-white'
+                                    : 'bg-zinc-900 border-zinc-700 text-transparent'
+                                }`}
+                              >
+                                <Check className="w-3 h-3" />
+                              </div>
+                              <span className="text-[11px] font-bold text-indigo-200">
+                                Distribuir automaticamente entre os {encounterPinDistributionPreview.length} tempos deste encontro
+                              </span>
+                            </div>
+                          </button>
+
+                          {distributePinAcrossEncounter ? (
+                            <div className="space-y-1.5 pt-1 border-t border-zinc-800/80">
+                              {encounterPinDistributionPreview.map((item, pIdx) => (
+                                <div
+                                  key={item.event.id}
+                                  className="p-2 rounded bg-indigo-950/30 border border-indigo-500/25 text-[11px] space-y-0.5"
+                                >
+                                  <div className="flex items-center justify-between gap-2 text-indigo-200 font-bold tabular-nums">
+                                    <span>
+                                      {pIdx + 1}º Tempo a partir deste ({item.event.startTime} - {item.event.endTime})
+                                    </span>
+                                    <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-500/20 border border-indigo-500/40">
+                                      Fixado
+                                    </span>
+                                  </div>
+                                  {item.units.map(u => (
+                                    <div key={u.slotKey} className="text-zinc-300 flex items-center gap-1.5 flex-wrap">
+                                      <span>{u.primaryModule.name}</span>
+                                      {u.primaryIndexLabel !== '1/1' && (
+                                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-200 border border-indigo-500/40 tabular-nums">
+                                          Parte {u.primaryIndexLabel}
+                                        </span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-amber-300/90 pt-1 border-t border-zinc-800/80">
+                              Desativado: todas as {adjustedPinnedSlotKeys.length} aulas selecionadas serão condensadas apenas neste tempo ({editingEvent.startTime}).
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -2395,6 +2793,8 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
           existingEvents={events}
           isHoliday={gaps.some(g => g.date === selectedDateForManual && g.reason === 'HOLIDAY')}
           initialIsLiveEvent={manualAppointmentIsLive}
+          liveEvents={liveEvents}
+          loadingLiveEvents={loadingLiveEvents}
           onClose={() => {
             setSelectedDateForManual(null);
             setManualAppointmentIsLive(false);

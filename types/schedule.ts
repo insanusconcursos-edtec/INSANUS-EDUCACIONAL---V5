@@ -62,9 +62,16 @@ export interface ClassScheduleEvent {
   classOrderIndex: number; // A ordem matemática desta aula dentro do currículo
   isOverflow?: boolean; // Flag para indicar se o evento excede o limite original de encontros ou data
   isLiveEvent?: boolean; // Flag para identificar Evento Ao Vivo transmitido no portal (segue a mesma sequência de assuntos/módulos)
+  liveEventId?: string; // ID da sala de transmissão (live_events) vinculada a este encontro ao vivo
+  liveEventTitle?: string; // Título de referência do Evento Ao Vivo vinculado
 }
 
-export type ExceptionType = 'SUBSTITUTION' | 'CANCELLATION' | 'MODALITY_CHANGE' | 'ADJUST_MODULES';
+export type ExceptionType =
+  | 'SUBSTITUTION'
+  | 'CANCELLATION'
+  | 'MODALITY_CHANGE'
+  | 'ADJUST_MODULES'
+  | 'LINK_LIVE_EVENT';
 
 export interface ScheduleException {
   id: string;
@@ -74,9 +81,16 @@ export interface ScheduleException {
   originalTeacherId?: string; // Para quem ia dar aula (opcional se for slot vazio)
   substituteTeacherId?: string; // Quem vai assumir (apenas para substituição/alteração)
   isLiveEvent?: boolean; // Usado quando type === 'MODALITY_CHANGE'
+  liveEventId?: string | null; // Usado em 'LINK_LIVE_EVENT' ou 'MODALITY_CHANGE'
+  liveEventTitle?: string | null; // Usado em 'LINK_LIVE_EVENT' ou 'MODALITY_CHANGE'
   extraModulesCount?: number; // Usado quando type === 'ADJUST_MODULES'
   allocationMode?: ClassAllocationMode; // Usado quando type === 'ADJUST_MODULES'
   pinnedSlotKeys?: string[]; // Usado quando type === 'ADJUST_MODULES' e allocationMode === 'MANUAL_PIN'
+  periodPinAssignments?: Array<{
+    eventId: string;
+    startTime: string;
+    pinnedSlotKeys: string[];
+  }>; // Distribuição automática entre múltiplos tempos do mesmo encontro
   customActivityTitle?: string; // Usado quando type === 'ADJUST_MODULES' e allocationMode === 'FREE_REVIEW'
   type: ExceptionType;
 }

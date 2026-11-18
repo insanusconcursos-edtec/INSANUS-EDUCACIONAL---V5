@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   Check,
@@ -12,15 +12,23 @@ import {
   Layers,
   Pin,
   Sparkles,
+  SlidersHorizontal,
+  Link2,
 } from 'lucide-react';
 import { Class } from '../../../../../../types/class';
 import { Teacher } from '../../../../../../types/teacher';
 import { Subject, Topic } from '../../../../../../types/curriculum';
 import { ClassAllocationMode, ClassScheduleEvent } from '../../../../../../types/schedule';
+import { LiveEvent } from '../../../../../../types/liveEvent';
+import { liveEventService } from '../../../../../../services/liveEventService';
 import { checkTeacherAvailability } from '../../../../../../utils/scheduler/ResourceValidator';
 import { calculateMultiPeriodTimes } from '../../../../../../utils/scheduler/TimeCalculator';
-import { resolveManualSchedule } from '../../../../../../utils/scheduler/ContentResolver';
+import {
+  distributeSlotKeysAcrossPeriods,
+  resolveManualSchedule,
+} from '../../../../../../utils/scheduler/ContentResolver';
 import { SubjectCurriculumSlotPicker } from './SubjectCurriculumSlotPicker';
+import { LiveEventRoomPicker } from './LiveEventRoomPicker';
 
 interface AddManualAppointmentModalProps {
   selectedDate: string;
@@ -31,6 +39,8 @@ interface AddManualAppointmentModalProps {
   existingEvents?: ClassScheduleEvent[];
   isHoliday?: boolean;
   initialIsLiveEvent?: boolean;
+  liveEvents?: LiveEvent[];
+  loadingLiveEvents?: boolean;
   onClose: () => void;
   onSave: (appointments: any[]) => void;
 }
@@ -63,6 +73,8 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
   existingEvents = [],
   isHoliday = false,
   initialIsLiveEvent = false,
+  liveEvents: propLiveEvents,
+  loadingLiveEvents: propLoadingLiveEvents = false,
   onClose,
   onSave,
 }) => {
@@ -71,12 +83,45 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6 || isHoliday;
 
   const [isLiveEvent, setIsLiveEvent] = useState<boolean>(initialIsLiveEvent);
+  const [selectedLiveEventId, setSelectedLiveEventId] = useState<string>('');
+  const [selectedLiveEventTitle, setSelectedLiveEventTitle] = useState<string>('');
+  const [fetchedLiveEvents, setFetchedLiveEvents] = useState<LiveEvent[]>([]);
+  const [fetchingLiveEvents, setFetchingLiveEvents] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (propLiveEvents !== undefined) return;
+    let cancelled = false;
+    setFetchingLiveEvents(true);
+    liveEventService
+      .getLiveEvents()
+      .then(list => {
+        if (!cancelled) setFetchedLiveEvents(list);
+      })
+      .catch(err => console.error('Erro ao buscar salas de eventos ao vivo:', err))
+      .finally(() => {
+        if (!cancelled) setFetchingLiveEvents(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [propLiveEvents]);
+
+  const availableLiveEvents = propLiveEvents !== undefined ? propLiveEvents : fetchedLiveEvents;
+  const isLoadingLiveRooms = propLiveEvents !== undefined ? propLoadingLiveEvents : fetchingLiveEvents;
+
   const [startTime, setStartTime] = useState(isWeekend ? '' : classData.startTime);
   const [shift, setShift] = useState(isWeekend ? '' : classData.shift);
 
   const [numberOfPeriods, setNumberOfPeriods] = useState(1);
   const [isSameSubject, setIsSameSubject] = useState(true);
+  const [customizePerTempo, setCustomizePerTempo] = useState(false);
   const [activeGlobalPeriodTab, setActiveGlobalPeriodTab] = useState<number>(0);
+
+  // Estado unificado do encontro quando todos os tempos compartilham a mesma disciplina
+  const [encounterAllocationMode, setEncounterAllocationMode] =
+    useState<ClassAllocationMode>('AUTO');
+  const [encounterPinnedSlotKeys, setEncounterPinnedSlotKeys] = useState<string[]>([]);
+  const [encounterCustomTitle, setEncounterCustomTitle] = useState<string>('');
 
   const [globalSelection, setGlobalSelection] = useState({ subjectId: '', teacherId: '' });
   const [periodSelections, setPeriodSelections] = useState<
@@ -107,6 +152,102 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
     });
   };
 
+  // Calcula a configuração efetiva de cada tempo (distribuindo automaticamente os slots no Fura-Fila unificado)
+  const effectivePeriodConfigs = useMemo<PeriodContentConfig[]>(() => {
+    if (!isSameSubject || customizePerTempo) {
+      return Array.from({ length: numberOfPeriods }, (_, idx) => {
+        return periodConfigs[idx] || createDefaultPeriodConfig();
+      });
+    }
+
+    if (encounterAllocationMode === 'FREE_REVIEW') {
+      return Array.from({ length: numberOfPeriods }, () => ({
+        allocationMode: 'FREE_REVIEW',
+        extraModulesCount: 0,
+        pinnedSlotKeys: [],
+        customActivityTitle: encounterCustomTitle,
+      }));
+    }
+
+    if (encounterAllocationMode === 'MANUAL_PIN') {
+      const buckets = distributeSlotKeysAcrossPeriods(encounterPinnedSlotKeys, numberOfPeriods);
+      return Array.from({ length: numberOfPeriods }, (_, idx) => {
+        const assignedKeys = buckets[idx] || [];
+        if (assignedKeys.length > 0) {
+          return {
+            allocationMode: 'MANUAL_PIN',
+            extraModulesCount: 0,
+            pinnedSlotKeys: assignedKeys,
+            customActivityTitle: '',
+          };
+        }
+        // Caso o usuário selecione menos aulas (ex: 1 aula) do que a quantidade de tempos (ex: 2 tempos),
+        // o tempo restante segue a fila automática de forma transparente
+        return {
+          allocationMode: 'AUTO',
+          extraModulesCount: 0,
+          pinnedSlotKeys: [],
+          customActivityTitle: '',
+        };
+      });
+    }
+
+    return Array.from({ length: numberOfPeriods }, (_, idx) => ({
+      allocationMode: 'AUTO',
+      extraModulesCount: periodConfigs[idx]?.extraModulesCount || 0,
+      pinnedSlotKeys: [],
+      customActivityTitle: '',
+    }));
+  }, [
+    isSameSubject,
+    customizePerTempo,
+    numberOfPeriods,
+    encounterAllocationMode,
+    encounterPinnedSlotKeys,
+    encounterCustomTitle,
+    periodConfigs,
+  ]);
+
+  const handleToggleCustomizePerTempo = () => {
+    if (!customizePerTempo) {
+      // Copia a distribuição atual para os tempos individuais antes de separar
+      setPeriodConfigs(prev => {
+        const next = [...prev];
+        for (let i = 0; i < numberOfPeriods; i++) {
+          if (effectivePeriodConfigs[i]) {
+            next[i] = {
+              ...effectivePeriodConfigs[i],
+              pinnedSlotKeys: [...effectivePeriodConfigs[i].pinnedSlotKeys],
+            };
+          }
+        }
+        return next;
+      });
+      setCustomizePerTempo(true);
+    } else {
+      // Consolida de volta para o modo unificado do encontro
+      const allPinned: string[] = [];
+      for (let i = 0; i < numberOfPeriods; i++) {
+        const cfg = periodConfigs[i];
+        if (cfg?.allocationMode === 'MANUAL_PIN') {
+          cfg.pinnedSlotKeys.forEach(k => {
+            if (!allPinned.includes(k)) allPinned.push(k);
+          });
+        }
+      }
+      if (allPinned.length > 0) {
+        setEncounterAllocationMode('MANUAL_PIN');
+        setEncounterPinnedSlotKeys(allPinned);
+      } else if (periodConfigs[0]?.allocationMode === 'FREE_REVIEW') {
+        setEncounterAllocationMode('FREE_REVIEW');
+        setEncounterCustomTitle(periodConfigs[0]?.customActivityTitle || '');
+      } else {
+        setEncounterAllocationMode('AUTO');
+      }
+      setCustomizePerTempo(false);
+    }
+  };
+
   const intervalMinutes = classData.hasBreak ? classData.breakDuration : 0;
   const classDurationMinutes = useMemo(() => {
     const totalMinutes = classData.meetingDuration * 60;
@@ -123,9 +264,12 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
     );
   }, [startTime, classData.startTime, numberOfPeriods, classDurationMinutes, intervalMinutes]);
 
-  // Simula em tempo real o que cada tempo (0..numberOfPeriods-1) receberá da fila
+  // Simula em tempo real o que cada tempo (0..numberOfPeriods-1) receberá
   const simulatedPeriodModulesMap = useMemo(() => {
-    const result = new Map<number, { moduleName: string; topicName: string }[]>();
+    const result = new Map<
+      number,
+      { moduleName: string; topicName: string; badge?: string }[]
+    >();
 
     const activeSubjectIds = new Set<string>();
     for (let i = 0; i < numberOfPeriods; i++) {
@@ -145,7 +289,7 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
       .map((period, idx) => {
         const subId = isSameSubject ? globalSelection.subjectId : periodSelections[idx]?.subjectId;
         if (!subId) return null;
-        const cfg = periodConfigs[idx] || createDefaultPeriodConfig();
+        const cfg = effectivePeriodConfigs[idx] || createDefaultPeriodConfig();
         return {
           id: `__draft_period_${idx}__`,
           date: selectedDate,
@@ -178,7 +322,7 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
         continue;
       }
       const seen = new Set<string>();
-      const list: { moduleName: string; topicName: string }[] = [];
+      const list: { moduleName: string; topicName: string; badge?: string }[] = [];
       draftEv.linkedModules.forEach(lm => {
         const uniq = `${lm.topicId}::${lm.moduleId}::${lm.moduleIndex || ''}`;
         if (seen.has(uniq)) return;
@@ -187,12 +331,18 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
         const m = t?.modules?.find(md => md.id === lm.moduleId);
         const modName =
           m?.name || (lm.moduleId.startsWith('topic-') && t?.name ? t.name : 'Módulo');
+
+        let badge: string | undefined;
+        if (lm.moduleIndex === 'Conjunto') {
+          badge = 'Conjunto';
+        } else if (lm.moduleIndex && lm.moduleIndex !== '1/1') {
+          badge = `Parte ${lm.moduleIndex}`;
+        }
+
         list.push({
-          moduleName:
-            lm.moduleIndex && lm.moduleIndex !== '1/1' && lm.moduleIndex !== 'Conjunto'
-              ? `${modName} (${lm.moduleIndex})`
-              : modName,
+          moduleName: modName,
           topicName: t?.name || 'Assunto',
+          badge,
         });
       });
       result.set(idx, list);
@@ -206,7 +356,7 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
     periodSelections,
     existingEvents,
     previewPeriodsTimes,
-    periodConfigs,
+    effectivePeriodConfigs,
     selectedDate,
     shift,
     classData.shift,
@@ -286,6 +436,12 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
     if (!startTime || !shift) return true;
     if (isSameSubject) {
       if (!globalSelection.subjectId || !globalSelection.teacherId) return true;
+      if (!customizePerTempo) {
+        if (encounterAllocationMode === 'MANUAL_PIN' && encounterPinnedSlotKeys.length === 0) {
+          return true;
+        }
+        return false;
+      }
     } else {
       for (let i = 0; i < numberOfPeriods; i++) {
         if (!periodSelections[i].subjectId || !periodSelections[i].teacherId) return true;
@@ -293,7 +449,7 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
     }
 
     for (let i = 0; i < numberOfPeriods; i++) {
-      const cfg = periodConfigs[i];
+      const cfg = effectivePeriodConfigs[i];
       if (cfg?.allocationMode === 'MANUAL_PIN' && cfg.pinnedSlotKeys.length === 0) {
         return true;
       }
@@ -314,7 +470,7 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
 
     const appointmentsToSave = periodsTimes.map((period, index) => {
       const selection = isSameSubject ? globalSelection : periodSelections[index];
-      const cfg = periodConfigs[index] || createDefaultPeriodConfig();
+      const cfg = effectivePeriodConfigs[index] || createDefaultPeriodConfig();
       const mode: ClassAllocationMode = cfg.allocationMode || 'AUTO';
 
       return {
@@ -335,10 +491,271 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
             : undefined,
         isManual: true,
         isLiveEvent: isLiveEvent,
+        liveEventId: isLiveEvent && selectedLiveEventId ? selectedLiveEventId : undefined,
+        liveEventTitle:
+          isLiveEvent && selectedLiveEventId ? selectedLiveEventTitle || undefined : undefined,
       };
     });
 
     onSave(appointmentsToSave);
+  };
+
+  const renderUnifiedEncounterAllocationControls = (subjectId: string) => {
+    return (
+      <div className="space-y-3">
+        {/* Seletor Unificado de Modo para o Encontro */}
+        <div className="grid grid-cols-3 gap-1.5 p-1 bg-zinc-950 rounded-lg border border-zinc-800">
+          <button
+            type="button"
+            onClick={() => setEncounterAllocationMode('AUTO')}
+            className={`py-1.5 px-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
+              encounterAllocationMode === 'AUTO'
+                ? 'bg-zinc-800 text-white border border-zinc-700 shadow-sm'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <Layers className="w-3 h-3 text-amber-400 shrink-0" />
+            <span className="truncate">Fila Automática</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setEncounterAllocationMode('MANUAL_PIN')}
+            className={`py-1.5 px-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
+              encounterAllocationMode === 'MANUAL_PIN'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <Pin className="w-3 h-3 shrink-0" />
+            <span className="truncate">Fura-Fila</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setEncounterAllocationMode('FREE_REVIEW')}
+            className={`py-1.5 px-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1 ${
+              encounterAllocationMode === 'FREE_REVIEW'
+                ? 'bg-purple-600 text-white shadow-sm'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <Sparkles className="w-3 h-3 shrink-0" />
+            <span className="truncate">Revisão / Extra</span>
+          </button>
+        </div>
+
+        {/* MODO 1: FILA AUTOMÁTICA (EXIBE TODOS OS TEMPOS DO ENCONTRO) */}
+        {encounterAllocationMode === 'AUTO' && (
+          <div className="space-y-2">
+            {Array.from({ length: numberOfPeriods }).map((_, pIdx) => {
+              const pCfg = effectivePeriodConfigs[pIdx] || createDefaultPeriodConfig();
+              const autoPreviewList = simulatedPeriodModulesMap.get(pIdx) || [];
+              const timeInfo = previewPeriodsTimes[pIdx];
+
+              return (
+                <div
+                  key={pIdx}
+                  className="p-2.5 rounded-lg bg-zinc-950/60 border border-zinc-800 space-y-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-zinc-300 tabular-nums">
+                      {numberOfPeriods > 1
+                        ? `${pIdx + 1}º Tempo (${timeInfo?.startTime || ''} - ${timeInfo?.endTime || ''})`
+                        : 'Slots da fila consumidos neste tempo'}
+                    </span>
+                    <div className="flex items-center gap-1.5 tabular-nums">
+                      <button
+                        type="button"
+                        onClick={() => updatePeriodExtraModules(pIdx, -1)}
+                        disabled={pCfg.extraModulesCount === 0}
+                        className="w-6 h-6 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                        title="Reduzir slots neste tempo"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <span className="text-xs font-bold text-amber-400 min-w-[66px] text-center whitespace-nowrap">
+                        {1 + pCfg.extraModulesCount}{' '}
+                        {1 + pCfg.extraModulesCount === 1 ? 'aula' : 'aulas'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => updatePeriodExtraModules(pIdx, 1)}
+                        className="w-6 h-6 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors"
+                        title="Puxar próxima aula da fila neste mesmo tempo"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {autoPreviewList.length > 0 ? (
+                    <div className="space-y-1 pt-1 border-t border-zinc-800/70">
+                      {autoPreviewList.map((item, mIdx) => (
+                        <div
+                          key={mIdx}
+                          className="text-[11px] text-zinc-200 leading-snug flex items-start gap-1.5 flex-wrap"
+                        >
+                          <span className="text-amber-400 font-bold tabular-nums">
+                            {mIdx + 1}.
+                          </span>
+                          <span className="font-medium break-words">{item.moduleName}</span>
+                          {item.badge && (
+                            <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-zinc-800 text-amber-300 border border-zinc-700 tabular-nums">
+                              {item.badge}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-zinc-500">({item.topicName})</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-amber-400/90 pt-1 border-t border-zinc-800/70">
+                      Todos os módulos desta disciplina já estão alocados anteriormente na fila.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* MODO 2: FURA-FILA INTELIGENTE COM DISTRIBUIÇÃO AUTOMÁTICA NOS TEMPOS */}
+        {encounterAllocationMode === 'MANUAL_PIN' && (
+          <div className="space-y-2.5 animate-in fade-in duration-150">
+            <div className="p-2.5 rounded-lg bg-indigo-950/30 border border-indigo-500/30 text-[11px] text-indigo-200 leading-relaxed">
+              {numberOfPeriods > 1 ? (
+                <>
+                  Escolha o assunto/módulo futuro abaixo. Como o encontro possui{' '}
+                  <strong>{numberOfPeriods} tempos</strong>, conteúdos com múltiplas aulas (ex:{' '}
+                  <strong>Parte 1/2</strong> e <strong>Parte 2/2</strong>) serão distribuídos
+                  automaticamente entre o 1º e o {numberOfPeriods}º tempo!
+                </>
+              ) : (
+                <>
+                  Escolha livremente qual assunto/módulo será ministrado neste tempo. Os assuntos
+                  anteriores pulados permanecem no início da fila automática e o módulo escolhido
+                  não será duplicado no futuro.
+                </>
+              )}
+            </div>
+
+            <SubjectCurriculumSlotPicker
+              subjectId={subjectId}
+              topics={topics}
+              existingEvents={existingEvents}
+              selectedSlotKeys={encounterPinnedSlotKeys}
+              onChange={setEncounterPinnedSlotKeys}
+            />
+
+            {encounterPinnedSlotKeys.length > 0 && numberOfPeriods > 1 && (
+              <div className="p-2.5 rounded-lg bg-zinc-950/80 border border-indigo-500/30 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-300">
+                    Distribuição nos {numberOfPeriods} tempos deste encontro
+                  </span>
+                  {encounterPinnedSlotKeys.length < numberOfPeriods && (
+                    <span className="text-[10px] text-amber-300 font-semibold">
+                      {encounterPinnedSlotKeys.length} de {numberOfPeriods} tempos fixados
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  {Array.from({ length: numberOfPeriods }).map((_, pIdx) => {
+                    const pCfg = effectivePeriodConfigs[pIdx];
+                    const items = simulatedPeriodModulesMap.get(pIdx) || [];
+                    const timeInfo = previewPeriodsTimes[pIdx];
+                    const isPinnedTempo = pCfg?.allocationMode === 'MANUAL_PIN';
+
+                    return (
+                      <div
+                        key={pIdx}
+                        className={`p-2 rounded-md border text-[11px] space-y-1 ${
+                          isPinnedTempo
+                            ? 'bg-indigo-950/30 border-indigo-500/35'
+                            : 'bg-amber-950/20 border-amber-500/30'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-zinc-200 tabular-nums">
+                            {pIdx + 1}º Tempo ({timeInfo?.startTime || ''} - {timeInfo?.endTime || ''})
+                          </span>
+                          {isPinnedTempo ? (
+                            <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-200 border border-indigo-500/40 flex items-center gap-1">
+                              <Pin className="w-2.5 h-2.5" />
+                              Fixado
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/40">
+                              Segue Fila Automática
+                            </span>
+                          )}
+                        </div>
+
+                        {items.length > 0 ? (
+                          <div className="space-y-0.5">
+                            {items.map((it, mIdx) => (
+                              <div
+                                key={mIdx}
+                                className="text-zinc-300 leading-snug flex items-center gap-1.5 flex-wrap"
+                              >
+                                <span className="text-indigo-300 font-bold tabular-nums">
+                                  {mIdx + 1}.
+                                </span>
+                                <span className="break-words">{it.moduleName}</span>
+                                {it.badge && (
+                                  <span
+                                    className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border tabular-nums ${
+                                      it.badge === 'Conjunto'
+                                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                        : 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
+                                    }`}
+                                  >
+                                    {it.badge}
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-zinc-500 text-[10px]">
+                            Sem módulos pendentes na fila
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* MODO 3: REVISÃO / AULA EXTRA PARA TODO O ENCONTRO */}
+        {encounterAllocationMode === 'FREE_REVIEW' && (
+          <div className="space-y-2 animate-in fade-in duration-150">
+            <div className="p-2 rounded-lg bg-purple-950/30 border border-purple-500/30 text-[11px] text-purple-200 leading-relaxed">
+              {numberOfPeriods > 1
+                ? `Os ${numberOfPeriods} tempos deste encontro serão registrados como Revisão / Aula Extra sem consumir módulos da fila sequencial.`
+                : 'Esta aula não consumirá nenhum módulo da grade e manterá a ordem futura intacta.'}
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-zinc-400 uppercase block mb-1">
+                Título / Tema da Atividade (Opcional)
+              </label>
+              <input
+                type="text"
+                value={encounterCustomTitle}
+                onChange={e => setEncounterCustomTitle(e.target.value)}
+                placeholder="Ex: Revisão Geral e Resolução de Questões"
+                className="w-full bg-zinc-950 border border-zinc-800 focus:border-purple-500 rounded-lg px-3 py-2 text-xs text-white placeholder:text-zinc-500 outline-none"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const renderPeriodAllocationControls = (periodIdx: number, subjectId: string) => {
@@ -358,7 +775,6 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
 
     return (
       <div className="space-y-3">
-        {/* Seletor de Modo de Alocação */}
         <div className="grid grid-cols-3 gap-1.5 p-1 bg-zinc-950 rounded-lg border border-zinc-800">
           <button
             type="button"
@@ -400,7 +816,6 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
           </button>
         </div>
 
-        {/* MODO 1: FILA AUTOMÁTICA */}
         {mode === 'AUTO' && (
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2 bg-zinc-950/70 px-3 py-2 rounded-lg border border-zinc-800">
@@ -419,7 +834,7 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
                 </button>
                 <span className="text-xs font-bold text-amber-400 min-w-[74px] text-center whitespace-nowrap">
                   {1 + cfg.extraModulesCount}{' '}
-                  {1 + cfg.extraModulesCount === 1 ? 'módulo' : 'módulos'}
+                  {1 + cfg.extraModulesCount === 1 ? 'aula' : 'aulas'}
                 </span>
                 <button
                   type="button"
@@ -438,12 +853,18 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
                   Previsto na sequência para este tempo:
                 </span>
                 {autoPreviewList.map((item, mIdx) => (
-                  <div key={mIdx} className="text-[11px] text-zinc-200 leading-snug">
-                    <span className="text-amber-400 font-bold tabular-nums mr-1">
-                      {mIdx + 1}.
-                    </span>
-                    <span className="font-medium">{item.moduleName}</span>
-                    <span className="text-[10px] text-zinc-500 ml-1">({item.topicName})</span>
+                  <div
+                    key={mIdx}
+                    className="text-[11px] text-zinc-200 leading-snug flex items-center gap-1.5 flex-wrap"
+                  >
+                    <span className="text-amber-400 font-bold tabular-nums">{mIdx + 1}.</span>
+                    <span className="font-medium break-words">{item.moduleName}</span>
+                    {item.badge && (
+                      <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-zinc-800 text-amber-300 border border-zinc-700 tabular-nums">
+                        {item.badge}
+                      </span>
+                    )}
+                    <span className="text-[10px] text-zinc-500">({item.topicName})</span>
                   </div>
                 ))}
               </div>
@@ -455,13 +876,10 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
           </div>
         )}
 
-        {/* MODO 2: FURA-FILA INTELIGENTE (FIXAR ASSUNTO / MÓDULO FORA DA ORDEM) */}
         {mode === 'MANUAL_PIN' && (
           <div className="space-y-2 animate-in fade-in duration-150">
             <div className="p-2 rounded-lg bg-indigo-950/30 border border-indigo-500/30 text-[11px] text-indigo-200 leading-relaxed">
-              Escolha livremente qual assunto/módulo será ministrado neste tempo. Os assuntos
-              anteriores pulados permanecem no início da fila automática e o módulo escolhido não
-              será duplicado no futuro.
+              Escolha qual assunto/módulo será ministrado especificamente neste tempo.
             </div>
 
             <SubjectCurriculumSlotPicker
@@ -475,7 +893,6 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
           </div>
         )}
 
-        {/* MODO 3: AULA EXTRA / REVISÃO LIVRE */}
         {mode === 'FREE_REVIEW' && (
           <div className="space-y-2 animate-in fade-in duration-150">
             <div className="p-2 rounded-lg bg-purple-950/30 border border-purple-500/30 text-[11px] text-purple-200 leading-relaxed">
@@ -509,6 +926,10 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
           const subjectChanged =
             newSelection.subjectId !== undefined && newSelection.subjectId !== prev.subjectId;
           if (subjectChanged) {
+            setEncounterAllocationMode('AUTO');
+            setEncounterPinnedSlotKeys([]);
+            setEncounterCustomTitle('');
+            setCustomizePerTempo(false);
             setPeriodConfigs(
               Array.from({ length: 4 }, () => createDefaultPeriodConfig())
             );
@@ -559,61 +980,76 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
 
         {selection.subjectId && (
           <div className="p-3 rounded-lg bg-zinc-900/70 border border-zinc-800/80 space-y-3">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <span className="text-[11px] font-bold text-zinc-300 uppercase tracking-wider">
                 Conteúdo / Ordem Pedagógica
               </span>
               {isGlobal && numberOfPeriods > 1 && (
-                <span className="text-[10px] text-zinc-500 tabular-nums">
-                  Configure por tempo abaixo
-                </span>
+                <button
+                  type="button"
+                  onClick={handleToggleCustomizePerTempo}
+                  className={`text-[10px] font-bold px-2 py-1 rounded border flex items-center gap-1 transition-colors ${
+                    customizePerTempo
+                      ? 'bg-amber-500/15 text-amber-300 border-amber-500/35 hover:bg-amber-500/25'
+                      : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                  }`}
+                >
+                  <SlidersHorizontal className="w-3 h-3 shrink-0" />
+                  {customizePerTempo
+                    ? 'Voltar para distribuição automática do encontro'
+                    : 'Personalizar tempos separadamente'}
+                </button>
               )}
             </div>
 
-            {isGlobal && numberOfPeriods > 1 ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-                  {Array.from({ length: numberOfPeriods }).map((_, pIdx) => {
-                    const pCfg = periodConfigs[pIdx] || createDefaultPeriodConfig();
-                    const isSelectedTab = safeGlobalTab === pIdx;
-                    const needsAttention =
-                      pCfg.allocationMode === 'MANUAL_PIN' && pCfg.pinnedSlotKeys.length === 0;
+            {isGlobal ? (
+              customizePerTempo && numberOfPeriods > 1 ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                    {Array.from({ length: numberOfPeriods }).map((_, pIdx) => {
+                      const pCfg = periodConfigs[pIdx] || createDefaultPeriodConfig();
+                      const isSelectedTab = safeGlobalTab === pIdx;
+                      const needsAttention =
+                        pCfg.allocationMode === 'MANUAL_PIN' && pCfg.pinnedSlotKeys.length === 0;
 
-                    return (
-                      <button
-                        key={pIdx}
-                        type="button"
-                        onClick={() => setActiveGlobalPeriodTab(pIdx)}
-                        className={`px-2.5 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 border whitespace-nowrap tabular-nums ${
-                          isSelectedTab
-                            ? 'bg-zinc-800 text-white border-zinc-600 shadow-sm'
-                            : 'bg-zinc-950/80 text-zinc-400 border-zinc-800 hover:text-zinc-200'
-                        }`}
-                      >
-                        <span>{pIdx + 1}º Tempo</span>
-                        {pCfg.allocationMode === 'MANUAL_PIN' && (
-                          <span
-                            className={`w-2 h-2 rounded-full ${
-                              needsAttention ? 'bg-amber-400 animate-pulse' : 'bg-indigo-400'
-                            }`}
-                            title="Fura-Fila ativo neste tempo"
-                          />
-                        )}
-                        {pCfg.allocationMode === 'FREE_REVIEW' && (
-                          <span
-                            className="w-2 h-2 rounded-full bg-purple-400"
-                            title="Revisão Livre ativa neste tempo"
-                          />
-                        )}
-                      </button>
-                    );
-                  })}
+                      return (
+                        <button
+                          key={pIdx}
+                          type="button"
+                          onClick={() => setActiveGlobalPeriodTab(pIdx)}
+                          className={`px-2.5 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 border whitespace-nowrap tabular-nums ${
+                            isSelectedTab
+                              ? 'bg-zinc-800 text-white border-zinc-600 shadow-sm'
+                              : 'bg-zinc-950/80 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                          }`}
+                        >
+                          <span>{pIdx + 1}º Tempo</span>
+                          {pCfg.allocationMode === 'MANUAL_PIN' && (
+                            <span
+                              className={`w-2 h-2 rounded-full ${
+                                needsAttention ? 'bg-amber-400 animate-pulse' : 'bg-indigo-400'
+                              }`}
+                              title="Fura-Fila ativo neste tempo"
+                            />
+                          )}
+                          {pCfg.allocationMode === 'FREE_REVIEW' && (
+                            <span
+                              className="w-2 h-2 rounded-full bg-purple-400"
+                              title="Revisão Livre ativa neste tempo"
+                            />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {renderPeriodAllocationControls(safeGlobalTab, selection.subjectId)}
                 </div>
-
-                {renderPeriodAllocationControls(safeGlobalTab, selection.subjectId)}
-              </div>
+              ) : (
+                renderUnifiedEncounterAllocationControls(selection.subjectId)
+              )
             ) : (
-              renderPeriodAllocationControls(isGlobal ? 0 : index, selection.subjectId)
+              renderPeriodAllocationControls(index, selection.subjectId)
             )}
           </div>
         )}
@@ -767,10 +1203,29 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
                 </button>
               </div>
               {isLiveEvent && (
-                <p className="text-[11px] text-sky-400/90 mt-1.5">
-                  Segue exatamente a mesma sequência ou fixação de assuntos/módulos da disciplina,
-                  indicando ao aluno transmissão ao vivo pelo portal.
-                </p>
+                <div className="mt-3 p-3.5 rounded-xl bg-sky-950/20 border border-sky-500/30 space-y-2.5 animate-in fade-in duration-150">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-bold text-sky-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <Link2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      <span>Vincular Sala de Transmissão (Eventos Ao Vivo)</span>
+                    </label>
+                    <span className="text-[10px] font-semibold text-zinc-400">Opcional</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-relaxed">
+                    Referencie um dos Eventos Ao Vivo criados para liberar no cronograma e nas metas do aluno o botão direto para a sala de transmissão.
+                  </p>
+                  <LiveEventRoomPicker
+                    liveEvents={availableLiveEvents}
+                    loading={isLoadingLiveRooms}
+                    classId={classData.id}
+                    targetDate={selectedDate}
+                    selectedLiveEventId={selectedLiveEventId}
+                    onChange={(id, title) => {
+                      setSelectedLiveEventId(id);
+                      setSelectedLiveEventTitle(title);
+                    }}
+                  />
+                </div>
               )}
             </div>
 
@@ -839,6 +1294,9 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
                   onChange={e => {
                     const nextPeriods = Math.max(1, Math.min(4, parseInt(e.target.value) || 1));
                     setNumberOfPeriods(nextPeriods);
+                    if (nextPeriods === 1) {
+                      setCustomizePerTempo(false);
+                    }
                     if (activeGlobalPeriodTab >= nextPeriods) {
                       setActiveGlobalPeriodTab(0);
                     }
@@ -875,7 +1333,10 @@ export const AddManualAppointmentModal: React.FC<AddManualAppointmentModalProps>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setIsSameSubject(false)}
+                    onClick={() => {
+                      setIsSameSubject(false);
+                      setCustomizePerTempo(false);
+                    }}
                     className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
                       !isSameSubject
                         ? 'bg-brand-red text-white'

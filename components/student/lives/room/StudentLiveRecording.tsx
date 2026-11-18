@@ -7,8 +7,10 @@ export const StudentLiveRecording = ({ event }: { event: any }) => {
   const recordings = event.recordings || [];
   const materials = event.materials || [];
 
-  const getYouTubeID = (url: string) => {
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const getYouTubeID = (rawUrl: string) => {
+    const iframeSrcMatch = rawUrl.match(/src=["']([^"']+)["']/i);
+    const url = iframeSrcMatch ? iframeSrcMatch[1] : rawUrl.trim();
+    const regExp = /^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|live\/|shorts\/|watch\?v=|&v=)([^#&?/]*).*/;
     const match = url.match(regExp);
     return (match && match[2].length === 11) ? match[2] : null;
   };

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Target,
   Calendar,
@@ -39,6 +39,7 @@ import { curriculumService } from '../../../services/curriculumService';
 import { teacherService } from '../../../services/teacherService';
 import { holidayService } from '../../../services/holidayService';
 import { guidedStudyService } from '../../../services/guidedStudyService';
+import { liveEventService } from '../../../services/liveEventService';
 import { ClassScheduleEvent } from '../../../types/schedule';
 import { Subject, Topic } from '../../../types/curriculum';
 import { Teacher } from '../../../types/teacher';
@@ -118,6 +119,7 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
   canOpenLiveTab = true
 }) => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { currentUser } = useAuth();
   const todayString = toLocalISODate();
 
@@ -129,6 +131,7 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
   const [holidays, setHolidays] = useState<string[]>([]);
   const [guidedMetas, setGuidedMetas] = useState<GuidedStudyMeta[]>([]);
   const [studentProgress, setStudentProgress] = useState<Record<string, GuidedStudyProgress>>({});
+  const [linkedLiveEventsById, setLinkedLiveEventsById] = useState<Record<string, LiveEvent>>({});
   const [loading, setLoading] = useState<boolean>(true);
 
   // Interactive UI states for cards & modals
@@ -210,6 +213,26 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
         setHolidays(holidaysList);
         setGuidedMetas(resolvedMetas);
         setStudentProgress(resolvedProgress);
+
+        const explicitIds = Array.from(
+          new Set(
+            resolvedEvents
+              .filter(ev => ev.isLiveEvent && ev.liveEventId)
+              .map(ev => ev.liveEventId as string)
+          )
+        );
+        if (explicitIds.length > 0) {
+          Promise.all(
+            explicitIds.map(id => liveEventService.getLiveEventById(id).catch(() => null))
+          ).then(results => {
+            if (!isMounted) return;
+            const byId: Record<string, LiveEvent> = {};
+            results.forEach(le => {
+              if (le?.id) byId[le.id] = le;
+            });
+            setLinkedLiveEventsById(byId);
+          });
+        }
       } catch (err) {
         console.error('Erro ao carregar Metas de Hoje da turma presencial:', err);
       } finally {
@@ -246,8 +269,25 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
             ? [{ topicId: event.topicId, moduleId: event.moduleId, moduleIndex: event.moduleIndex }]
             : [];
 
+      const indicesByModule = new Map<string, string[]>();
+      rawLinks.forEach(link => {
+        if (!link.moduleId) return;
+        if (!indicesByModule.has(link.moduleId)) {
+          indicesByModule.set(link.moduleId, []);
+        }
+        if (link.moduleIndex && !indicesByModule.get(link.moduleId)!.includes(link.moduleIndex)) {
+          indicesByModule.get(link.moduleId)!.push(link.moduleIndex);
+        }
+      });
+
       const seen = new Set<string>();
-      const resolved: { topicId: string; moduleId: string; topicName: string; moduleName: string }[] = [];
+      const resolved: {
+        topicId: string;
+        moduleId: string;
+        topicName: string;
+        moduleName: string;
+        partLabel?: string;
+      }[] = [];
 
       rawLinks.forEach(link => {
         if (!link.moduleId || seen.has(link.moduleId)) return;
@@ -257,11 +297,32 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
         const moduleName =
           mod?.name ||
           (link.moduleId.startsWith('topic-') && topic?.name ? topic.name : 'Módulo programado');
+
+        const indices = indicesByModule.get(link.moduleId) || [];
+        const numberedParts = indices.filter(
+          idx =>
+            idx &&
+            idx !== 'Conjunto' &&
+            idx !== '1/1' &&
+            idx !== 'Extra' &&
+            idx !== 'Revisão / Extra'
+        );
+
+        let partLabel: string | undefined;
+        if (numberedParts.length === 1) {
+          partLabel = `Parte ${numberedParts[0]}`;
+        } else if (numberedParts.length > 1) {
+          partLabel = `Partes ${numberedParts.join(', ')}`;
+        } else if (indices.includes('Conjunto')) {
+          partLabel = 'Conjunto';
+        }
+
         resolved.push({
           topicId: link.topicId,
           moduleId: link.moduleId,
           topicName: topic?.name || 'Assunto',
-          moduleName
+          moduleName,
+          partLabel,
         });
       });
 
@@ -839,11 +900,28 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
     const shiftLabel = event.shift ? SHIFT_LABELS[event.shift] || event.shift : '';
     const slotMinutes = calculateSlotDurationMinutes(event.startTime, event.endTime);
 
-    // Busca evento de transmissão ao vivo correspondente na mesma data (se houver sala cadastrada)
-    const matchedLiveTransmission = isLive
-      ? liveEvents.find(le => le.eventDate === event.date && le.status !== 'ended') ||
-        liveEvents.find(le => le.eventDate === event.date)
+    // Prioriza a sala explicitamente vinculada no cronograma; usa fallback por data apenas quando não houver vínculo direto
+    const explicitLiveObj =
+      isLive && event.liveEventId
+        ? liveEvents.find(le => le.id === event.liveEventId) || linkedLiveEventsById[event.liveEventId]
+        : undefined;
+
+    const fallbackLiveByDate =
+      isLive && !event.liveEventId
+        ? liveEvents.find(le => le.eventDate === event.date && le.status !== 'ended') ||
+          liveEvents.find(le => le.eventDate === event.date)
+        : undefined;
+
+    const targetLiveRoomId = isLive
+      ? event.liveEventId || fallbackLiveByDate?.id
       : undefined;
+
+    const targetLiveRoomTitle = isLive
+      ? explicitLiveObj?.title || event.liveEventTitle || fallbackLiveByDate?.title
+      : undefined;
+
+    const isLiveRoomStreamingNow =
+      (explicitLiveObj?.status || fallbackLiveByDate?.status) === 'live';
 
     return (
       <div
@@ -936,6 +1014,15 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
             <span className="font-semibold truncate">{teacherName}</span>
           </div>
 
+          {isLive && targetLiveRoomTitle && (
+            <div className="mt-2 px-2.5 py-1.5 rounded-lg bg-sky-950/35 border border-sky-500/30 flex items-center gap-1.5 text-[11px] text-sky-200">
+              <Radio size={12} className="text-sky-400 shrink-0" />
+              <span className="truncate" title={targetLiveRoomTitle}>
+                Sala: <strong>{targetLiveRoomTitle}</strong>
+              </span>
+            </div>
+          )}
+
           {/* Lista de Tópicos / Módulos Trabalhados na Aula ou Revisão Livre */}
           {(event.allocationMode === 'FREE_REVIEW' || event.topicId === 'free_review') ? (
             <div className="mt-3 p-3 rounded-xl bg-purple-950/20 border border-purple-500/25 space-y-1">
@@ -960,12 +1047,25 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
               <div className="space-y-1.5">
                 {eventModules.map((mod, mIdx) => (
                   <div key={`${event.id}-${mod.moduleId}`} className="text-xs text-zinc-200 leading-snug">
-                    {eventModules.length > 1 && (
-                      <span className="text-amber-400 font-black tabular-nums mr-1.5">
-                        {mIdx + 1}.
-                      </span>
-                    )}
-                    <span className="font-semibold break-words">{mod.moduleName}</span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {eventModules.length > 1 && (
+                        <span className="text-amber-400 font-black tabular-nums">
+                          {mIdx + 1}.
+                        </span>
+                      )}
+                      <span className="font-semibold break-words">{mod.moduleName}</span>
+                      {mod.partLabel && (
+                        <span
+                          className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border tabular-nums ${
+                            mod.partLabel === 'Conjunto'
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                              : 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
+                          }`}
+                        >
+                          {mod.partLabel}
+                        </span>
+                      )}
+                    </div>
                     {mod.topicName && mod.topicName !== mod.moduleName && (
                       <span className="block text-[10px] text-zinc-500 uppercase mt-0.5">
                         Assunto: {mod.topicName}
@@ -980,14 +1080,26 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
 
         {/* Rodapé de Ação */}
         <div className="p-5 pt-3 mt-auto flex flex-col gap-2">
-          {isLive && matchedLiveTransmission ? (
+          {isLive && targetLiveRoomId ? (
             <button
               type="button"
-              onClick={() => navigate(`/app/eventos-ao-vivo/sala/${matchedLiveTransmission.id}`)}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-black uppercase tracking-widest shadow-lg shadow-sky-900/30 transition-all active:scale-95"
+              onClick={() =>
+                navigate(`/app/eventos-ao-vivo/sala/${targetLiveRoomId}`, {
+                  state: { returnPath: `${location.pathname}${location.search}` },
+                })
+              }
+              className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-white text-xs font-black uppercase tracking-widest shadow-lg transition-all active:scale-95 ${
+                isLiveRoomStreamingNow
+                  ? 'bg-red-600 hover:bg-red-500 shadow-red-900/30'
+                  : 'bg-sky-600 hover:bg-sky-500 shadow-sky-900/30'
+              }`}
             >
               <Play size={14} fill="currentColor" />
-              <span>ACESSAR TRANSMISSÃO AO VIVO</span>
+              <span>
+                {isLiveRoomStreamingNow
+                  ? 'ASSISTIR TRANSMISSÃO AO VIVO'
+                  : 'ACESSAR SALA DE TRANSMISSÃO'}
+              </span>
             </button>
           ) : isLive && liveEvents.length > 0 && canOpenLiveTab && onSwitchTab ? (
             <button

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Video, MessageSquare, FileText, Upload, Trash2, Plus, ChevronUp, ChevronDown, Save } from 'lucide-react';
 import { LiveEvent, LiveEventMaterial, LiveEventRecording } from '../../../types/liveEvent';
 import { liveEventService } from '../../../services/liveEventService';
+import { ConfirmationModal } from '../ui/ConfirmationModal';
 import toast from 'react-hot-toast';
 
 interface LiveEventManageModalProps {
@@ -15,6 +16,7 @@ export const LiveEventManageModal: React.FC<LiveEventManageModalProps> = ({ even
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [isUploadingMaterial, setIsUploadingMaterial] = useState(false);
+  const [materialToDelete, setMaterialToDelete] = useState<LiveEventMaterial | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Form states
@@ -94,18 +96,26 @@ export const LiveEventManageModal: React.FC<LiveEventManageModalProps> = ({ even
     }
   };
 
-  const handleDeleteMaterial = async (material: LiveEventMaterial) => {
+  const handleDeleteMaterial = (material: LiveEventMaterial) => {
     if (!event?.id) return;
-    
-    if (window.confirm(`Tem certeza que deseja excluir o material "${material.title}"?`)) {
-      try {
-        await liveEventService.deleteLiveMaterial(event.id, material.id, material.url);
-        toast.success("Material excluído com sucesso!");
-        await loadEvent(event.id);
-      } catch (error) {
-        console.error("Error deleting material:", error);
-        toast.error("Erro ao excluir o material.");
-      }
+    setMaterialToDelete(material);
+  };
+
+  const confirmDeleteMaterial = async () => {
+    if (!event?.id || !materialToDelete) return;
+    try {
+      await liveEventService.deleteLiveMaterial(
+        event.id,
+        materialToDelete.id,
+        materialToDelete.url
+      );
+      toast.success('Material excluído com sucesso!');
+      await loadEvent(event.id);
+    } catch (error) {
+      console.error('Error deleting material:', error);
+      toast.error('Erro ao excluir o material.');
+    } finally {
+      setMaterialToDelete(null);
     }
   };
 
@@ -442,6 +452,20 @@ export const LiveEventManageModal: React.FC<LiveEventManageModalProps> = ({ even
         </div>
 
       </div>
+
+      <ConfirmationModal
+        isOpen={!!materialToDelete}
+        title="Excluir Material"
+        message={
+          materialToDelete
+            ? `Tem certeza que deseja excluir o material "${materialToDelete.title}"?`
+            : ''
+        }
+        onConfirm={confirmDeleteMaterial}
+        onCancel={() => setMaterialToDelete(null)}
+        confirmText="Excluir"
+        isDanger={true}
+      />
     </div>
   );
 };

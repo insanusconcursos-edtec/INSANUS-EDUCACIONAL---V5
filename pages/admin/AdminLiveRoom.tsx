@@ -6,10 +6,12 @@ import { LiveEvent } from '../../types/liveEvent';
 import { AdminLivePlayer } from '../../components/admin/liveEvents/room/AdminLivePlayer';
 import { AdminLiveChat } from '../../components/admin/liveEvents/room/AdminLiveChat';
 import { AdminLiveUserList } from '../../components/admin/liveEvents/room/AdminLiveUserList';
+import { ConfirmationModal } from '../../components/admin/ui/ConfirmationModal';
 import { joinLiveEvent, leaveLiveEvent } from '../../services/liveChatService';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../services/firebase';
 import { useAuth } from '../../contexts/AuthContext';
+import toast from 'react-hot-toast';
 
 export const AdminLiveRoom: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -19,6 +21,7 @@ export const AdminLiveRoom: React.FC = () => {
   const [isEventLoading, setIsEventLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'chat' | 'users'>('chat');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [viewerCount, setViewerCount] = useState(0);
 
   const formatShortName = (fullName?: string | null) => {
@@ -63,48 +66,56 @@ export const AdminLiveRoom: React.FC = () => {
   }, [id]);
 
   useEffect(() => {
-    if (id) {
-      loadEvent(id);
-    }
+    if (!id) return;
+    setIsEventLoading(true);
+    const eventRef = doc(db, 'live_events', id);
+    const unsubscribe = onSnapshot(
+      eventRef,
+      docSnap => {
+        if (docSnap.exists()) {
+          setEvent({ id: docSnap.id, ...docSnap.data() } as LiveEvent);
+        } else {
+          setEvent(null);
+        }
+        setIsEventLoading(false);
+      },
+      error => {
+        console.error('Error listening to live event:', error);
+        setIsEventLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
   }, [id]);
 
-  const loadEvent = async (eventId: string) => {
-    setIsEventLoading(true);
-    try {
-      const data = await liveEventService.getLiveEventById(eventId);
-      setEvent(data);
-    } catch (error) {
-      console.error("Error loading event:", error);
-    } finally {
-      setIsEventLoading(false);
-    }
-  };
-
   const handleStartEvent = async () => {
-    if (!event?.id) return;
+    if (!event?.id || isProcessing) return;
     setIsProcessing(true);
     try {
       await liveEventService.startLiveEvent(event.id);
-      await loadEvent(event.id);
+      setEvent(prev => (prev ? { ...prev, status: 'live' } : prev));
+      toast.success('Transmissão iniciada! O evento está AO VIVO.');
     } catch (error) {
-      console.error("Error starting event:", error);
+      console.error('Error starting event:', error);
+      toast.error('Não foi possível iniciar o evento. Verifique suas permissões.');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const handleEndEvent = async () => {
-    if (!event?.id) return;
-    if (window.confirm("Tem certeza que deseja encerrar este evento? Esta ação não pode ser desfeita.")) {
-      setIsProcessing(true);
-      try {
-        await liveEventService.endLiveEvent(event.id);
-        await loadEvent(event.id);
-      } catch (error) {
-        console.error("Error ending event:", error);
-      } finally {
-        setIsProcessing(false);
-      }
+  const handleConfirmEndEvent = async () => {
+    if (!event?.id || isProcessing) return;
+    setIsProcessing(true);
+    try {
+      await liveEventService.endLiveEvent(event.id);
+      setEvent(prev => (prev ? { ...prev, status: 'ended' } : prev));
+      setShowEndConfirm(false);
+      toast.success('Evento encerrado com sucesso!');
+    } catch (error) {
+      console.error('Error ending event:', error);
+      toast.error('Erro ao encerrar o evento. Tente novamente.');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -219,7 +230,8 @@ export const AdminLiveRoom: React.FC = () => {
         
         {event.status === 'live' && (
           <button
-            onClick={handleEndEvent}
+            type="button"
+            onClick={() => setShowEndConfirm(true)}
             disabled={isProcessing}
             className="flex items-center gap-2 px-8 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition-colors shadow-lg shadow-red-900/20 animate-pulse disabled:opacity-50 disabled:animate-none"
           >
@@ -234,6 +246,19 @@ export const AdminLiveRoom: React.FC = () => {
           </div>
         )}
       </div>
+
+      <ConfirmationModal
+        isOpen={showEndConfirm}
+        title="Encerrar Evento Ao Vivo"
+        message="Tem certeza que deseja encerrar este evento agora? Os alunos verão o status de evento encerrado (ou a gravação, quando cadastrada)."
+        onConfirm={handleConfirmEndEvent}
+        onCancel={() => {
+          if (!isProcessing) setShowEndConfirm(false);
+        }}
+        confirmText={isProcessing ? 'Encerrando...' : 'Sim, Encerrar Evento'}
+        cancelText="Cancelar"
+        isDanger={true}
+      />
     </div>
   );
 };

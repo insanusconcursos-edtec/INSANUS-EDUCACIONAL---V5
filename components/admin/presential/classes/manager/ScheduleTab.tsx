@@ -9,6 +9,7 @@ import { generateEmptySlots } from '../../../../../utils/scheduler/TimeSlotGener
 import { SchedulePreview } from './schedule/SchedulePreview';
 import { classScheduleService } from '../../../../../services/classScheduleService';
 import { holidayService } from '../../../../../services/holidayService';
+import { liveEventService } from '../../../../../services/liveEventService';
 import { sanitizeSchedule } from '../../../../../utils/scheduler/ScheduleSynchronizer';
 import { Calendar, RefreshCw, Save, Loader2, CheckCircle, AlertTriangle, AlertOctagon, Trash2 } from 'lucide-react';
 
@@ -118,9 +119,19 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
           if (newException.type === 'CANCELLATION') {
             updated.splice(eventIndex, 1);
           } else if (newException.type === 'MODALITY_CHANGE') {
+            const nextIsLive = Boolean(newException.isLiveEvent);
             updated[eventIndex] = {
               ...updated[eventIndex],
-              isLiveEvent: Boolean(newException.isLiveEvent)
+              isLiveEvent: nextIsLive,
+              liveEventId: nextIsLive ? newException.liveEventId || undefined : undefined,
+              liveEventTitle: nextIsLive ? newException.liveEventTitle || undefined : undefined,
+            };
+          } else if (newException.type === 'LINK_LIVE_EVENT') {
+            updated[eventIndex] = {
+              ...updated[eventIndex],
+              isLiveEvent: true,
+              liveEventId: newException.liveEventId || undefined,
+              liveEventTitle: newException.liveEventTitle || undefined,
             };
           } else if (newException.type === 'ADJUST_MODULES') {
             const nextMode = newException.allocationMode || 'AUTO';
@@ -149,9 +160,63 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
         return prev;
       }
 
-      // Ajuste de módulos atua especificamente no tempo (aula) selecionado, deslizando/desviando a fila dos demais tempos
+      // Ajuste de módulos atua no tempo selecionado (ou distribui automaticamente entre os tempos do encontro no Fura-Fila)
       if (newException.type === 'ADJUST_MODULES') {
         const nextMode = newException.allocationMode || 'AUTO';
+
+        if (
+          nextMode === 'MANUAL_PIN' &&
+          newException.periodPinAssignments &&
+          newException.periodPinAssignments.length > 0
+        ) {
+          const assignments = newException.periodPinAssignments;
+          const appliedAssignmentIndices = new Set<number>();
+
+          // 1ª tentativa: correspondência direta por ID
+          const updatedById = prev.map(e => {
+            const idx = assignments.findIndex(
+              (a, aIdx) => !appliedAssignmentIndices.has(aIdx) && Boolean(e.id) && e.id === a.eventId
+            );
+            if (idx !== -1) {
+              appliedAssignmentIndices.add(idx);
+              return {
+                ...e,
+                allocationMode: 'MANUAL_PIN' as const,
+                extraModulesCount: 0,
+                pinnedSlotKeys: assignments[idx].pinnedSlotKeys,
+                customActivityTitle: undefined,
+              };
+            }
+            return e;
+          });
+
+          if (appliedAssignmentIndices.size === assignments.length) {
+            return updatedById;
+          }
+
+          // Fallback para os que não casaram por ID: data + startTime + subjectId
+          return updatedById.map(e => {
+            const idx = assignments.findIndex(
+              (a, aIdx) =>
+                !appliedAssignmentIndices.has(aIdx) &&
+                e.date === originalEvent.date &&
+                e.startTime === a.startTime &&
+                e.subjectId === originalEvent.subjectId
+            );
+            if (idx !== -1) {
+              appliedAssignmentIndices.add(idx);
+              return {
+                ...e,
+                allocationMode: 'MANUAL_PIN' as const,
+                extraModulesCount: 0,
+                pinnedSlotKeys: assignments[idx].pinnedSlotKeys,
+                customActivityTitle: undefined,
+              };
+            }
+            return e;
+          });
+        }
+
         const buildModulePatch = (item: any) => ({
           ...item,
           allocationMode: nextMode,
@@ -202,11 +267,26 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
         // Remove all events that match the same date, shift, subject, and modality
         return prev.filter(e => !matchesGroup(e));
       } else if (newException.type === 'MODALITY_CHANGE') {
+        const nextIsLive = Boolean(newException.isLiveEvent);
         return prev.map(e => {
           if (matchesGroup(e)) {
             return {
               ...e,
-              isLiveEvent: Boolean(newException.isLiveEvent)
+              isLiveEvent: nextIsLive,
+              liveEventId: nextIsLive ? newException.liveEventId || undefined : undefined,
+              liveEventTitle: nextIsLive ? newException.liveEventTitle || undefined : undefined,
+            };
+          }
+          return e;
+        });
+      } else if (newException.type === 'LINK_LIVE_EVENT') {
+        return prev.map(e => {
+          if (matchesGroup(e)) {
+            return {
+              ...e,
+              isLiveEvent: true,
+              liveEventId: newException.liveEventId || undefined,
+              liveEventTitle: newException.liveEventTitle || undefined,
             };
           }
           return e;
@@ -269,6 +349,22 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ cls, topics, subjects,
     setSaveMessage('');
     try {
       await classScheduleService.saveScheduleEvents(cls.id, generatedEvents);
+
+      const linkedLiveEventIds = Array.from(
+        new Set(
+          generatedEvents
+            .filter(ev => ev.isLiveEvent && ev.liveEventId)
+            .map(ev => ev.liveEventId as string)
+        )
+      );
+      if (linkedLiveEventIds.length > 0) {
+        try {
+          await liveEventService.grantPresentialClassAccess(linkedLiveEventIds, cls.id);
+        } catch (accessErr) {
+          console.error('Erro ao sincronizar acesso da turma às salas ao vivo:', accessErr);
+        }
+      }
+
       setSaveMessage('Cronograma salvo e sincronizado com sucesso!');
       setIsPreviewMode(false);
       if (onUpdate) onUpdate();

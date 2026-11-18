@@ -23,6 +23,7 @@ export const StudentLiveEventRoom: React.FC = () => {
   const returnPath = location.state?.returnPath || '/app/eventos-ao-vivo';
   const [event, setEvent] = useState<LiveEvent | null>(null);
   const [loading, setLoading] = useState(true);
+  const [accessLoaded, setAccessLoaded] = useState(false);
   const [userAccess, setUserAccess] = useState<{
     plans: string[];
     courses: string[];
@@ -118,46 +119,103 @@ export const StudentLiveEventRoom: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
+    let cancelled = false;
     const loadUserAccess = async () => {
-      const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        
-        const plans: string[] = [];
-        const courses: string[] = [];
-        const classes: string[] = [];
-        const simulated: string[] = [];
-        const isolatedProducts: string[] = [];
+      try {
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (userDoc.exists()) {
+          const uData = userDoc.data();
 
-        if (userData?.access) {
-          userData.access.forEach((item: any) => {
-            if (!item.isActive) return;
-            const now = new Date();
-            const endDate = item.endDate?.toDate ? item.endDate.toDate() : new Date(item.endDate);
-            if (endDate < now) return;
+          const plans: string[] = [];
+          const courses: string[] = [];
+          const classes: string[] = [];
+          const simulated: string[] = [];
+          const isolatedProducts: string[] = [];
 
-            if (item.type === 'plan') plans.push(item.targetId);
-            if (item.type === 'course') courses.push(item.targetId);
-            if (item.type === 'presential_class') classes.push(item.targetId);
-            if (item.type === 'simulated_class') simulated.push(item.targetId);
-            if (item.type === 'isolated_product' || item.type === 'live_event') isolatedProducts.push(item.targetId);
-          });
-        }
+          if (uData?.access) {
+            uData.access.forEach((item: any) => {
+              if (!item.isActive) return;
+              const now = new Date();
+              const endDate = item.endDate?.toDate ? item.endDate.toDate() : new Date(item.endDate);
+              if (endDate < now) return;
 
-        // Legacy courses
-        if (userData?.courses) {
-          userData.courses.forEach((c: any) => {
-            if (c.active) {
-              if (c.expiresAt && new Date(c.expiresAt) < new Date()) return;
-              if (!courses.includes(c.courseId)) courses.push(c.courseId);
+              if (item.type === 'plan') plans.push(item.targetId);
+              if (item.type === 'course') courses.push(item.targetId);
+              if (item.type === 'presential_class') classes.push(item.targetId);
+              if (item.type === 'simulated_class') simulated.push(item.targetId);
+              if (item.type === 'isolated_product' || item.type === 'live_event') {
+                isolatedProducts.push(item.targetId);
+              }
+            });
+          }
+
+          // Legacy courses
+          if (uData?.courses) {
+            uData.courses.forEach((c: any) => {
+              if (c.active) {
+                if (c.expiresAt && new Date(c.expiresAt) < new Date()) return;
+                if (!courses.includes(c.courseId)) courses.push(c.courseId);
+              }
+            });
+          }
+
+          // Herda acesso a turmas presenciais vinculadas nos Planos ativos ou Cursos Online ativos do aluno
+          const [planDocs, courseDocs] = await Promise.all([
+            Promise.all(plans.map(pid => getDoc(doc(db, 'plans', pid)).catch(() => null))),
+            Promise.all(courses.map(cid => getDoc(doc(db, 'courses', cid)).catch(() => null))),
+          ]);
+
+          planDocs.forEach(pSnap => {
+            if (pSnap && pSnap.exists()) {
+              const pData = pSnap.data();
+              const linkedClsId = pData?.linkedPresentialConfig?.enabled
+                ? pData?.linkedPresentialConfig?.classId
+                : undefined;
+              if (linkedClsId && !classes.includes(linkedClsId)) {
+                classes.push(linkedClsId);
+              }
             }
           });
-        }
 
-        setUserAccess({ plans, courses, classes, simulated, isolatedProducts });
+          courseDocs.forEach(cSnap => {
+            if (cSnap && cSnap.exists()) {
+              const cData = cSnap.data();
+              const linkedClsId = cData?.linkedPresentialId;
+              if (linkedClsId && !classes.includes(linkedClsId)) {
+                classes.push(linkedClsId);
+              }
+            }
+          });
+
+          // Inclui também masterClassId das turmas presenciais (diretas ou herdadas)
+          if (classes.length > 0) {
+            const classDocs = await Promise.all(
+              classes.map(clsId => getDoc(doc(db, 'classes', clsId)).catch(() => null))
+            );
+            classDocs.forEach(clSnap => {
+              if (clSnap && clSnap.exists()) {
+                const mId = clSnap.data()?.masterClassId;
+                if (mId && !classes.includes(mId)) {
+                  classes.push(mId);
+                }
+              }
+            });
+          }
+
+          if (!cancelled) {
+            setUserAccess({ plans, courses, classes, simulated, isolatedProducts });
+          }
+        }
+      } catch (err) {
+        console.error('Erro ao carregar permissões de acesso do aluno:', err);
+      } finally {
+        if (!cancelled) setAccessLoaded(true);
       }
     };
     loadUserAccess();
+    return () => {
+      cancelled = true;
+    };
   }, [currentUser]);
 
   const hasAccess = () => {
@@ -203,7 +261,7 @@ export const StudentLiveEventRoom: React.FC = () => {
     return () => unsubscribe();
   }, [eventId, currentUser]);
 
-  if (loading) {
+  if (loading || !accessLoaded) {
     return (
       <div className="flex items-center justify-center h-screen bg-black">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-red"></div>

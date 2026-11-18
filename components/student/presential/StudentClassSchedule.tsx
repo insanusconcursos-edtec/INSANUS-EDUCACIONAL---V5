@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { classScheduleService } from '../../../services/classScheduleService';
 import { curriculumService } from '../../../services/curriculumService';
 import { teacherService } from '../../../services/teacherService';
 import { holidayService } from '../../../services/holidayService';
 import { classService } from '../../../services/classService';
+import { liveEventService } from '../../../services/liveEventService';
 import { ClassScheduleEvent } from '../../../types/schedule';
 import { Subject, Topic } from '../../../types/curriculum';
 import { Teacher } from '../../../types/teacher';
 import { Class } from '../../../types/class';
+import { LiveEvent } from '../../../types/liveEvent';
 import { 
   Calendar as CalendarIcon, 
   Clock, 
@@ -77,12 +79,15 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
   canOpenSimuladosTabOverride
 }) => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [events, setEvents] = useState<ClassScheduleEvent[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [holidays, setHolidays] = useState<string[]>([]);
   const [classData, setClassData] = useState<Class | null>(null);
+  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
   const [loading, setLoading] = useState(true);
 
   // View State
@@ -164,6 +169,42 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
         setClassData(fetchedClassData);
         setGuidedMetas(metasData);
 
+        // Carrega salas de Eventos Ao Vivo da turma + salas explicitamente vinculadas no cronograma
+        try {
+          const [classLives, masterLives] = await Promise.all([
+            liveEventService.getLiveEventsByPresentialClass(classId).catch(() => []),
+            effectiveMasterId
+              ? liveEventService.getLiveEventsByPresentialClass(effectiveMasterId).catch(() => [])
+              : Promise.resolve([]),
+          ]);
+
+          const liveMap = new Map<string, LiveEvent>();
+          [...classLives, ...masterLives].forEach(le => {
+            if (le?.id) liveMap.set(le.id, le);
+          });
+
+          const missingLinkedIds = Array.from(
+            new Set(
+              eventsData
+                .filter(ev => ev.isLiveEvent && ev.liveEventId && !liveMap.has(ev.liveEventId))
+                .map(ev => ev.liveEventId as string)
+            )
+          );
+
+          if (missingLinkedIds.length > 0) {
+            const fetchedLinked = await Promise.all(
+              missingLinkedIds.map(id => liveEventService.getLiveEventById(id).catch(() => null))
+            );
+            fetchedLinked.forEach(le => {
+              if (le?.id) liveMap.set(le.id, le);
+            });
+          }
+
+          setLiveEvents(Array.from(liveMap.values()));
+        } catch (liveErr) {
+          console.error('Erro ao carregar salas de eventos ao vivo do cronograma:', liveErr);
+        }
+
         if (currentUser?.uid) {
           const prog = await guidedStudyService.getStudentProgress(currentUser.uid, classId);
           setStudentProgress(prog);
@@ -242,6 +283,41 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
     return 'Módulo desconhecido';
   };
 
+  const resolveLiveRoomForEvent = (
+    event: ClassScheduleEvent
+  ): { id: string; title: string; status?: LiveEvent['status'] } | null => {
+    if (!event.isLiveEvent) return null;
+
+    if (event.liveEventId) {
+      const matched = liveEvents.find(le => le.id === event.liveEventId);
+      return {
+        id: event.liveEventId,
+        title: matched?.title || event.liveEventTitle || 'Sala de Transmissão Ao Vivo',
+        status: matched?.status,
+      };
+    }
+
+    const fallbackByDate =
+      liveEvents.find(le => le.eventDate === event.date && le.status !== 'ended') ||
+      liveEvents.find(le => le.eventDate === event.date);
+
+    if (fallbackByDate?.id) {
+      return {
+        id: fallbackByDate.id,
+        title: fallbackByDate.title,
+        status: fallbackByDate.status,
+      };
+    }
+
+    return null;
+  };
+
+  const openLiveTransmissionRoom = (liveRoomId: string) => {
+    navigate(`/app/eventos-ao-vivo/sala/${liveRoomId}`, {
+      state: { returnPath: `${location.pathname}${location.search}` },
+    });
+  };
+
   const getEventModules = (event: ClassScheduleEvent) => {
     if (event.allocationMode === 'FREE_REVIEW' || event.topicId === 'free_review') {
       return [];
@@ -254,8 +330,25 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
           ? [{ topicId: event.topicId, moduleId: event.moduleId, moduleIndex: event.moduleIndex }]
           : [];
 
+    const indicesByModule = new Map<string, string[]>();
+    rawLinks.forEach(link => {
+      if (!link.moduleId) return;
+      if (!indicesByModule.has(link.moduleId)) {
+        indicesByModule.set(link.moduleId, []);
+      }
+      if (link.moduleIndex && !indicesByModule.get(link.moduleId)!.includes(link.moduleIndex)) {
+        indicesByModule.get(link.moduleId)!.push(link.moduleIndex);
+      }
+    });
+
     const seen = new Set<string>();
-    const resolved: { topicId: string; moduleId: string; topicName: string; moduleName: string }[] = [];
+    const resolved: {
+      topicId: string;
+      moduleId: string;
+      topicName: string;
+      moduleName: string;
+      partLabel?: string;
+    }[] = [];
 
     rawLinks.forEach((link) => {
       if (!link.moduleId || seen.has(link.moduleId)) return;
@@ -265,11 +358,32 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
       const moduleName =
         mod?.name ||
         (link.moduleId.startsWith('topic-') && topic?.name ? topic.name : 'Módulo desconhecido');
+
+      const indices = indicesByModule.get(link.moduleId) || [];
+      const numberedParts = indices.filter(
+        idx =>
+          idx &&
+          idx !== 'Conjunto' &&
+          idx !== '1/1' &&
+          idx !== 'Extra' &&
+          idx !== 'Revisão / Extra'
+      );
+
+      let partLabel: string | undefined;
+      if (numberedParts.length === 1) {
+        partLabel = `Parte ${numberedParts[0]}`;
+      } else if (numberedParts.length > 1) {
+        partLabel = `Partes ${numberedParts.join(', ')}`;
+      } else if (indices.includes('Conjunto')) {
+        partLabel = 'Conjunto';
+      }
+
       resolved.push({
         topicId: link.topicId,
         moduleId: link.moduleId,
         topicName: topic?.name || 'Assunto',
         moduleName,
+        partLabel,
       });
     });
 
@@ -616,6 +730,7 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                     const borderColor = subject?.color || '#52525b';
                     const isOverflow = event.isOverflow;
                     const isLive = Boolean(event.isLiveEvent);
+                    const resolvedLiveRoom = isLive ? resolveLiveRoomForEvent(event) : null;
 
                     const eventModules = getEventModules(event);
                     const hasMultipleModules = eventModules.length > 1;
@@ -643,8 +758,13 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                           {/* Card Header */}
                           <div className="p-2">
                             <div className="flex justify-between items-center mb-1 flex-wrap gap-1">
-                              <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider tabular-nums flex items-center gap-1">
+                              <div className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider tabular-nums flex items-center gap-1 flex-wrap">
                                 <span>{currentTempoNumber}º Tempo</span>
+                                {eventModules[0]?.partLabel?.startsWith('Parte') && (
+                                  <span className="text-indigo-300 font-extrabold">
+                                    • {eventModules[0].partLabel}
+                                  </span>
+                                )}
                                 {hasMultipleModules && (
                                   <span className="text-amber-400/90" title={`${eventModules.length} módulos previstos nesta aula`}>
                                     • {eventModules.length} Módulos
@@ -725,32 +845,66 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                                     <BookOpen className="w-3 h-3" />
                                   </button>
                                 )}
-                                <div className="text-zinc-500">
-                                  {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                  <div className="text-zinc-500">
+                                    {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                  </div>
                                 </div>
                               </div>
+
+                              {isLive && resolvedLiveRoom && !isExpanded && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openLiveTransmissionRoom(resolvedLiveRoom.id);
+                                  }}
+                                  className={`mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                                    resolvedLiveRoom.status === 'live'
+                                      ? 'bg-red-600 hover:bg-red-500 text-white shadow-sm'
+                                      : 'bg-sky-600/90 hover:bg-sky-500 text-white shadow-sm'
+                                  }`}
+                                  title={`Entrar na sala: ${resolvedLiveRoom.title}`}
+                                >
+                                  <Play className="w-2.5 h-2.5 shrink-0 fill-current" />
+                                  <span className="truncate">
+                                    {resolvedLiveRoom.status === 'live'
+                                      ? 'Assistir Ao Vivo'
+                                      : 'Acessar Sala Ao Vivo'}
+                                  </span>
+                                  <ArrowUpRight className="w-3 h-3 shrink-0" />
+                                </button>
+                              )}
                             </div>
-                          </div>
 
-                          {/* Card Details */}
-                          {isExpanded && (
-                            <div className="px-2 pb-2 pt-0 space-y-2 animate-in slide-in-from-top-1 duration-200">
-                              <div className="h-px bg-zinc-800 w-full my-1" />
+                            {/* Card Details */}
+                            {isExpanded && (
+                              <div className="px-2 pb-2 pt-0 space-y-2 animate-in slide-in-from-top-1 duration-200">
+                                <div className="h-px bg-zinc-800 w-full my-1" />
 
-                              <div>
-                                <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Modalidade</span>
-                                {isLive ? (
-                                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-sky-300">
-                                    <Radio className="w-3 h-3 text-sky-400 shrink-0" />
-                                    <span>Transmissão Ao Vivo pelo Portal</span>
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
-                                    <MapPin className="w-3 h-3 text-zinc-500 shrink-0" />
-                                    <span>Aula Presencial</span>
-                                  </div>
-                                )}
-                              </div>
+                                <div>
+                                  <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Modalidade</span>
+                                  {isLive ? (
+                                    <div className="space-y-1">
+                                      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-sky-300">
+                                        <Radio className="w-3 h-3 text-sky-400 shrink-0" />
+                                        <span>Transmissão Ao Vivo pelo Portal</span>
+                                      </div>
+                                      {resolvedLiveRoom && (
+                                        <div
+                                          className="text-[10px] text-sky-200/90 bg-sky-950/50 border border-sky-500/30 rounded px-2 py-1 truncate"
+                                          title={resolvedLiveRoom.title}
+                                        >
+                                          Sala: <strong>{resolvedLiveRoom.title}</strong>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                                      <MapPin className="w-3 h-3 text-zinc-500 shrink-0" />
+                                      <span>Aula Presencial</span>
+                                    </div>
+                                  )}
+                                </div>
                               
                               {event.allocationMode === 'FREE_REVIEW' || event.topicId === 'free_review' ? (
                                 <div>
@@ -773,12 +927,23 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                                         className="flex items-start justify-between gap-1.5 py-1 border-b border-zinc-800/80 last:border-0"
                                       >
                                         <div className="min-w-0 flex-1">
-                                          <p className="text-[11px] text-zinc-200 leading-snug break-words">
-                                            <span className="text-amber-400/90 font-bold tabular-nums mr-1">
+                                          <div className="text-[11px] text-zinc-200 leading-snug break-words flex items-center gap-1 flex-wrap">
+                                            <span className="text-amber-400/90 font-bold tabular-nums">
                                               {modIdx + 1}.
                                             </span>
-                                            {modItem.moduleName}
-                                          </p>
+                                            <span>{modItem.moduleName}</span>
+                                            {modItem.partLabel && (
+                                              <span
+                                                className={`text-[8px] font-bold uppercase px-1 py-0.5 rounded border tabular-nums ${
+                                                  modItem.partLabel === 'Conjunto'
+                                                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                                    : 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
+                                                }`}
+                                              >
+                                                {modItem.partLabel}
+                                              </span>
+                                            )}
+                                          </div>
                                           {spansMultipleTopics && (
                                             <p
                                               className="text-[9px] text-zinc-500 leading-tight mt-0.5 truncate"
@@ -813,10 +978,17 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                               ) : (
                                 <div>
                                   <span className="text-[10px] text-zinc-500 uppercase font-bold block mb-0.5">Módulo</span>
-                                  <p className="text-[11px] text-zinc-300 leading-tight">
-                                    {eventModules[0]?.moduleName ||
-                                      (isOverflow ? 'Aula complementar' : getModuleName(event.topicId, event.moduleId))}
-                                  </p>
+                                  <div className="text-[11px] text-zinc-300 leading-tight flex items-center gap-1.5 flex-wrap">
+                                    <span>
+                                      {eventModules[0]?.moduleName ||
+                                        (isOverflow ? 'Aula complementar' : getModuleName(event.topicId, event.moduleId))}
+                                    </span>
+                                    {eventModules[0]?.partLabel && (
+                                      <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-200 border border-indigo-500/40 tabular-nums">
+                                        {eventModules[0].partLabel}
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                               )}
 
@@ -841,6 +1013,29 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                                   <span>{getTeacherName(event.teacherId)}</span>
                                 </div>
                               </div>
+
+                              {isLive && resolvedLiveRoom && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openLiveTransmissionRoom(resolvedLiveRoom.id);
+                                  }}
+                                  className={`w-full flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider transition-all whitespace-nowrap shadow-sm ${
+                                    resolvedLiveRoom.status === 'live'
+                                      ? 'bg-red-600 hover:bg-red-500 text-white'
+                                      : 'bg-sky-600 hover:bg-sky-500 text-white'
+                                  }`}
+                                >
+                                  <Play className="w-3 h-3 shrink-0 fill-current" />
+                                  <span className="truncate">
+                                    {resolvedLiveRoom.status === 'live'
+                                      ? 'Assistir Transmissão Ao Vivo'
+                                      : 'Acessar Sala de Transmissão'}
+                                  </span>
+                                  <ArrowUpRight className="w-3 h-3 shrink-0" />
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>

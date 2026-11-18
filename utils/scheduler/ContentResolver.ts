@@ -33,6 +33,10 @@ export const buildSubjectSlotUnits = (
   const slotUnits: CurriculumSlotUnit[] = [];
 
   subjectTopics.forEach(topic => {
+    // Guarda os índices dos slots criados pelo último módulo titular (ex: Parte 1/2 e Parte 2/2),
+    // garantindo que módulos marcados com "Mesma aula ant." acompanhem todas as partes desse bloco.
+    let lastPrimarySlotIndices: number[] = [];
+
     if (topic.modules && topic.modules.length > 0) {
       topic.modules.forEach(module => {
         if (onlySelectedTopics && module.isSelected === false) return;
@@ -41,7 +45,15 @@ export const buildSubjectSlotUnits = (
         const isGrouped = Boolean(module.groupedWithPrevious) || Number(module.classesCount) === 0;
 
         if (isGrouped) {
-          if (slotUnits.length > 0) {
+          if (lastPrimarySlotIndices.length > 0) {
+            lastPrimarySlotIndices.forEach(slotIdx => {
+              slotUnits[slotIdx].modules.push({
+                topicId: topic.id,
+                moduleId: module.id,
+                moduleIndex: 'Conjunto',
+              });
+            });
+          } else if (slotUnits.length > 0) {
             slotUnits[slotUnits.length - 1].modules.push({
               topicId: topic.id,
               moduleId: module.id,
@@ -50,9 +62,10 @@ export const buildSubjectSlotUnits = (
           } else {
             // Fallback seguro caso seja o primeiro módulo presencial da disciplina
             const indexLabel = '1/1';
+            const newIdx = slotUnits.length;
             slotUnits.push({
               slotKey: makeSlotUnitKey(topic.id, module.id, indexLabel),
-              orderNumber: slotUnits.length + 1,
+              orderNumber: newIdx + 1,
               primaryTopic: topic,
               primaryModule: module,
               primaryIndexLabel: indexLabel,
@@ -64,14 +77,17 @@ export const buildSubjectSlotUnits = (
                 },
               ],
             });
+            lastPrimarySlotIndices = [newIdx];
           }
         } else {
           const count = Math.max(1, Number(module.classesCount) || 1);
+          const createdIndices: number[] = [];
           for (let i = 0; i < count; i++) {
             const indexLabel = `${i + 1}/${count}`;
+            const newIdx = slotUnits.length;
             slotUnits.push({
               slotKey: makeSlotUnitKey(topic.id, module.id, indexLabel),
-              orderNumber: slotUnits.length + 1,
+              orderNumber: newIdx + 1,
               primaryTopic: topic,
               primaryModule: module,
               primaryIndexLabel: indexLabel,
@@ -83,7 +99,9 @@ export const buildSubjectSlotUnits = (
                 },
               ],
             });
+            createdIndices.push(newIdx);
           }
+          lastPrimarySlotIndices = createdIndices;
         }
       });
     } else if (topic.requiredClasses > 0) {
@@ -114,6 +132,36 @@ export const buildSubjectSlotUnits = (
   });
 
   return slotUnits;
+};
+
+/**
+ * Distribui uma lista ordenada de `slotKey`s selecionados entre `periodCount` tempos de um encontro,
+ * mantendo a sequência didática (ex: Parte 1/2 no 1º Tempo e Parte 2/2 no 2º Tempo).
+ */
+export const distributeSlotKeysAcrossPeriods = (
+  slotKeys: string[],
+  periodCount: number
+): string[][] => {
+  const pCount = Math.max(1, periodCount);
+  const buckets: string[][] = Array.from({ length: pCount }, () => []);
+  if (!Array.isArray(slotKeys) || slotKeys.length === 0) return buckets;
+
+  if (slotKeys.length <= pCount) {
+    slotKeys.forEach((key, idx) => {
+      buckets[idx].push(key);
+    });
+    return buckets;
+  }
+
+  const base = Math.floor(slotKeys.length / pCount);
+  const remainder = slotKeys.length % pCount;
+  let cursor = 0;
+  for (let i = 0; i < pCount; i++) {
+    const size = base + (i < remainder ? 1 : 0);
+    buckets[i] = slotKeys.slice(cursor, cursor + size);
+    cursor += size;
+  }
+  return buckets;
 };
 
 /**
@@ -392,6 +440,8 @@ export const resolveManualSchedule = (
           classOrderIndex: index + 1,
           isSubstitute: appointment.isSubstitute || false,
           isLiveEvent: Boolean(appointment.isLiveEvent),
+          liveEventId: appointment.isLiveEvent ? appointment.liveEventId || undefined : undefined,
+          liveEventTitle: appointment.isLiveEvent ? appointment.liveEventTitle || undefined : undefined,
         });
         return;
       }
@@ -439,6 +489,8 @@ export const resolveManualSchedule = (
           classOrderIndex: index + 1,
           isSubstitute: appointment.isSubstitute || false,
           isLiveEvent: Boolean(appointment.isLiveEvent),
+          liveEventId: appointment.isLiveEvent ? appointment.liveEventId || undefined : undefined,
+          liveEventTitle: appointment.isLiveEvent ? appointment.liveEventTitle || undefined : undefined,
         });
         return;
       }
@@ -479,6 +531,8 @@ export const resolveManualSchedule = (
         classOrderIndex: index + 1,
         isSubstitute: appointment.isSubstitute || false,
         isLiveEvent: Boolean(appointment.isLiveEvent),
+        liveEventId: appointment.isLiveEvent ? appointment.liveEventId || undefined : undefined,
+        liveEventTitle: appointment.isLiveEvent ? appointment.liveEventTitle || undefined : undefined,
       });
     });
   }

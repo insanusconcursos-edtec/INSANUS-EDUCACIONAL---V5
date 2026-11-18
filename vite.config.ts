@@ -36,6 +36,20 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       chunkSizeWarningLimit: 1600,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('firebase')) return 'vendor-firebase';
+              if (id.includes('lucide-react')) return 'vendor-icons';
+              if (id.includes('pdfjs-dist') || id.includes('html2pdf') || id.includes('jspdf')) {
+                return 'vendor-pdf';
+              }
+              return 'vendor';
+            }
+          },
+        },
+      },
     }
   };
 });
