@@ -19,7 +19,11 @@
       "destination": "/sw.js"
     },
     {
-      "source": "/((?!api/|assets/|manifest.json|sw.js|favicon.ico).*)",
+      "source": "/firebase-messaging-sw.js",
+      "destination": "/firebase-messaging-sw.js"
+    },
+    {
+      "source": "/((?!api/|assets/|manifest.json|sw.js|firebase-messaging-sw.js|favicon.ico).*)",
       "destination": "/index.html"
     }
   ]
