@@ -1,96 +1,53 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Video, Calendar, Clock, Lock, Play } from 'lucide-react';
 import { LiveEvent } from '../../../types/liveEvent';
 import { liveEventService } from '../../../services/liveEventService';
 import { useAuth } from '../../../contexts/AuthContext';
-import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../../../services/firebase';
-import { Student } from '../../../services/userService';
+import {
+  EMPTY_STUDENT_LIVE_ACCESS,
+  StudentLiveAccessContext,
+  loadStudentLiveAccessContext,
+  canStudentAccessLiveEvent,
+} from '../../../utils/liveEventAccess';
 
 export const StudentLiveEvents: React.FC = () => {
   const [events, setEvents] = useState<LiveEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [userAccess, setUserAccess] = useState<{
-    plans: string[];
-    courses: string[];
-    classes: string[];
-    simulated: string[];
-    isolatedProducts: string[];
-  }>({ plans: [], courses: [], classes: [], simulated: [], isolatedProducts: [] });
+  const [userAccess, setUserAccess] = useState<StudentLiveAccessContext>(EMPTY_STUDENT_LIVE_ACCESS);
   
-  const { currentUser } = useAuth();
+  const { currentUser, userData, userRole } = useAuth();
   const navigate = useNavigate();
 
-  useEffect(() => {
-    if (currentUser) {
-      loadUserDataAndEvents();
-    }
-  }, [currentUser]);
-
-  const loadUserDataAndEvents = async () => {
+  const loadUserDataAndEvents = useCallback(async () => {
+    if (!currentUser) return;
     setLoading(true);
     try {
-      const plans: string[] = [];
-      const courses: string[] = [];
-      const classes: string[] = [];
-      const simulated: string[] = [];
-      const isolatedProducts: string[] = [];
+      const [accessCtx, allEvents] = await Promise.all([
+        loadStudentLiveAccessContext({
+          uid: currentUser.uid,
+          email: currentUser.email || userData?.email,
+          authRole: userRole,
+          includeAllClassSchedules: true,
+        }),
+        liveEventService.getLiveEvents(),
+      ]);
 
-      // 1. Load user data to determine access
-      const userDoc = await getDoc(doc(db, 'users', currentUser!.uid));
-      if (userDoc.exists()) {
-        const userData = userDoc.data() as Student;
-        
-        // Build access lists based on user data
-        if (userData.access) {
-          userData.access.forEach(item => {
-            if (!item.isActive) return;
-            
-            // Check if access is still valid by date
-            const now = new Date();
-            const endDate = item.endDate?.toDate ? item.endDate.toDate() : new Date(item.endDate);
-            if (endDate < now) return;
+      setUserAccess(accessCtx);
 
-            if (item.type === 'plan') plans.push(item.targetId);
-            if (item.type === 'course') courses.push(item.targetId);
-            if (item.type === 'presential_class') classes.push(item.targetId);
-            if (item.type === 'simulated_class') simulated.push(item.targetId);
-            if (item.type === 'isolated_product' || item.type === 'live_event') isolatedProducts.push(item.targetId);
-          });
-        }
-
-        // Also check legacy courses array
-        if (userData.courses) {
-          userData.courses.forEach(c => {
-            if (c.active) {
-              if (c.expiresAt) {
-                const expires = new Date(c.expiresAt);
-                if (expires < new Date()) return;
-              }
-              if (!courses.includes(c.courseId)) {
-                courses.push(c.courseId);
-              }
-            }
-          });
-        }
-
-        setUserAccess({ plans, courses, classes, simulated, isolatedProducts });
-      }
-
-      // 2. Load all events
-      const allEvents = await liveEventService.getLiveEvents();
-      
-      // 3. Filter events based on access rules
+      // Filtra eventos conforme regras unificadas de permissão
       const allowedEvents = allEvents.filter(event => {
-        const userHasAccess = hasAccess(event, { plans, courses, classes, simulated, isolatedProducts });
+        const userHasAccess = canStudentAccessLiveEvent(event, accessCtx);
 
-        // Se o evento está encerrado, só aparece se o usuário tiver acesso, for um produto isolado e possuir gravações disponíveis
+        // Se o evento está encerrado, só aparece na vitrine geral se houver gravação disponível (ou admin)
         if (event.status === 'ended') {
-          return userHasAccess && event.isIsolatedProduct && !!(event.recordings && event.recordings.length > 0);
+          return (
+            userHasAccess &&
+            (accessCtx.isAdmin ||
+              (event.isIsolatedProduct && !!(event.recordings && event.recordings.length > 0)))
+          );
         }
 
-        // Para eventos futuros ou ao vivo, mostramos se o usuário tiver acesso
         return userHasAccess;
       });
       setEvents(allowedEvents);
@@ -99,30 +56,16 @@ export const StudentLiveEvents: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentUser, userData?.email, userRole]);
 
-  const hasAccess = (event: LiveEvent, access: { plans: string[], courses: string[], classes: string[], simulated: string[], isolatedProducts: string[] }) => {
-    if (event.isPublic) return true;
-    
-    const isIsolatedForUser = event.isIsolatedProduct && access.isolatedProducts.includes(event.id || '');
-    if (isIsolatedForUser) return true;
-
-    const { plans = [], onlineCourses = [], presentialClasses = [], simulated = [] } = event.accessControl || {};
-    
-    // Se não há nenhum recurso selecionado no controle de acesso, o evento não é público
-    // e o usuário não adquiriu o produto isoladamente, então ninguém tem acesso por padrão (bloqueio de segurança)
-    if (plans.length === 0 && onlineCourses.length === 0 && presentialClasses.length === 0 && simulated.length === 0) {
-      return false; 
+  useEffect(() => {
+    if (currentUser) {
+      loadUserDataAndEvents();
     }
+  }, [currentUser, loadUserDataAndEvents]);
 
-    // Check if user has any of the required access
-    const hasPlanAccess = plans.some(id => access.plans.includes(id));
-    const hasCourseAccess = onlineCourses.some(id => access.courses.includes(id));
-    const hasClassAccess = presentialClasses.some(id => access.classes.includes(id));
-    const hasSimulatedAccess = simulated.some(id => access.simulated.includes(id));
-
-    return hasPlanAccess || hasCourseAccess || hasClassAccess || hasSimulatedAccess;
-  };
+  const hasAccess = (event: LiveEvent, access: StudentLiveAccessContext) =>
+    canStudentAccessLiveEvent(event, access);
 
   if (loading) {
     return (

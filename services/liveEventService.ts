@@ -8,16 +8,29 @@ const COLLECTION_NAME = 'live_events';
 export const liveEventService = {
   getLiveEventsByPresentialClass: async (classId: string): Promise<LiveEvent[]> => {
     try {
-      const q = query(
-        collection(db, COLLECTION_NAME),
-        where("status", "!=", "ended")
+      const [activeSnap, scheduleSnap] = await Promise.all([
+        getDocs(query(collection(db, COLLECTION_NAME), where('status', '!=', 'ended'))),
+        getDocs(query(collection(db, 'class_schedules'), where('classId', '==', classId))).catch(
+          () => null
+        ),
+      ]);
+
+      const scheduledLiveIds = new Set<string>();
+      scheduleSnap?.forEach(sDoc => {
+        const sData = sDoc.data();
+        if (sData?.status !== 'CANCELED' && sData?.isLiveEvent && sData?.liveEventId) {
+          scheduledLiveIds.add(String(sData.liveEventId));
+        }
+      });
+
+      const allActiveEvents = activeSnap.docs.map(
+        d => ({ id: d.id, ...d.data() } as LiveEvent)
       );
-      const snapshot = await getDocs(q);
-      const allActiveEvents = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LiveEvent));
-      
-      // Filter by presential class access
-      return allActiveEvents.filter(event => 
-        event.accessControl?.presentialClasses?.includes(classId)
+
+      return allActiveEvents.filter(
+        event =>
+          event.accessControl?.presentialClasses?.includes(classId) ||
+          (Boolean(event.id) && scheduledLiveIds.has(event.id!))
       );
     } catch (error) {
       console.error("Error fetching live events by class:", error);
@@ -301,8 +314,29 @@ export const liveEventService = {
       uniqueIds.map(async eventId => {
         try {
           const docRef = doc(db, COLLECTION_NAME, eventId);
+          const snap = await getDoc(docRef);
+          if (!snap.exists()) return;
+          const data = snap.data() as Partial<LiveEvent>;
+          const currentAccess = data.accessControl || {
+            plans: [],
+            onlineCourses: [],
+            presentialClasses: [],
+            simulated: [],
+          };
+          const currentClasses = Array.isArray(currentAccess.presentialClasses)
+            ? currentAccess.presentialClasses
+            : [];
+          if (currentClasses.includes(classId)) return;
+
           await updateDoc(docRef, {
-            'accessControl.presentialClasses': arrayUnion(classId),
+            accessControl: {
+              plans: Array.isArray(currentAccess.plans) ? currentAccess.plans : [],
+              onlineCourses: Array.isArray(currentAccess.onlineCourses)
+                ? currentAccess.onlineCourses
+                : [],
+              presentialClasses: [...currentClasses, classId],
+              simulated: Array.isArray(currentAccess.simulated) ? currentAccess.simulated : [],
+            },
           });
         } catch (error) {
           console.error(`Error granting class access to live event ${eventId}:`, error);

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, Users, VideoOff, FileText, ShieldAlert } from 'lucide-react';
-import { doc, onSnapshot, getDoc, collection } from 'firebase/firestore';
+import { doc, onSnapshot, collection } from 'firebase/firestore';
 import { db } from '../../../services/firebase';
-import { LiveEvent, LiveActiveUser } from '../../../types/liveEvent';
+import { LiveEvent } from '../../../types/liveEvent';
 import { useAuth } from '../../../contexts/AuthContext';
 import { StudentLiveChat } from '../../../components/student/lives/room/StudentLiveChat';
 import { StudentLiveWaitingRoom } from '../../../components/student/lives/room/StudentLiveWaitingRoom';
@@ -12,25 +12,25 @@ import { StudentLiveRecording } from '../../../components/student/lives/room/Stu
 import { joinLiveEvent, leaveLiveEvent } from '../../../services/liveChatService';
 import toast from 'react-hot-toast';
 import { useStudyContext } from '../../../contexts/StudyContext';
+import {
+  EMPTY_STUDENT_LIVE_ACCESS,
+  StudentLiveAccessContext,
+  loadStudentLiveAccessContext,
+  canStudentAccessLiveEvent,
+} from '../../../utils/liveEventAccess';
 
 export const StudentLiveEventRoom: React.FC = () => {
   const { eventId } = useParams<{ eventId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentUser, userData, loading: authLoading } = useAuth();
+  const { currentUser, userData, userRole, loading: authLoading } = useAuth();
   const { setCurrentProduct } = useStudyContext();
   
   const returnPath = location.state?.returnPath || '/app/eventos-ao-vivo';
   const [event, setEvent] = useState<LiveEvent | null>(null);
   const [loading, setLoading] = useState(true);
   const [accessLoaded, setAccessLoaded] = useState(false);
-  const [userAccess, setUserAccess] = useState<{
-    plans: string[];
-    courses: string[];
-    classes: string[];
-    simulated: string[];
-    isolatedProducts: string[];
-  }>({ plans: [], courses: [], classes: [], simulated: [], isolatedProducts: [] });
+  const [userAccess, setUserAccess] = useState<StudentLiveAccessContext>(EMPTY_STUDENT_LIVE_ACCESS);
   const [viewerCount, setViewerCount] = useState(0);
   const [isChatBlocked, setIsChatBlocked] = useState(false);
 
@@ -115,131 +115,44 @@ export const StudentLiveEventRoom: React.FC = () => {
     });
 
     return () => unsubscribe();
-  }, [eventId, currentUser, navigate]);
+  }, [eventId, currentUser, navigate, returnPath]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (authLoading) return;
+    if (!currentUser) {
+      setAccessLoaded(true);
+      return;
+    }
+
     let cancelled = false;
-    const loadUserAccess = async () => {
-      try {
-        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        if (userDoc.exists()) {
-          const uData = userDoc.data();
+    setAccessLoaded(false);
 
-          const plans: string[] = [];
-          const courses: string[] = [];
-          const classes: string[] = [];
-          const simulated: string[] = [];
-          const isolatedProducts: string[] = [];
-
-          if (uData?.access) {
-            uData.access.forEach((item: any) => {
-              if (!item.isActive) return;
-              const now = new Date();
-              const endDate = item.endDate?.toDate ? item.endDate.toDate() : new Date(item.endDate);
-              if (endDate < now) return;
-
-              if (item.type === 'plan') plans.push(item.targetId);
-              if (item.type === 'course') courses.push(item.targetId);
-              if (item.type === 'presential_class') classes.push(item.targetId);
-              if (item.type === 'simulated_class') simulated.push(item.targetId);
-              if (item.type === 'isolated_product' || item.type === 'live_event') {
-                isolatedProducts.push(item.targetId);
-              }
-            });
-          }
-
-          // Legacy courses
-          if (uData?.courses) {
-            uData.courses.forEach((c: any) => {
-              if (c.active) {
-                if (c.expiresAt && new Date(c.expiresAt) < new Date()) return;
-                if (!courses.includes(c.courseId)) courses.push(c.courseId);
-              }
-            });
-          }
-
-          // Herda acesso a turmas presenciais vinculadas nos Planos ativos ou Cursos Online ativos do aluno
-          const [planDocs, courseDocs] = await Promise.all([
-            Promise.all(plans.map(pid => getDoc(doc(db, 'plans', pid)).catch(() => null))),
-            Promise.all(courses.map(cid => getDoc(doc(db, 'courses', cid)).catch(() => null))),
-          ]);
-
-          planDocs.forEach(pSnap => {
-            if (pSnap && pSnap.exists()) {
-              const pData = pSnap.data();
-              const linkedClsId = pData?.linkedPresentialConfig?.enabled
-                ? pData?.linkedPresentialConfig?.classId
-                : undefined;
-              if (linkedClsId && !classes.includes(linkedClsId)) {
-                classes.push(linkedClsId);
-              }
-            }
-          });
-
-          courseDocs.forEach(cSnap => {
-            if (cSnap && cSnap.exists()) {
-              const cData = cSnap.data();
-              const linkedClsId = cData?.linkedPresentialId;
-              if (linkedClsId && !classes.includes(linkedClsId)) {
-                classes.push(linkedClsId);
-              }
-            }
-          });
-
-          // Inclui também masterClassId das turmas presenciais (diretas ou herdadas)
-          if (classes.length > 0) {
-            const classDocs = await Promise.all(
-              classes.map(clsId => getDoc(doc(db, 'classes', clsId)).catch(() => null))
-            );
-            classDocs.forEach(clSnap => {
-              if (clSnap && clSnap.exists()) {
-                const mId = clSnap.data()?.masterClassId;
-                if (mId && !classes.includes(mId)) {
-                  classes.push(mId);
-                }
-              }
-            });
-          }
-
-          if (!cancelled) {
-            setUserAccess({ plans, courses, classes, simulated, isolatedProducts });
-          }
+    loadStudentLiveAccessContext({
+      uid: currentUser.uid,
+      email: currentUser.email || userData?.email,
+      authRole: userRole,
+      targetEventId: eventId,
+    })
+      .then(ctx => {
+        if (!cancelled) {
+          setUserAccess(ctx);
         }
-      } catch (err) {
+      })
+      .catch(err => {
         console.error('Erro ao carregar permissões de acesso do aluno:', err);
-      } finally {
-        if (!cancelled) setAccessLoaded(true);
-      }
-    };
-    loadUserAccess();
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAccessLoaded(true);
+        }
+      });
+
     return () => {
       cancelled = true;
     };
-  }, [currentUser]);
+  }, [currentUser, userRole, userData?.email, eventId, authLoading]);
 
-  const hasAccess = () => {
-    if (!event) return false;
-    if (event.isPublic) return true;
-    
-    const isIsolatedForUser = event.isIsolatedProduct && userAccess.isolatedProducts.includes(event.id!);
-    if (isIsolatedForUser) return true;
-
-    const { plans = [], onlineCourses = [], presentialClasses = [], simulated = [] } = event.accessControl || {};
-    
-    // Se não há recursos selecionados de controle de acesso, o evento não é público
-    // e o usuário não possui acesso ao produto isoladamente, então ninguém tem acesso (bloqueio de segurança)
-    if (plans.length === 0 && onlineCourses.length === 0 && presentialClasses.length === 0 && simulated.length === 0) {
-      return false;
-    }
-
-    const hasPlanAccess = plans.some(id => userAccess.plans.includes(id));
-    const hasCourseAccess = onlineCourses.some(id => userAccess.courses.includes(id));
-    const hasClassAccess = presentialClasses.some(id => userAccess.classes.includes(id));
-    const hasSimulatedAccess = simulated.some(id => userAccess.simulated.includes(id));
-
-    return hasPlanAccess || hasCourseAccess || hasClassAccess || hasSimulatedAccess;
-  };
+  const hasAccess = () => canStudentAccessLiveEvent(event, userAccess);
 
   useEffect(() => {
     if (!eventId || !currentUser) return;

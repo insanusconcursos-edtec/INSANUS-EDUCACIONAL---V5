@@ -17,9 +17,9 @@ export interface SecurityResource {
 export async function checkUserHasFreePass(currentUser: any, userData?: any): Promise<boolean> {
   if (!currentUser && !userData) return false;
   
-  const role = userData?.role || currentUser?.role;
-  const email = userData?.email || currentUser?.email;
-  if (role === 'admin' || email?.includes('admin')) {
+  const role = String(userData?.role || currentUser?.role || '').toLowerCase();
+  const email = String(userData?.email || currentUser?.email || '').toLowerCase().trim();
+  if (role === 'admin' || email.includes('admin') || email === 'insanusconcursos@gmail.com') {
     return true;
   }
 
@@ -86,7 +86,9 @@ export function canAccessResource(
   hasDirectAccess?: boolean
 ): { allowed: boolean; visible: boolean; isBlocked?: boolean; unlockDate?: string; reason?: string } {
   // 1. Administrador tem acesso irrestrito
-  if (userRole === 'admin' || userEmail?.includes('admin')) {
+  const normRole = String(userRole || '').toLowerCase();
+  const normEmail = String(userEmail || '').toLowerCase().trim();
+  if (normRole === 'admin' || normEmail.includes('admin') || normEmail === 'insanusconcursos@gmail.com') {
     return { allowed: true, visible: true };
   }
 
