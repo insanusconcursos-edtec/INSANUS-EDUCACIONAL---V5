@@ -6,10 +6,11 @@ import {
   where, 
   setDoc, 
   deleteDoc, 
-  getDoc
+  getDoc,
+  writeBatch
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { GuidedStudyMeta, GuidedStudyProgress } from '../types/guidedStudy';
+import { GuidedStudyMeta, GuidedStudyProgress, sortGuidedMetas } from '../types/guidedStudy';
 
 const COLLECTION_METAS = 'class_guided_metas';
 
@@ -24,10 +25,11 @@ export const guidedStudyService = {
         where('classId', '==', classId)
       );
       const snapshot = await getDocs(q);
-      return snapshot.docs.map(docSnap => ({
+      const list = snapshot.docs.map(docSnap => ({
         id: docSnap.id,
         ...docSnap.data()
       })) as GuidedStudyMeta[];
+      return sortGuidedMetas(list);
     } catch (error) {
       console.error('Erro ao buscar metas do estudo guiado:', error);
       return [];
@@ -70,6 +72,27 @@ export const guidedStudyService = {
       await deleteDoc(docRef);
     } catch (error) {
       console.error('Erro ao deletar meta do estudo guiado:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Persiste a nova ordem das metas do Estudo Guiado de um dia específico de forma atômica
+   */
+  async reorderDayMetas(orderedMetaIds: string[]): Promise<void> {
+    const validIds = orderedMetaIds.filter(Boolean);
+    if (validIds.length === 0) return;
+
+    try {
+      const batch = writeBatch(db);
+      const now = new Date().toISOString();
+      validIds.forEach((metaId, index) => {
+        const docRef = doc(db, COLLECTION_METAS, metaId);
+        batch.set(docRef, { order: index, updatedAt: now }, { merge: true });
+      });
+      await batch.commit();
+    } catch (error) {
+      console.error('Erro ao reordenar metas do estudo guiado:', error);
       throw error;
     }
   },

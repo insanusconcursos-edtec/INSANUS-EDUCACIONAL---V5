@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { ClassAllocationMode, ClassScheduleEvent, ScheduleGap, ScheduleException, ExceptionType } from '../../../../../../types/schedule';
 import { Teacher } from '../../../../../../types/teacher';
 import { Subject, Topic } from '../../../../../../types/curriculum';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertTriangle, ChevronDown, ChevronUp, LayoutGrid, List, Edit2, X, Check, CheckCircle, Loader2, BookOpen, Target, Trash2, Radio, MapPin, Plus, Minus, Layers, Trophy, DoorOpen, Lock, Play, Flag, FileJson, FileText, Video, HelpCircle, Scale, Zap, Maximize2, ExternalLink, Pin, Sparkles, Link2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertTriangle, ChevronDown, ChevronUp, ArrowUp, ArrowDown, LayoutGrid, List, Edit2, X, Check, CheckCircle, Loader2, BookOpen, Target, Trash2, Radio, MapPin, Plus, Minus, Layers, Trophy, DoorOpen, Lock, Play, Flag, FileJson, FileText, Video, HelpCircle, Scale, Zap, Maximize2, ExternalLink, Pin, Sparkles, Link2 } from 'lucide-react';
 
 import { checkTeacherAvailability } from '../../../../../../utils/scheduler/ResourceValidator';
 import {
@@ -16,7 +16,11 @@ import {
 
 import { Class } from '../../../../../../types/class';
 import { classService } from '../../../../../../services/classService';
-import { GuidedStudyMeta } from '../../../../../../types/guidedStudy';
+import {
+  GuidedStudyMeta,
+  getGuidedMetaVideos,
+  compareGuidedMetasWithinDay
+} from '../../../../../../types/guidedStudy';
 import { guidedStudyService } from '../../../../../../services/guidedStudyService';
 import { LiveEvent } from '../../../../../../types/liveEvent';
 import { liveEventService } from '../../../../../../services/liveEventService';
@@ -111,6 +115,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
   const [expandedGuidedMetaId, setExpandedGuidedMetaId] = useState<string | null>(null);
   const [previewGuidedMeta, setPreviewGuidedMeta] = useState<GuidedStudyMeta | null>(null);
   const [deletingGuidedMetaId, setDeletingGuidedMetaId] = useState<string | null>(null);
+  const [isReorderingGuidedMetas, setIsReorderingGuidedMetas] = useState(false);
 
   const fetchGuidedMetas = async () => {
     if (classData?.id) {
@@ -120,6 +125,48 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
       } catch (err) {
         console.error("Erro ao carregar metas do estudo guiado:", err);
       }
+    }
+  };
+
+  const handleReorderGuidedMeta = async (
+    dateStr: string,
+    metaId: string | undefined,
+    direction: -1 | 1
+  ) => {
+    if (!metaId || isReorderingGuidedMetas) return;
+
+    const currentDayMetas = guidedMetas
+      .filter(m => m.date === dateStr)
+      .sort(compareGuidedMetasWithinDay);
+
+    const currentIndex = currentDayMetas.findIndex(m => m.id === metaId);
+    const targetIndex = currentIndex + direction;
+    if (currentIndex === -1 || targetIndex < 0 || targetIndex >= currentDayMetas.length) return;
+
+    const reorderedDayMetas = [...currentDayMetas];
+    const [movedMeta] = reorderedDayMetas.splice(currentIndex, 1);
+    reorderedDayMetas.splice(targetIndex, 0, movedMeta);
+
+    const orderById = new Map<string, number>();
+    reorderedDayMetas.forEach((item, idx) => {
+      if (item.id) orderById.set(item.id, idx);
+    });
+
+    const previousSnapshot = guidedMetas;
+    setGuidedMetas(prev =>
+      prev.map(m => (m.id && orderById.has(m.id) ? { ...m, order: orderById.get(m.id)! } : m))
+    );
+
+    try {
+      setIsReorderingGuidedMetas(true);
+      await guidedStudyService.reorderDayMetas(
+        reorderedDayMetas.map(m => m.id).filter((id): id is string => Boolean(id))
+      );
+    } catch (err) {
+      console.error('Erro ao salvar nova ordem das metas do estudo guiado:', err);
+      setGuidedMetas(previousSnapshot);
+    } finally {
+      setIsReorderingGuidedMetas(false);
     }
   };
 
@@ -1263,7 +1310,9 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
         
         {/* Metas do Estudo Guiado */}
         {classData?.isGuidedStudyEnabled && (() => {
-          const dayGuidedMetas = guidedMetas.filter(m => m.date === dateString);
+          const dayGuidedMetas = guidedMetas
+            .filter(m => m.date === dateString)
+            .sort(compareGuidedMetasWithinDay);
 
           const getAdminMetaTypeInfo = (type: GuidedStudyMeta['type']) => {
             switch (type) {
@@ -1299,7 +1348,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                 )}
               </div>
 
-              {dayGuidedMetas.map(meta => {
+              {dayGuidedMetas.map((meta, metaIndex) => {
                 const metaKey = meta.id || `${meta.date}_${meta.title}`;
                 const isJsonMap = meta.type === 'interactive_map';
                 const cardColor = meta.color || (isJsonMap ? '#6366f1' : '#f59e0b');
@@ -1326,7 +1375,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                     }}
                   >
                     {/* Header do Card */}
-                    <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                    <div className="flex items-center justify-between gap-1 mb-1.5">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <div
                           className="w-5 h-5 rounded-md flex items-center justify-center shrink-0"
@@ -1342,12 +1391,44 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                         </span>
                       </div>
 
-                      <div className="text-zinc-400 shrink-0">
-                        {isMetaExpanded ? (
-                          <ChevronUp className="w-3.5 h-3.5" />
-                        ) : (
-                          <ChevronDown className="w-3.5 h-3.5" />
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        {dayGuidedMetas.length > 1 && meta.id && (
+                          <div className="flex items-center gap-0.5 mr-0.5">
+                            <button
+                              type="button"
+                              disabled={metaIndex === 0 || isReorderingGuidedMetas}
+                              onClick={e => {
+                                e.stopPropagation();
+                                handleReorderGuidedMeta(dateString, meta.id, -1);
+                              }}
+                              title="Mover meta para cima"
+                              aria-label="Mover meta para cima"
+                              className="p-0.5 rounded text-zinc-400 hover:text-amber-300 hover:bg-zinc-800 disabled:opacity-25 disabled:pointer-events-none transition-colors"
+                            >
+                              <ArrowUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={metaIndex === dayGuidedMetas.length - 1 || isReorderingGuidedMetas}
+                              onClick={e => {
+                                e.stopPropagation();
+                                handleReorderGuidedMeta(dateString, meta.id, 1);
+                              }}
+                              title="Mover meta para baixo"
+                              aria-label="Mover meta para baixo"
+                              className="p-0.5 rounded text-zinc-400 hover:text-amber-300 hover:bg-zinc-800 disabled:opacity-25 disabled:pointer-events-none transition-colors"
+                            >
+                              <ArrowDown className="w-3 h-3" />
+                            </button>
+                          </div>
                         )}
+                        <div className="text-zinc-400">
+                          {isMetaExpanded ? (
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          ) : (
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -1473,29 +1554,40 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                             </div>
                             <Maximize2 className="w-3.5 h-3.5 text-amber-300 shrink-0" />
                           </button>
-                        ) : meta.type === 'aula' && (meta.pandaVideoId || meta.pandaVideoUrl) ? (
-                          <button
-                            type="button"
-                            onClick={e => {
-                              e.stopPropagation();
-                              setPreviewGuidedMeta(meta);
-                            }}
-                            className="w-full p-2.5 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/40 text-left transition-all flex items-center justify-between gap-2 group"
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <Video className="w-4 h-4 text-blue-300 shrink-0" />
-                              <div className="min-w-0">
-                                <span className="block text-[11px] font-bold text-blue-100 truncate">
-                                  Videoaula Vinculada
-                                </span>
-                                <span className="block text-[9px] text-blue-300/90">
-                                  Clique para pré-visualizar
-                                </span>
+                        ) : meta.type === 'aula' && getGuidedMetaVideos(meta).length > 0 ? (() => {
+                          const metaVideos = getGuidedMetaVideos(meta);
+                          const videosCount = metaVideos.length;
+                          const totalMin =
+                            meta.duration ||
+                            metaVideos.reduce((acc, v) => acc + (v.duration || 0), 0);
+                          return (
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setPreviewGuidedMeta(meta);
+                              }}
+                              className="w-full p-2.5 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/40 text-left transition-all flex items-center justify-between gap-2 group"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Video className="w-4 h-4 text-blue-300 shrink-0" />
+                                <div className="min-w-0">
+                                  <span className="block text-[11px] font-bold text-blue-100 truncate">
+                                    {videosCount > 1
+                                      ? `${videosCount} Videoaulas Vinculadas`
+                                      : 'Videoaula Vinculada'}
+                                  </span>
+                                  <span className="block text-[9px] text-blue-300/90 tabular-nums">
+                                    {videosCount > 1 && totalMin > 0
+                                      ? `Total: ${totalMin} min · Clique para pré-visualizar`
+                                      : 'Clique para pré-visualizar'}
+                                  </span>
+                                </div>
                               </div>
-                            </div>
-                            <Maximize2 className="w-3.5 h-3.5 text-blue-300 shrink-0" />
-                          </button>
-                        ) : meta.type === 'flashcards' && meta.cards && meta.cards.length > 0 ? (
+                              <Maximize2 className="w-3.5 h-3.5 text-blue-300 shrink-0" />
+                            </button>
+                          );
+                        })() : meta.type === 'flashcards' && meta.cards && meta.cards.length > 0 ? (
                           <button
                             type="button"
                             onClick={e => {
@@ -2883,6 +2975,16 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
           selectedDate={selectedDateForGuided}
           metaToEdit={editingGuidedMeta}
           subjects={subjects}
+          defaultOrder={(() => {
+            const sameDay = guidedMetas.filter(m => m.date === selectedDateForGuided);
+            if (sameDay.length === 0) return 0;
+            const maxExistingOrder = sameDay.reduce(
+              (max, m, idx) =>
+                Math.max(max, typeof m.order === 'number' && Number.isFinite(m.order) ? m.order : idx),
+              -1
+            );
+            return maxExistingOrder + 1;
+          })()}
           onClose={() => {
             setIsGuidedModalOpen(false);
             setSelectedDateForGuided(null);

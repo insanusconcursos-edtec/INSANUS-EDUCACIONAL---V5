@@ -44,7 +44,13 @@ import { ClassScheduleEvent } from '../../../types/schedule';
 import { Subject, Topic } from '../../../types/curriculum';
 import { Teacher } from '../../../types/teacher';
 import { LiveEvent } from '../../../types/liveEvent';
-import { GuidedStudyMeta, GuidedStudyMetaType, GuidedStudyProgress } from '../../../types/guidedStudy';
+import {
+  GuidedStudyMeta,
+  GuidedStudyMetaType,
+  GuidedStudyProgress,
+  getGuidedMetaVideos,
+  compareGuidedMetasWithinDay
+} from '../../../types/guidedStudy';
 import { StudentGuidedStudyModal } from './StudentGuidedStudyModal';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toLocalISODate, parseSafeLocalDate, formatSafeDateLocal } from '../../../utils/dateUtils';
@@ -138,6 +144,7 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
   const [expandedMetaIds, setExpandedMetaIds] = useState<Record<string, boolean>>({});
   const [expandedNoteIds, setExpandedNoteIds] = useState<Record<string, boolean>>({});
   const [selectedMetaForModal, setSelectedMetaForModal] = useState<GuidedStudyMeta | null>(null);
+  const [selectedVideoIndexForModal, setSelectedVideoIndexForModal] = useState<number>(0);
   const [confirmCompleteMeta, setConfirmCompleteMeta] = useState<GuidedStudyMeta | null>(null);
   const [togglingMetaId, setTogglingMetaId] = useState<string | null>(null);
 
@@ -340,7 +347,9 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
 
   // Metas do Estudo Guiado do dia selecionado
   const dayGuidedMetas = useMemo(() => {
-    return guidedMetas.filter(meta => meta.date === selectedDate);
+    return guidedMetas
+      .filter(meta => meta.date === selectedDate)
+      .sort(compareGuidedMetasWithinDay);
   }, [guidedMetas, selectedDate]);
 
   // Metas do Estudo Guiado em atraso (exibidas quando estamos visualizando HOJE)
@@ -352,7 +361,7 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
         const isCompleted = Boolean(studentProgress[meta.id]?.completed);
         return meta.date < todayString && !isCompleted;
       })
-      .sort((a, b) => a.date.localeCompare(b.date));
+      .sort((a, b) => a.date.localeCompare(b.date) || compareGuidedMetasWithinDay(a, b));
   }, [guidedMetas, studentProgress, selectedDate, todayString]);
 
   const isHoliday = useMemo(() => {
@@ -452,7 +461,7 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
   const getMetaAttachmentsCount = (meta: GuidedStudyMeta): number => {
     let count = 0;
     if (meta.type === 'interactive_map' && (meta.interactiveMapJson || meta.interactiveMapUrl)) count++;
-    if (meta.pandaVideoUrl || meta.pandaVideoId) count++;
+    count += getGuidedMetaVideos(meta).length;
     if (meta.pdfUrl) count++;
     if (meta.externalLink) count++;
     if (meta.cards && meta.cards.length > 0) count++;
@@ -466,6 +475,7 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
     const activeColor = meta.color && meta.color.startsWith('#') ? meta.color : cfg.defaultColor;
     const isExpanded = Boolean(expandedMetaIds[metaKey]);
     const isNoteOpen = Boolean(expandedNoteIds[metaKey]);
+    const metaVideos = getGuidedMetaVideos(meta);
     const attachmentsCount = getMetaAttachmentsCount(meta);
     const disciplineLabel =
       meta.disciplineName || meta.interactiveMapSummary?.disciplina || 'ESTUDO GUIADO';
@@ -590,6 +600,12 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
             </div>
           )}
 
+          {meta.type === 'aula' && metaVideos.length > 1 ? (
+            <p className="text-[10px] text-blue-400 font-bold mt-1.5 uppercase tracking-wider tabular-nums">
+              {metaVideos.length} videoaulas vinculadas
+            </p>
+          ) : null}
+
           {meta.type === 'questoes' && meta.questionCount && meta.questionCount > 0 ? (
             <p className="text-[10px] text-emerald-400 font-bold mt-1.5 uppercase tracking-wider">
               Meta de Resolução: {meta.questionCount} questões
@@ -667,21 +683,36 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
               </button>
             )}
 
-            {(meta.pandaVideoUrl || meta.pandaVideoId) && (
+            {metaVideos.map((video, vidIdx) => (
               <button
+                key={video.id || vidIdx}
                 type="button"
-                onClick={() => setSelectedMetaForModal(meta)}
+                onClick={() => {
+                  setSelectedVideoIndexForModal(vidIdx);
+                  setSelectedMetaForModal(meta);
+                }}
                 className="w-full flex items-center justify-between gap-2 p-2 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-left transition-colors"
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <PlayCircle size={14} className="text-blue-400 shrink-0" />
-                  <span className="text-xs font-bold text-blue-200 truncate">Videoaula Vinculada</span>
+                  <span className="text-xs font-bold text-blue-200 truncate">
+                    {metaVideos.length > 1
+                      ? `${vidIdx + 1}. ${video.title}`
+                      : video.title || 'Videoaula Vinculada'}
+                  </span>
                 </div>
-                <span className="text-[9px] font-black uppercase tracking-wider text-blue-300 shrink-0">
-                  Assistir ↗
-                </span>
+                <div className="flex items-center gap-2 shrink-0 tabular-nums">
+                  {video.duration > 0 && (
+                    <span className="text-[10px] font-mono text-blue-300/80">
+                      {video.duration} min
+                    </span>
+                  )}
+                  <span className="text-[9px] font-black uppercase tracking-wider text-blue-300">
+                    Assistir ↗
+                  </span>
+                </div>
               </button>
-            )}
+            ))}
 
             {meta.pdfUrl && (
               <button
@@ -744,7 +775,10 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
           {!isCompleted ? (
             <button
               type="button"
-              onClick={() => setSelectedMetaForModal(meta)}
+              onClick={() => {
+                setSelectedVideoIndexForModal(0);
+                setSelectedMetaForModal(meta);
+              }}
               className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all hover:brightness-110 shadow-lg active:scale-95 text-white"
               style={{
                 backgroundColor: activeColor,
@@ -757,7 +791,10 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
           ) : (
             <button
               type="button"
-              onClick={() => setSelectedMetaForModal(meta)}
+              onClick={() => {
+                setSelectedVideoIndexForModal(0);
+                setSelectedMetaForModal(meta);
+              }}
               className="w-full py-3 bg-zinc-950 hover:bg-zinc-900 border border-emerald-900/40 rounded-xl flex items-center justify-center gap-2 text-emerald-400 transition-colors"
               title="Meta concluída — clique para revisar o conteúdo"
             >
@@ -1416,12 +1453,16 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
       {selectedMetaForModal && currentUser && (
         <StudentGuidedStudyModal
           isOpen={!!selectedMetaForModal}
-          onClose={() => setSelectedMetaForModal(null)}
+          onClose={() => {
+            setSelectedMetaForModal(null);
+            setSelectedVideoIndexForModal(0);
+          }}
           meta={selectedMetaForModal}
           classId={classId}
           userId={currentUser.uid}
           progress={selectedMetaForModal.id ? studentProgress[selectedMetaForModal.id] : undefined}
           onProgressUpdated={reloadGuidedProgress}
+          initialVideoIndex={selectedVideoIndexForModal}
         />
       )}
 

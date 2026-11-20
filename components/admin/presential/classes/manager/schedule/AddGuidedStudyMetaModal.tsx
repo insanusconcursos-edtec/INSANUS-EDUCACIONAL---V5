@@ -19,13 +19,21 @@ import {
   Upload,
   Network,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Search,
+  PlayCircle,
+  Clock,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import {
   GuidedStudyMeta,
   GuidedStudyMetaType,
   GuidedStudyFlashcard,
-  GuidedStudyInteractiveMapSummary
+  GuidedStudyInteractiveMapSummary,
+  GuidedStudyVideo,
+  getGuidedMetaVideos,
+  resolveGuidedStudyVideoUrl
 } from '../../../../../../types/guidedStudy';
 import { InteractiveMapData } from '../../../../../../types/interactiveMap';
 import { Subject } from '../../../../../../types/curriculum';
@@ -36,7 +44,14 @@ import { storage } from '../../../../../../services/firebase';
 
 import { MetaColorSelector } from '../../../../metas/shared/MetaColorSelector';
 import { PandaVideoSelector } from '../../../../ui/PandaVideoSelector';
-import { extractPandaVideoId, getPandaEmbedUrl, PandaVideo } from '../../../../../../utils/pandaUtils';
+import { PandaVideoPlayer } from '../../../../../ui/video/PandaVideoPlayer';
+import {
+  buildPandaEmbedUrl,
+  extractPandaIdFromEmbedUrl,
+  extractPandaVideoId,
+  getPandaEmbedUrl,
+  PandaVideo
+} from '../../../../../../utils/pandaUtils';
 
 const DEFAULT_META_COLORS: Record<GuidedStudyMetaType, string> = {
   aula: '#3b82f6',
@@ -56,6 +71,7 @@ interface AddGuidedStudyMetaModalProps {
   selectedDate: string; // YYYY-MM-DD
   metaToEdit?: GuidedStudyMeta | null;
   subjects?: Subject[];
+  defaultOrder?: number;
 }
 
 const countMindmapNodes = (node: unknown): number => {
@@ -70,6 +86,14 @@ const countMindmapNodes = (node: unknown): number => {
   return count;
 };
 
+const createEmptyVideoRow = (): GuidedStudyVideo => ({
+  id: `vid_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+  title: '',
+  link: '',
+  pandaVideoId: '',
+  duration: 0
+});
+
 export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = ({
   isOpen,
   onClose,
@@ -77,7 +101,8 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
   classId,
   selectedDate,
   metaToEdit,
-  subjects = []
+  subjects = [],
+  defaultOrder
 }) => {
   const [metaType, setMetaType] = useState<GuidedStudyMetaType>('aula');
   const [title, setTitle] = useState('');
@@ -87,8 +112,7 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
   const [color, setColor] = useState<string>('#3b82f6');
 
   // Type specific state
-  const [pandaVideoUrl, setPandaVideoUrl] = useState('');
-  const [pandaVideoId, setPandaVideoId] = useState('');
+  const [videos, setVideos] = useState<GuidedStudyVideo[]>([createEmptyVideoRow()]);
   const [pdfUrl, setPdfUrl] = useState('');
   const [pdfName, setPdfName] = useState('');
   const [externalLink, setExternalLink] = useState('');
@@ -115,8 +139,12 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
   const [isSaving, setIsSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Panda Explorer Modal
+  // Panda Explorer & Video Preview Modal
   const [isPandaSelectorOpen, setIsPandaSelectorOpen] = useState(false);
+  const [pandaTargetRowIndex, setPandaTargetRowIndex] = useState<number | null>(null);
+  const [lastPandaFolderId, setLastPandaFolderId] = useState<string | null>(null);
+  const [isLoadingPandaVideo, setIsLoadingPandaVideo] = useState(false);
+  const [previewVideo, setPreviewVideo] = useState<{ title: string; url: string } | null>(null);
 
   const validateAndParseJson = (
     rawText: string,
@@ -193,6 +221,9 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
       setIsDraggingJson(false);
       setHasModifiedJson(false);
       setIsLoadingRemoteJson(false);
+      setPreviewVideo(null);
+      setIsPandaSelectorOpen(false);
+      setPandaTargetRowIndex(null);
 
       if (metaToEdit) {
         const editType = metaToEdit.type || 'aula';
@@ -202,8 +233,8 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
         setDisciplineName(metaToEdit.disciplineName || '');
         setDuration(metaToEdit.duration || 30);
         setColor(metaToEdit.color || DEFAULT_META_COLORS[editType]);
-        setPandaVideoUrl(metaToEdit.pandaVideoUrl || '');
-        setPandaVideoId(metaToEdit.pandaVideoId || '');
+        const existingVideos = getGuidedMetaVideos(metaToEdit);
+        setVideos(existingVideos.length > 0 ? existingVideos : [createEmptyVideoRow()]);
         setPdfUrl(metaToEdit.pdfUrl || '');
         setPdfName(metaToEdit.pdfName || '');
         setExternalLink(metaToEdit.externalLink || '');
@@ -257,8 +288,7 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
         setDisciplineName(subjects[0]?.name || '');
         setDuration(30);
         setColor(DEFAULT_META_COLORS['aula']);
-        setPandaVideoUrl('');
-        setPandaVideoId('');
+        setVideos([createEmptyVideoRow()]);
         setPdfUrl('');
         setPdfName('');
         setExternalLink('');
@@ -277,6 +307,21 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
       cancelled = true;
     };
   }, [isOpen, metaToEdit, subjects]);
+
+  const totalVideosDuration = videos.reduce(
+    (acc, v) => acc + Math.max(0, Math.round(Number(v.duration) || 0)),
+    0
+  );
+  const linkedVideosCount = videos.filter(
+    v => Boolean(v.link.trim() || v.pandaVideoId?.trim())
+  ).length;
+  const isDurationAutoCalculated = metaType === 'aula' && totalVideosDuration > 0;
+
+  useEffect(() => {
+    if (metaType === 'aula' && totalVideosDuration > 0) {
+      setDuration(totalVideosDuration);
+    }
+  }, [metaType, totalVideosDuration]);
 
   const handleMetaTypeChange = (newType: GuidedStudyMetaType) => {
     setMetaType(newType);
@@ -331,40 +376,174 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
     setHasModifiedJson(true);
   };
 
+  const handleAddVideoRow = () => {
+    setVideos(prev => [...prev, createEmptyVideoRow()]);
+  };
+
+  const handleRemoveVideoRow = (indexToRemove: number) => {
+    setVideos(prev => {
+      if (prev.length <= 1) {
+        return [createEmptyVideoRow()];
+      }
+      return prev.filter((_, idx) => idx !== indexToRemove);
+    });
+  };
+
+  const handleUpdateVideoField = (
+    index: number,
+    field: 'title' | 'link' | 'pandaVideoId' | 'duration',
+    value: string | number
+  ) => {
+    setVideos(prev =>
+      prev.map((item, idx) => {
+        if (idx !== index) return item;
+        if (field === 'duration') {
+          const parsed = Math.max(0, Math.round(Number(value) || 0));
+          return { ...item, duration: parsed };
+        }
+        if (field === 'link') {
+          const strVal = String(value);
+          const extractedId = extractPandaIdFromEmbedUrl(strVal);
+          return {
+            ...item,
+            link: strVal,
+            pandaVideoId: extractedId || item.pandaVideoId || ''
+          };
+        }
+        return { ...item, [field]: String(value) };
+      })
+    );
+  };
+
+  const handleMoveVideoRow = (index: number, direction: -1 | 1) => {
+    setVideos(prev => {
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const next = [...prev];
+      const temp = next[index];
+      next[index] = next[targetIndex];
+      next[targetIndex] = temp;
+      return next;
+    });
+  };
+
+  const openPandaSelectorForRow = (rowIndex: number | null) => {
+    setPandaTargetRowIndex(rowIndex);
+    setIsPandaSelectorOpen(true);
+  };
+
   const handlePandaVideoSelect = async (videoData: PandaVideo) => {
     try {
+      setIsLoadingPandaVideo(true);
       setFormError(null);
-      const videoDetails = (await pandaService.getVideoDetails(videoData.id)) || videoData;
-      const playbackId = extractPandaVideoId(videoDetails);
-      const embedUrl =
-        getPandaEmbedUrl(videoDetails, playbackId) ||
-        videoDetails.video_player_url ||
-        `https://player-vouto.pandavideo.com.br/embed/?v=${videoData.id}`;
 
-      setPandaVideoId(videoData.id);
-      setPandaVideoUrl(embedUrl);
-
-      if (!title && (videoData.title || videoDetails.title)) {
-        setTitle(videoData.title || videoDetails.title);
+      let videoDetails: PandaVideo = videoData;
+      try {
+        const fetched = await pandaService.getVideoDetails(videoData.id);
+        if (fetched) videoDetails = fetched;
+      } catch (detailErr) {
+        console.warn('Falha ao buscar detalhes do vídeo no Panda, usando dados básicos:', detailErr);
       }
 
-      const rawSeconds = videoDetails.length
-        ? Number(videoDetails.length)
-        : videoDetails.duration
-          ? Number(videoDetails.duration)
-          : 0;
-      if (rawSeconds > 0) {
-        setDuration(Math.round(rawSeconds / 60));
+      const playbackId = extractPandaVideoId(videoDetails);
+      const embedUrl = playbackId
+        ? getPandaEmbedUrl(videoDetails, playbackId)
+        : (videoDetails.video_player as string) ||
+          (videoDetails.video_player_url as string) ||
+          buildPandaEmbedUrl(videoData.id);
+
+      const rawSeconds = Number(
+        videoDetails.length || videoDetails.duration || videoData.length || videoData.duration || 0
+      );
+      const durationMinutes = rawSeconds > 0 ? Math.max(1, Math.round(rawSeconds / 60)) : 0;
+
+      const folderId = videoDetails.folder_id || videoData.folder_id;
+      if (folderId && typeof folderId === 'string') {
+        setLastPandaFolderId(folderId);
+      }
+
+      const resolvedTitle = String(videoData.title || videoDetails.title || '').trim();
+      const resolvedPandaId = String(playbackId || videoData.id || '').trim();
+
+      setVideos(prev => {
+        const next = [...prev];
+
+        if (pandaTargetRowIndex !== null && pandaTargetRowIndex >= 0 && pandaTargetRowIndex < next.length) {
+          next[pandaTargetRowIndex] = {
+            ...next[pandaTargetRowIndex],
+            title: resolvedTitle || next[pandaTargetRowIndex].title || `Aula ${pandaTargetRowIndex + 1}`,
+            link: embedUrl,
+            pandaVideoId: resolvedPandaId,
+            duration: durationMinutes
+          };
+          return next;
+        }
+
+        const firstEmptyIdx = next.findIndex(
+          row => !row.link.trim() && !row.pandaVideoId?.trim() && !row.title.trim()
+        );
+        if (firstEmptyIdx !== -1) {
+          next[firstEmptyIdx] = {
+            ...next[firstEmptyIdx],
+            title: resolvedTitle || `Aula ${firstEmptyIdx + 1}`,
+            link: embedUrl,
+            pandaVideoId: resolvedPandaId,
+            duration: durationMinutes
+          };
+          return next;
+        }
+
+        next.push({
+          id: createEmptyVideoRow().id,
+          title: resolvedTitle || `Aula ${next.length + 1}`,
+          link: embedUrl,
+          pandaVideoId: resolvedPandaId,
+          duration: durationMinutes
+        });
+        return next;
+      });
+
+      if (!title.trim() && resolvedTitle) {
+        setTitle(resolvedTitle);
       }
 
       setIsPandaSelectorOpen(false);
+      setPandaTargetRowIndex(null);
     } catch (err) {
       console.error('Erro ao selecionar vídeo do Panda:', err);
       setFormError('Erro ao carregar os detalhes do vídeo do Panda.');
+    } finally {
+      setIsLoadingPandaVideo(false);
     }
   };
 
   if (!isOpen) return null;
+
+  const uploadFileToAuthorizedStorage = async (
+    blobOrFile: Blob | File,
+    candidatePaths: string[],
+    contentType?: string
+  ): Promise<string> => {
+    let lastError: unknown = null;
+    for (const path of candidatePaths) {
+      try {
+        const storageRef = ref(storage, path);
+        await uploadBytes(
+          storageRef,
+          blobOrFile,
+          contentType ? { contentType } : undefined
+        );
+        return await getDownloadURL(storageRef);
+      } catch (err: unknown) {
+        lastError = err;
+        const code = (err as { code?: string })?.code || '';
+        if (code !== 'storage/unauthorized' && code !== 'storage/permission-denied') {
+          throw err;
+        }
+      }
+    }
+    throw lastError;
+  };
 
   const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -373,9 +552,18 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
     try {
       setIsUploadingPdf(true);
       setFormError(null);
-      const storageRef = ref(storage, `guided_study_pdfs/${classId}/${Date.now()}_${file.name}`);
-      await uploadBytes(storageRef, file);
-      const url = await getDownloadURL(storageRef);
+      const timestamp = Date.now();
+      const safeFileName = file.name.replace(/[/\\#?]/g, '_');
+      // Prioriza caminhos já autorizados nas regras do Firebase Storage (padrão course_pdfs / class-materials / plans)
+      const url = await uploadFileToAuthorizedStorage(
+        file,
+        [
+          `course_pdfs/guided_${classId}_${timestamp}_${safeFileName}`,
+          `class-materials/modules/guided_${classId}_${timestamp}_${safeFileName}`,
+          `plans/${classId}/materials/${timestamp}_${safeFileName}`
+        ],
+        file.type || 'application/pdf'
+      );
       setPdfUrl(url);
       setPdfName(file.name);
     } catch (err) {
@@ -383,6 +571,9 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
       setFormError('Erro ao enviar o PDF. Tente novamente.');
     } finally {
       setIsUploadingPdf(false);
+      if (e.target) {
+        e.target.value = '';
+      }
     }
   };
 
@@ -504,12 +695,16 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
           if (!resolvedUrl || hasModifiedJson) {
             try {
               const jsonBlob = new Blob([serializedJson], { type: 'application/json' });
-              const mapStorageRef = ref(
-                storage,
-                `guided_study_maps/${classId}/${Date.now()}_${safeFileName}`
+              const timestamp = Date.now();
+              resolvedUrl = await uploadFileToAuthorizedStorage(
+                jsonBlob,
+                [
+                  `course_pdfs/guided_map_${classId}_${timestamp}_${safeFileName}`,
+                  `class-materials/modules/guided_map_${classId}_${timestamp}_${safeFileName}`,
+                  `plans/${classId}/materials/${timestamp}_${safeFileName}`
+                ],
+                'application/json'
               );
-              await uploadBytes(mapStorageRef, jsonBlob);
-              resolvedUrl = await getDownloadURL(mapStorageRef);
             } catch (storageErr) {
               console.warn('Falha no upload do JSON para o Storage, utilizando persistência direta:', storageErr);
               if (byteSize > 900_000) {
@@ -532,6 +727,44 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
         }
       }
 
+      const sanitizedVideos: GuidedStudyVideo[] =
+        metaType === 'aula'
+          ? videos
+              .map((v, idx) => {
+                const rawLink = (v.link || '').trim();
+                const rawPandaId = (v.pandaVideoId || '').trim();
+                if (!rawLink && !rawPandaId) return null;
+
+                const resolvedLink = resolveGuidedStudyVideoUrl(rawLink, rawPandaId);
+                const extractedId =
+                  rawPandaId ||
+                  extractPandaIdFromEmbedUrl(resolvedLink) ||
+                  (!/^https?:\/\//i.test(rawLink) && !rawLink.startsWith('//') ? rawLink : '');
+
+                return {
+                  id: v.id || `vid_${Date.now()}_${idx}`,
+                  title: (v.title || '').trim() || `Aula ${idx + 1}`,
+                  link: resolvedLink,
+                  pandaVideoId: extractedId,
+                  duration: Math.max(0, Math.round(Number(v.duration) || 0))
+                } as GuidedStudyVideo;
+              })
+              .filter((v): v is GuidedStudyVideo => v !== null)
+          : [];
+
+      const summedVideoMinutes = sanitizedVideos.reduce((acc, v) => acc + v.duration, 0);
+      const finalDuration =
+        metaType === 'aula' && summedVideoMinutes > 0
+          ? summedVideoMinutes
+          : Math.max(1, Math.round(Number(duration) || 30));
+
+      const resolvedOrder =
+        typeof metaToEdit?.order === 'number' && Number.isFinite(metaToEdit.order)
+          ? metaToEdit.order
+          : typeof defaultOrder === 'number' && Number.isFinite(defaultOrder)
+            ? defaultOrder
+            : undefined;
+
       const payload: GuidedStudyMeta = {
         id: metaToEdit?.id,
         classId,
@@ -540,10 +773,12 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
         title: title.trim(),
         description: description.trim(),
         disciplineName: disciplineName.trim(),
-        duration: Number(duration) || 30,
+        duration: finalDuration,
+        order: resolvedOrder,
         color,
-        pandaVideoUrl,
-        pandaVideoId,
+        videos: sanitizedVideos,
+        pandaVideoUrl: sanitizedVideos[0]?.link || '',
+        pandaVideoId: sanitizedVideos[0]?.pandaVideoId || '',
         pdfUrl,
         pdfName,
         externalLink,
@@ -891,17 +1126,38 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">
-                Tempo Estimado (minutos)
-              </label>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                  Tempo Estimado (minutos)
+                </label>
+                {isDurationAutoCalculated && (
+                  <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    Soma automática
+                  </span>
+                )}
+              </div>
               <input
                 type="number"
-                min={5}
-                max={300}
-                value={duration}
-                onChange={e => setDuration(Number(e.target.value))}
-                className="w-full bg-zinc-800/60 border border-zinc-700/80 rounded-xl px-4 py-2.5 text-sm text-white tabular-nums focus:outline-none focus:border-amber-500"
+                min={1}
+                value={isDurationAutoCalculated ? totalVideosDuration : duration}
+                readOnly={isDurationAutoCalculated}
+                onChange={e => {
+                  if (!isDurationAutoCalculated) {
+                    setDuration(Number(e.target.value));
+                  }
+                }}
+                className={`w-full border rounded-xl px-4 py-2.5 text-sm tabular-nums focus:outline-none ${
+                  isDurationAutoCalculated
+                    ? 'bg-blue-950/20 border-blue-500/30 text-blue-200 font-bold cursor-default'
+                    : 'bg-zinc-800/60 border-zinc-700/80 text-white focus:border-amber-500'
+                }`}
               />
+              {isDurationAutoCalculated && (
+                <p className="text-[11px] text-zinc-400 mt-1 tabular-nums">
+                  Calculado automaticamente pela soma das videoaulas ({totalVideosDuration} min).
+                </p>
+              )}
             </div>
 
             <div className="md:col-span-2">
@@ -920,45 +1176,153 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
 
           {/* Configurações Específicas do Tipo Escolhido */}
 
-          {/* AULA: Panda Video Integration */}
+          {/* AULA: Múltiplas Videoaulas (Integração Panda Video) */}
           {metaType === 'aula' && (
             <div className="bg-zinc-950/60 border border-zinc-800 p-4 rounded-xl space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-blue-400 uppercase tracking-wider flex items-center gap-2">
-                  <Video className="w-4 h-4" /> Integração Panda Video
-                </span>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <span className="text-xs font-bold text-blue-400 uppercase tracking-wider flex items-center gap-2">
+                    <Video className="w-4 h-4 shrink-0" /> Videoaulas (Panda Video)
+                  </span>
+                  <span className="text-[11px] font-mono font-bold text-zinc-300 bg-zinc-900 border border-zinc-800 px-2.5 py-0.5 rounded-lg tabular-nums">
+                    {linkedVideosCount} {linkedVideosCount === 1 ? 'vídeo' : 'vídeos'} · Total:{' '}
+                    <span className="text-blue-400">{totalVideosDuration} min</span>
+                  </span>
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => setIsPandaSelectorOpen(true)}
-                  className="px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 text-xs font-bold hover:bg-blue-500/20 transition-colors flex items-center gap-1.5"
+                  onClick={() => openPandaSelectorForRow(null)}
+                  disabled={isLoadingPandaVideo}
+                  className="px-3 py-1.5 rounded-lg bg-blue-500/15 text-blue-300 border border-blue-500/30 text-xs font-bold hover:bg-blue-500/25 transition-colors flex items-center gap-1.5 disabled:opacity-50 whitespace-nowrap"
                 >
-                  <Video className="w-3.5 h-3.5" />
-                  <span>Navegar Pastas no Panda</span>
+                  {isLoadingPandaVideo ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Video className="w-3.5 h-3.5" />
+                  )}
+                  <span>Buscar e Adicionar do Panda</span>
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">Panda Video ID</label>
-                  <input
-                    type="text"
-                    value={pandaVideoId}
-                    onChange={e => setPandaVideoId(e.target.value)}
-                    placeholder="Ex: v-12345-abc"
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">URL Direta / Embed Panda</label>
-                  <input
-                    type="text"
-                    value={pandaVideoUrl}
-                    onChange={e => setPandaVideoUrl(e.target.value)}
-                    placeholder="https://player-vouto.pandavideo.com.br/embed/..."
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-white"
-                  />
-                </div>
+              <div className="space-y-3">
+                {videos.map((video, index) => {
+                  const previewUrl = resolveGuidedStudyVideoUrl(video.link, video.pandaVideoId);
+                  return (
+                    <div
+                      key={video.id || index}
+                      className="bg-zinc-900/90 border border-zinc-800 hover:border-zinc-700/80 p-3 rounded-xl space-y-2.5 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-300 text-[11px] font-mono font-bold flex items-center justify-center shrink-0 tabular-nums">
+                          {index + 1}
+                        </span>
+
+                        {videos.length > 1 && (
+                          <div className="flex items-center gap-0.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleMoveVideoRow(index, -1)}
+                              disabled={index === 0}
+                              title="Mover aula para cima"
+                              className="p-1 text-zinc-500 hover:text-white disabled:opacity-30 rounded transition-colors"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveVideoRow(index, 1)}
+                              disabled={index === videos.length - 1}
+                              title="Mover aula para baixo"
+                              className="p-1 text-zinc-500 hover:text-white disabled:opacity-30 rounded transition-colors"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+
+                        <input
+                          type="text"
+                          value={video.title}
+                          onChange={e => handleUpdateVideoField(index, 'title', e.target.value)}
+                          placeholder={`Título da Aula ${index + 1}`}
+                          className="flex-1 min-w-0 bg-zinc-950 border border-zinc-800 focus:border-blue-500 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none"
+                        />
+
+                        <div className="relative w-24 shrink-0">
+                          <input
+                            type="number"
+                            min={0}
+                            value={video.duration || ''}
+                            onChange={e => handleUpdateVideoField(index, 'duration', e.target.value)}
+                            placeholder="0"
+                            title="Duração desta videoaula em minutos"
+                            className="w-full bg-zinc-950 border border-zinc-800 focus:border-blue-500 rounded-lg pl-2.5 pr-9 py-1.5 text-xs text-white text-right font-mono tabular-nums focus:outline-none"
+                          />
+                          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-zinc-500 pointer-events-none">
+                            min
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveVideoRow(index)}
+                          title={videos.length > 1 ? 'Remover videoaula' : 'Limpar videoaula'}
+                          className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors shrink-0"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1 min-w-0">
+                          <input
+                            type="text"
+                            value={video.link}
+                            onChange={e => handleUpdateVideoField(index, 'link', e.target.value)}
+                            placeholder="Link Embed / URL do Panda Vídeo ou Video ID"
+                            className="w-full bg-zinc-950 border border-zinc-800 focus:border-blue-500 rounded-lg pl-3 pr-20 py-1.5 text-xs text-zinc-300 font-mono placeholder-zinc-600 focus:outline-none"
+                          />
+                          <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => openPandaSelectorForRow(index)}
+                              title="Selecionar vídeo nas pastas do Panda"
+                              className="p-1 text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors"
+                            >
+                              <Search className="w-3.5 h-3.5" />
+                            </button>
+                            {previewUrl && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setPreviewVideo({
+                                    title: video.title || `Aula ${index + 1}`,
+                                    url: previewUrl
+                                  })
+                                }
+                                title="Pré-visualizar videoaula"
+                                className="p-1 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 rounded transition-colors"
+                              >
+                                <PlayCircle className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
+
+              <button
+                type="button"
+                onClick={handleAddVideoRow}
+                className="w-full py-2.5 bg-zinc-900 hover:bg-zinc-800/80 border border-dashed border-zinc-700 hover:border-blue-500/50 rounded-xl text-xs font-bold text-zinc-300 hover:text-blue-300 flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <Plus className="w-4 h-4 text-blue-400" />
+                <span>Adicionar Outra Videoaula</span>
+              </button>
             </div>
           )}
 
@@ -1131,9 +1495,44 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
 
       {isPandaSelectorOpen && (
         <PandaVideoSelector
+          initialFolderId={lastPandaFolderId}
           onSelect={handlePandaVideoSelect}
-          onClose={() => setIsPandaSelectorOpen(false)}
+          onClose={() => {
+            setIsPandaSelectorOpen(false);
+            setPandaTargetRowIndex(null);
+          }}
         />
+      )}
+
+      {previewVideo && (
+        <div
+          className="fixed inset-0 z-[130] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-in fade-in"
+          onClick={() => setPreviewVideo(null)}
+        >
+          <div
+            className="w-full max-w-4xl bg-zinc-950 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-900/60">
+              <div className="flex items-center gap-2 min-w-0">
+                <PlayCircle className="w-4 h-4 text-blue-400 shrink-0" />
+                <span className="text-xs font-bold text-white truncate">
+                  Pré-visualização: {previewVideo.title}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewVideo(null)}
+                className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 bg-black">
+              <PandaVideoPlayer url={previewVideo.url} title={previewVideo.title} />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

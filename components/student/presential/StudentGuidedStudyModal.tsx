@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X,
   Play,
+  PlayCircle,
   FileText,
   CheckCircle,
   Clock,
@@ -17,10 +18,15 @@ import {
   AlertCircle,
   Info
 } from 'lucide-react';
-import { GuidedStudyMeta, GuidedStudyProgress } from '../../../types/guidedStudy';
+import {
+  GuidedStudyMeta,
+  GuidedStudyProgress,
+  getGuidedMetaVideos
+} from '../../../types/guidedStudy';
 import { CourseContent } from '../../../types/course';
 import { guidedStudyService } from '../../../services/guidedStudyService';
 import { InteractiveLessonPlayer } from '../courses/player/InteractiveLessonPlayer';
+import { PandaVideoPlayer } from '../../ui/video/PandaVideoPlayer';
 
 interface StudentGuidedStudyModalProps {
   isOpen: boolean;
@@ -31,6 +37,7 @@ interface StudentGuidedStudyModalProps {
   progress?: GuidedStudyProgress;
   onProgressUpdated?: () => void;
   isAdminPreview?: boolean;
+  initialVideoIndex?: number;
 }
 
 export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = ({
@@ -41,7 +48,8 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
   userId,
   progress,
   onProgressUpdated,
-  isAdminPreview = false
+  isAdminPreview = false,
+  initialVideoIndex = 0
 }) => {
   const [isCompleted, setIsCompleted] = useState<boolean>(!!progress?.completed);
   const [isSaving, setIsSaving] = useState(false);
@@ -50,6 +58,10 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
   // Stopwatch state
   const [secondsElapsed, setSecondsElapsed] = useState<number>(0);
   const [isTimerRunning, setIsTimerRunning] = useState<boolean>(true);
+
+  // Video Playlist state (multi-video support)
+  const metaVideos = useMemo(() => getGuidedMetaVideos(meta), [meta]);
+  const [activeVideoIndex, setActiveVideoIndex] = useState<number>(0);
 
   // Flashcards state
   const [currentCardIndex, setCurrentCardIndex] = useState<number>(0);
@@ -94,6 +106,11 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
       setMapLoadError(null);
       setShowOrientationBanner(true);
 
+      const videosCount = getGuidedMetaVideos(meta).length;
+      const safeIndex =
+        videosCount > 0 ? Math.min(Math.max(0, initialVideoIndex), videosCount - 1) : 0;
+      setActiveVideoIndex(safeIndex);
+
       if (meta.type === 'interactive_map') {
         if (meta.interactiveMapJson) {
           setResolvedMapJson(meta.interactiveMapJson);
@@ -110,7 +127,7 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
         setIsLoadingMap(false);
       }
     }
-  }, [isOpen, meta, progress, isAdminPreview, loadRemoteInteractiveMap]);
+  }, [isOpen, meta, progress, isAdminPreview, initialVideoIndex, loadRemoteInteractiveMap]);
 
   // Lock body scroll while modal is open so main page never scrolls behind it
   useEffect(() => {
@@ -179,6 +196,13 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
   const cards = meta.cards || [];
   const currentCard = cards[currentCardIndex];
 
+  const summedVideosDuration = metaVideos.reduce((acc, v) => acc + (v.duration || 0), 0);
+  const totalPlannedDuration =
+    meta.type === 'aula' && summedVideosDuration > 0
+      ? meta.duration || summedVideosDuration
+      : meta.duration || 30;
+  const activeVideo = metaVideos[activeVideoIndex] || metaVideos[0] || null;
+
   const lessonScopeId = `guided_${classId}`;
   const interactiveCourseContent: CourseContent = {
     id: meta.id || `guided_map_${meta.date}`,
@@ -230,7 +254,15 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
                     <span aria-hidden="true">·</span>
                   </>
                 )}
-                <span>Tempo previsto: {meta.duration || 30} min</span>
+                <span>Tempo previsto: {totalPlannedDuration} min</span>
+                {meta.type === 'aula' && metaVideos.length > 1 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="text-blue-400 font-semibold">
+                      {metaVideos.length} videoaulas
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -371,29 +403,135 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
               </div>
             )}
 
-            {/* 1. TYPE: AULA (Panda Player) */}
+            {/* 1. TYPE: AULA (Panda Player - Single & Multi-Video Playlist) */}
             {meta.type === 'aula' && (
               <div className="space-y-4">
-                <div className="aspect-video w-full bg-black rounded-xl overflow-hidden border border-zinc-800 shadow-xl relative">
-                  {meta.pandaVideoId || meta.pandaVideoUrl ? (
-                    <iframe
-                      src={
-                        meta.pandaVideoUrl
-                          ? meta.pandaVideoUrl
-                          : `https://player-vouto.pandavideo.com.br/embed/?v=${meta.pandaVideoId}`
-                      }
-                      className="w-full h-full border-0"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                      title={meta.title}
+                {activeVideo ? (
+                  <>
+                    {metaVideos.length > 1 && (
+                      <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-zinc-950/70 border border-zinc-800">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="px-2 py-0.5 rounded-md bg-blue-500/15 border border-blue-500/30 text-blue-300 text-[11px] font-mono font-bold shrink-0 tabular-nums">
+                            Aula {activeVideoIndex + 1}/{metaVideos.length}
+                          </span>
+                          <span className="text-xs sm:text-sm font-bold text-white truncate">
+                            {activeVideo.title}
+                          </span>
+                          {activeVideo.duration > 0 && (
+                            <span className="hidden sm:inline text-[11px] font-mono text-zinc-400 shrink-0 tabular-nums">
+                              ({activeVideo.duration} min)
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            disabled={activeVideoIndex === 0}
+                            onClick={() => setActiveVideoIndex(prev => Math.max(0, prev - 1))}
+                            className="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-bold text-zinc-300 hover:text-white disabled:opacity-35 transition-colors flex items-center gap-1"
+                          >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">Anterior</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={activeVideoIndex >= metaVideos.length - 1}
+                            onClick={() =>
+                              setActiveVideoIndex(prev => Math.min(metaVideos.length - 1, prev + 1))
+                            }
+                            className="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-bold text-zinc-300 hover:text-white disabled:opacity-35 transition-colors flex items-center gap-1"
+                          >
+                            <span className="hidden sm:inline">Próxima</span>
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <PandaVideoPlayer
+                      key={`${activeVideo.id || activeVideoIndex}-${activeVideo.link}`}
+                      url={activeVideo.link}
+                      title={activeVideo.title || meta.title}
+                      onComplete={() => {
+                        if (activeVideoIndex < metaVideos.length - 1) {
+                          setActiveVideoIndex(prev => prev + 1);
+                        }
+                      }}
                     />
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 gap-2">
-                      <Play className="w-12 h-12 text-zinc-600" />
-                      <span className="text-xs">Vídeo não vinculado ou em processamento.</span>
-                    </div>
-                  )}
-                </div>
+
+                    {metaVideos.length > 1 && (
+                      <div className="bg-zinc-950/60 border border-zinc-800 rounded-xl p-3.5 space-y-2.5">
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="font-bold uppercase tracking-wider text-zinc-400">
+                            Playlist da Meta ({metaVideos.length} videoaulas)
+                          </span>
+                          <span className="font-mono font-bold text-blue-400 tabular-nums">
+                            Total: {totalPlannedDuration} min
+                          </span>
+                        </div>
+
+                        <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                          {metaVideos.map((vid, idx) => {
+                            const isCurrent = idx === activeVideoIndex;
+                            return (
+                              <button
+                                key={vid.id || idx}
+                                type="button"
+                                onClick={() => setActiveVideoIndex(idx)}
+                                className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border text-left transition-all ${
+                                  isCurrent
+                                    ? 'bg-blue-500/15 border-blue-500/40 text-white shadow-sm'
+                                    : 'bg-zinc-900/70 hover:bg-zinc-800/80 border-zinc-800/80 text-zinc-300 hover:text-white'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <span
+                                    className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-mono font-bold shrink-0 tabular-nums ${
+                                      isCurrent
+                                        ? 'bg-blue-500 text-black'
+                                        : 'bg-zinc-800 text-zinc-400'
+                                    }`}
+                                  >
+                                    {isCurrent ? <Play className="w-3 h-3 fill-current" /> : idx + 1}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <span className="block text-xs font-bold truncate">
+                                      {vid.title}
+                                    </span>
+                                    {isCurrent && (
+                                      <span className="block text-[10px] font-semibold text-blue-300">
+                                        Reproduzindo agora
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0 tabular-nums">
+                                  {vid.duration > 0 && (
+                                    <span className="text-[11px] font-mono text-zinc-400">
+                                      {vid.duration} min
+                                    </span>
+                                  )}
+                                  <PlayCircle
+                                    className={`w-4 h-4 ${
+                                      isCurrent ? 'text-blue-400' : 'text-zinc-500'
+                                    }`}
+                                  />
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="aspect-video w-full bg-black rounded-xl overflow-hidden border border-zinc-800 shadow-xl flex flex-col items-center justify-center text-zinc-500 gap-2">
+                    <Play className="w-12 h-12 text-zinc-600" />
+                    <span className="text-xs">Vídeo não vinculado ou em processamento.</span>
+                  </div>
+                )}
               </div>
             )}
 

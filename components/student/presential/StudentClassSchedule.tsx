@@ -43,7 +43,12 @@ import {
   ExternalLink,
   Sparkles
 } from 'lucide-react';
-import { GuidedStudyMeta, GuidedStudyProgress } from '../../../types/guidedStudy';
+import {
+  GuidedStudyMeta,
+  GuidedStudyProgress,
+  getGuidedMetaVideos,
+  compareGuidedMetasWithinDay
+} from '../../../types/guidedStudy';
 import { guidedStudyService } from '../../../services/guidedStudyService';
 import { StudentGuidedStudyModal } from './StudentGuidedStudyModal';
 import { useAuth } from '../../../contexts/AuthContext';
@@ -1059,7 +1064,9 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
 
         {/* Metas do Estudo Guiado no Cronograma do Aluno */}
         {classData?.isGuidedStudyEnabled && (() => {
-          const dayMetas = guidedMetas.filter(m => m.date === dateString);
+          const dayMetas = guidedMetas
+            .filter(m => m.date === dateString)
+            .sort(compareGuidedMetasWithinDay);
           const completedCount = dayMetas.filter(m => m.id && studentProgress[m.id]?.completed).length;
 
           const getMetaTypeInfo = (type: GuidedStudyMeta['type']) => {
@@ -1287,29 +1294,36 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                               </div>
                               <Maximize2 className="w-3.5 h-3.5 text-amber-300 shrink-0" />
                             </button>
-                          ) : meta.type === 'aula' && (meta.pandaVideoId || meta.pandaVideoUrl) ? (
-                            <button
-                              type="button"
-                              onClick={e => {
-                                e.stopPropagation();
-                                setSelectedMetaForModal(meta);
-                              }}
-                              className="w-full p-2.5 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/40 text-left transition-all flex items-center justify-between gap-2 group"
-                            >
-                              <div className="flex items-center gap-2 min-w-0">
-                                <Video className="w-4 h-4 text-blue-300 shrink-0" />
-                                <div className="min-w-0">
-                                  <span className="block text-[11px] font-bold text-blue-100 truncate">
-                                    Assistir Videoaula
-                                  </span>
-                                  <span className="block text-[9px] text-blue-300/90">
-                                    Abrir player da aula
-                                  </span>
+                          ) : meta.type === 'aula' && getGuidedMetaVideos(meta).length > 0 ? (() => {
+                            const videosCount = getGuidedMetaVideos(meta).length;
+                            return (
+                              <button
+                                type="button"
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  setSelectedMetaForModal(meta);
+                                }}
+                                className="w-full p-2.5 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/40 text-left transition-all flex items-center justify-between gap-2 group"
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <Video className="w-4 h-4 text-blue-300 shrink-0" />
+                                  <div className="min-w-0">
+                                    <span className="block text-[11px] font-bold text-blue-100 truncate">
+                                      {videosCount > 1
+                                        ? `Assistir Videoaulas (${videosCount} aulas)`
+                                        : 'Assistir Videoaula'}
+                                    </span>
+                                    <span className="block text-[9px] text-blue-300/90">
+                                      {videosCount > 1
+                                        ? 'Abrir playlist das aulas'
+                                        : 'Abrir player da aula'}
+                                    </span>
+                                  </div>
                                 </div>
-                              </div>
-                              <Maximize2 className="w-3.5 h-3.5 text-blue-300 shrink-0" />
-                            </button>
-                          ) : meta.type === 'flashcards' ? (
+                                <Maximize2 className="w-3.5 h-3.5 text-blue-300 shrink-0" />
+                              </button>
+                            );
+                          })() : meta.type === 'flashcards' ? (
                             <button
                               type="button"
                               onClick={e => {
