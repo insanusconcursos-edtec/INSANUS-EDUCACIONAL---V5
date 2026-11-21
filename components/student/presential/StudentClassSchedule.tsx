@@ -47,7 +47,8 @@ import {
   GuidedStudyMeta,
   GuidedStudyProgress,
   getGuidedMetaVideos,
-  compareGuidedMetasWithinDay
+  compareGuidedMetasWithinDay,
+  computeClassEncounterMap
 } from '../../../types/guidedStudy';
 import { guidedStudyService } from '../../../services/guidedStudyService';
 import { StudentGuidedStudyModal } from './StudentGuidedStudyModal';
@@ -106,6 +107,21 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
   const [studentProgress, setStudentProgress] = useState<Record<string, GuidedStudyProgress>>({});
   const [expandedMetaId, setExpandedMetaId] = useState<string | null>(null);
   const [selectedMetaForModal, setSelectedMetaForModal] = useState<GuidedStudyMeta | null>(null);
+
+  const encounterMap = useMemo(
+    () =>
+      computeClassEncounterMap(
+        events,
+        classData?.isGuidedStudyEnabled ? guidedMetas : [],
+        {
+          defaultShift: classData?.shift,
+          totalMeetings: classData?.totalMeetings,
+          todayIso: todayString,
+          includeGuidedStudy: Boolean(classData?.isGuidedStudyEnabled)
+        }
+      ),
+    [events, guidedMetas, classData?.isGuidedStudyEnabled, classData?.shift, classData?.totalMeetings, todayString]
+  );
 
   const navigateToPresentialTab = (tabId: string, params?: Record<string, string>) => {
     if (onSwitchTab) {
@@ -533,8 +549,12 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
           }, {} as Record<string, ClassScheduleEvent[]>);
 
           const activeShifts = ['Manhã', 'Tarde', 'Noite'].filter(s => eventsByShift[s]?.length > 0);
+          const hasDayGuidedMetas =
+            Boolean(classData?.isGuidedStudyEnabled) &&
+            guidedMetas.some(m => m.date === dateString);
 
           if (activeShifts.length === 0) {
+            if (hasDayGuidedMetas) return null;
             return (
               <div className="text-center py-4 text-xs text-zinc-600 border border-dashed border-zinc-800 rounded-lg">
                 Nenhuma aula agendada
@@ -545,6 +565,16 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
           return activeShifts.map((shiftName, shiftIndex) => {
             const shiftEvents = eventsByShift[shiftName];
             const regularClassEvents = shiftEvents.filter(ev => ev.eventType !== 'SIMULADO');
+            const firstRegularEvent = regularClassEvents[0];
+            const shiftEnum =
+              firstRegularEvent?.shift ||
+              (shiftName === 'Manhã' ? 'MORNING' : shiftName === 'Tarde' ? 'AFTERNOON' : 'NIGHT');
+            const shiftEncounter = firstRegularEvent
+              ? encounterMap.byShiftKey.get(`${dateString}::${shiftEnum}`)
+              : undefined;
+            const isShiftCompleted =
+              regularClassEvents.length > 0 &&
+              regularClassEvents.every(ev => ev.status === 'COMPLETED');
             let regularClassCounter = 0;
 
             return (
@@ -559,8 +589,23 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                 )}
 
                 {/* Shift Header */}
-                <div className="flex justify-between items-center mb-2">
+                <div className="flex justify-between items-center mb-2 gap-1.5">
                   <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">{shiftName}</span>
+                  {shiftEncounter && (
+                    <span
+                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wide whitespace-nowrap ${
+                        isShiftCompleted
+                          ? 'bg-emerald-600 text-white border-emerald-500'
+                          : shiftEncounter.isOverflow
+                            ? 'bg-red-600 text-white border-red-500'
+                            : 'text-brand-red bg-brand-red/10 border-brand-red/20'
+                      }`}
+                    >
+                      {shiftEncounter.isOverflow
+                        ? `Encontro #${shiftEncounter.encounterNumber} (EXTRA)`
+                        : `Encontro #${shiftEncounter.encounterNumber}`}
+                    </span>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -1090,17 +1135,36 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
             }
           };
 
+          const guidedEncounter = encounterMap.byGuidedDate.get(dateString);
+
           return (
             <div className="mt-4 pt-3 border-t border-amber-500/20 space-y-2">
-              <div className="flex items-center justify-between gap-1.5">
+              <div className="flex items-center justify-between gap-1.5 flex-wrap">
                 <span className="text-[10px] font-extrabold text-amber-400 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap">
                   <Target className="w-3 h-3 shrink-0" /> Estudo Guiado
                 </span>
-                {dayMetas.length > 0 && (
-                  <span className="text-[10px] font-semibold text-amber-400/90 tabular-nums whitespace-nowrap">
-                    {completedCount}/{dayMetas.length} concluídas
-                  </span>
-                )}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {guidedEncounter && (
+                    <span
+                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wide whitespace-nowrap ${
+                        guidedEncounter.isCompleted
+                          ? 'bg-emerald-600 text-white border-emerald-500'
+                          : guidedEncounter.isOverflow
+                            ? 'bg-red-600 text-white border-red-500'
+                            : 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                      }`}
+                    >
+                      {guidedEncounter.isOverflow
+                        ? `Encontro #${guidedEncounter.encounterNumber} (EXTRA)`
+                        : `Encontro #${guidedEncounter.encounterNumber}`}
+                    </span>
+                  )}
+                  {dayMetas.length > 0 && (
+                    <span className="text-[10px] font-semibold text-amber-400/90 tabular-nums whitespace-nowrap">
+                      {completedCount}/{dayMetas.length} concluídas
+                    </span>
+                  )}
+                </div>
               </div>
 
               {dayMetas.length === 0 ? (

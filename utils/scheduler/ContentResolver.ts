@@ -40,7 +40,7 @@ export const buildSubjectSlotUnits = (
     if (topic.modules && topic.modules.length > 0) {
       topic.modules.forEach(module => {
         if (onlySelectedTopics && module.isSelected === false) return;
-        if (module.isOnline) return;
+        if (module.isOnline || module.isGuidedStudy) return;
 
         const isGrouped = Boolean(module.groupedWithPrevious) || Number(module.classesCount) === 0;
 

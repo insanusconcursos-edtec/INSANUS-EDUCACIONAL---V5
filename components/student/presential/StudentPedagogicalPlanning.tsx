@@ -1,9 +1,38 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { ChevronDown, ChevronRight, FileText, Link as LinkIcon, CheckCircle, Clock, AlertCircle, BookOpen, Video, CheckCircle2, Calendar, PlayCircle, ClipboardList, Layers, Link2, Radio } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Link as LinkIcon,
+  CheckCircle,
+  Clock,
+  AlertCircle,
+  BookOpen,
+  Video,
+  CheckCircle2,
+  Calendar,
+  PlayCircle,
+  ClipboardList,
+  Layers,
+  Link2,
+  Radio,
+  Target,
+  FileJson,
+  HelpCircle,
+  Scale,
+  Zap
+} from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Subject, SubjectGroup, Topic } from '../../../types/curriculum';
 import { ClassScheduleEvent } from '../../../types/schedule';
 import { Teacher } from '../../../types/teacher';
+import {
+  GuidedStudyMeta,
+  GuidedStudyProgress,
+  computeClassEncounterMap,
+  getGuidedMetasForModule,
+  getGuidedModuleStudentStatus
+} from '../../../types/guidedStudy';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { twMerge } from 'tailwind-merge';
@@ -13,6 +42,9 @@ import { classScheduleService } from '../../../services/classScheduleService';
 import { curriculumService } from '../../../services/curriculumService';
 import { classService } from '../../../services/classService';
 import { teacherService } from '../../../services/teacherService';
+import { guidedStudyService } from '../../../services/guidedStudyService';
+import { StudentGuidedStudyModal } from './StudentGuidedStudyModal';
+import { toLocalISODate } from '../../../utils/dateUtils';
 import { getSubjectEffectiveSlotCount } from '../../../utils/scheduler/ContentResolver';
 
 interface StudentPedagogicalPlanningProps {
@@ -22,7 +54,28 @@ interface StudentPedagogicalPlanningProps {
   subjectGroups?: SubjectGroup[];
 }
 
-export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClassId, totalMeetings = 0, subjectGroups: initialSubjectGroups }: StudentPedagogicalPlanningProps) {
+const getStudentGuidedMetaTypeDisplay = (type: GuidedStudyMeta['type']) => {
+  switch (type) {
+    case 'interactive_map':
+      return { label: 'Mapa .JSON', Icon: FileJson };
+    case 'aula':
+      return { label: 'Videoaula', Icon: Video };
+    case 'material':
+      return { label: 'Material PDF', Icon: FileText };
+    case 'questoes':
+      return { label: 'Questões', Icon: HelpCircle };
+    case 'lei_seca':
+      return { label: 'Lei Seca', Icon: Scale };
+    case 'flashcards':
+      return { label: 'Flashcards', Icon: Zap };
+    case 'resumo':
+      return { label: 'Resumo', Icon: BookOpen };
+    default:
+      return { label: 'Meta', Icon: Target };
+  }
+};
+
+export function StudentPedagogicalPlanning({ classId, masterClassId, totalMeetings = 0, subjectGroups: initialSubjectGroups }: StudentPedagogicalPlanningProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { currentUser, userData } = useAuth();
@@ -31,7 +84,13 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
   const [topics, setTopics] = useState<Topic[]>([]);
   const [events, setEvents] = useState<ClassScheduleEvent[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [guidedMetas, setGuidedMetas] = useState<GuidedStudyMeta[]>([]);
+  const [studentProgress, setStudentProgress] = useState<Record<string, GuidedStudyProgress>>({});
+  const [isGuidedStudyEnabled, setIsGuidedStudyEnabled] = useState(false);
+  const [classShift, setClassShift] = useState<string | undefined>(undefined);
+  const [selectedMetaForModal, setSelectedMetaForModal] = useState<GuidedStudyMeta | null>(null);
   const [loading, setLoading] = useState(true);
+  const todayIso = useMemo(() => toLocalISODate(), []);
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(new Set());
@@ -94,7 +153,19 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
     }
   }, [searchParams, subjects, topics, validGroupIds]);
 
+  const refreshStudentProgress = useCallback(async () => {
+    if (!currentUser?.uid || !classId) return;
+    try {
+      const progressData = await guidedStudyService.getStudentProgress(currentUser.uid, classId);
+      setStudentProgress(progressData);
+    } catch (error) {
+      console.error('Erro ao atualizar progresso do estudo guiado:', error);
+    }
+  }, [currentUser?.uid, classId]);
+
   useEffect(() => {
+    let cancelled = false;
+
     const loadData = async () => {
       try {
         const [eventsData, subjectsData, topicsData, teachersData, classDoc] = await Promise.all([
@@ -102,25 +173,60 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
           curriculumService.getSubjectsByClass(classId),
           curriculumService.getTopicsByClass(classId),
           teacherService.getTeachers(),
-          initialSubjectGroups === undefined ? classService.getClassById(classId).catch(() => null) : Promise.resolve(null),
+          classService.getClassById(classId).catch(() => null),
         ]);
+
+        if (cancelled) return;
 
         setEvents(eventsData);
         setSubjects(subjectsData);
         setTopics(topicsData);
         setTeachers(teachersData);
-        if (classDoc?.subjectGroups) {
+        if (classDoc?.subjectGroups && initialSubjectGroups === undefined) {
           setSubjectGroups(classDoc.subjectGroups);
+        }
+        setIsGuidedStudyEnabled(Boolean(classDoc?.isGuidedStudyEnabled));
+        setClassShift(classDoc?.shift);
+
+        const resolvedMasterId = masterClassId || classDoc?.masterClassId;
+        try {
+          let metas = await guidedStudyService.getMetasByClass(classId);
+          if (metas.length === 0 && resolvedMasterId) {
+            metas = await guidedStudyService.getMetasByClass(resolvedMasterId);
+          }
+          if (!cancelled) setGuidedMetas(metas);
+        } catch (metaErr) {
+          console.error('Erro ao carregar metas do estudo guiado no planejamento do aluno:', metaErr);
+        }
+
+        if (currentUser?.uid) {
+          const progressData = await guidedStudyService
+            .getStudentProgress(currentUser.uid, classId)
+            .catch(() => ({} as Record<string, GuidedStudyProgress>));
+          if (!cancelled) setStudentProgress(progressData);
         }
       } catch (error) {
         console.error("Error loading planning data:", error);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadData();
-  }, [classId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [classId, masterClassId, currentUser?.uid]);
+
+  useEffect(() => {
+    const handleGlobalProgressUpdate = () => {
+      refreshStudentProgress();
+    };
+    window.addEventListener('insanus:presential-progress-updated', handleGlobalProgressUpdate);
+    return () => {
+      window.removeEventListener('insanus:presential-progress-updated', handleGlobalProgressUpdate);
+    };
+  }, [refreshStudentProgress]);
 
   const handleOpenPdf = async (url: string, title: string) => {
     try {
@@ -196,10 +302,10 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
     [subjects, topics]
   );
 
-  const onlineModuleIds = React.useMemo(() => {
+  const nonPresencialModuleIds = React.useMemo(() => {
     return new Set(
       topics.flatMap(t => t.modules || [])
-        .filter(m => m.isOnline)
+        .filter(m => m.isOnline || m.isGuidedStudy)
         .map(m => m.id)
     );
   }, [topics]);
@@ -212,7 +318,7 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
       e =>
         e.subjectId === subjectId &&
         e.status === 'COMPLETED' &&
-        !onlineModuleIds.has(e.moduleId)
+        !nonPresencialModuleIds.has(e.moduleId)
     );
 
     const rawCompletedSlots = completedEvents.reduce((sum, e) => {
@@ -253,7 +359,7 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
       const subjectCompletedEvents = events.filter(e => 
         e.subjectId === subject.id && 
         e.status === 'COMPLETED' && 
-        !onlineModuleIds.has(e.moduleId)
+        !nonPresencialModuleIds.has(e.moduleId)
       );
 
       const rawSubjectCompleted = subjectCompletedEvents.reduce((sum, e) => {
@@ -268,32 +374,26 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
       totalCompleted += subjectCompleted;
     });
 
-    // Calculate completed meetings
-    const meetingsMap = new Map<number, ClassScheduleEvent[]>();
-    events.forEach(e => {
-      if (e.eventType === 'SIMULADO') return;
-      if (e.meetingNumber) {
-        if (!meetingsMap.has(e.meetingNumber)) {
-          meetingsMap.set(e.meetingNumber, []);
-        }
-        meetingsMap.get(e.meetingNumber)?.push(e);
+    const encounterMap = computeClassEncounterMap(
+      events,
+      isGuidedStudyEnabled ? guidedMetas : [],
+      {
+        defaultShift: classShift,
+        totalMeetings,
+        todayIso,
+        includeGuidedStudy: isGuidedStudyEnabled
       }
-    });
-
-    let completedMeetingsCount = 0;
-    meetingsMap.forEach((meetingEvents) => {
-      if (meetingEvents.length > 0 && meetingEvents.every(e => e.status === 'COMPLETED')) {
-        completedMeetingsCount++;
-      }
-    });
+    );
 
     return {
       totalRequired,
       totalCompleted,
-      completedMeetingsCount,
+      completedMeetingsCount: encounterMap.completedEncounters,
+      completedClassEncounters: encounterMap.completedClassEncounters,
+      completedGuidedEncounters: encounterMap.completedGuidedEncounters,
       percentage: totalRequired > 0 ? Math.round((totalCompleted / totalRequired) * 100) : 0
     };
-  }, [subjects, topics, events, onlineModuleIds]);
+  }, [subjects, topics, events, nonPresencialModuleIds, isGuidedStudyEnabled, guidedMetas, classShift, totalMeetings, todayIso]);
 
   if (loading) {
     return (
@@ -326,14 +426,22 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
         <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
           <div>
             <h3 className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Contador de Encontros</h3>
-            <p className="text-3xl font-black text-white">
+            <p className="text-3xl font-black text-white tabular-nums">
               {globalStats.completedMeetingsCount} <span className="text-zinc-500 text-xl">/ {totalMeetings}</span>
             </p>
+            {globalStats.completedGuidedEncounters > 0 && (
+              <p className="text-[11px] text-zinc-400 mt-1 tabular-nums">
+                {globalStats.completedClassEncounters} presenciais ·{' '}
+                <span className="text-amber-400 font-semibold">
+                  {globalStats.completedGuidedEncounters} estudo guiado
+                </span>
+              </p>
+            )}
           </div>
           <div className="w-12 h-12 rounded-full border-2 border-zinc-800 flex items-center justify-center">
             <CheckCircle2 className={twMerge(
               "w-6 h-6",
-              globalStats.completedMeetingsCount === totalMeetings && totalMeetings > 0 ? "text-emerald-500" : "text-zinc-600"
+              globalStats.completedMeetingsCount >= totalMeetings && totalMeetings > 0 ? "text-emerald-500" : "text-zinc-600"
             )} />
           </div>
         </div>
@@ -420,9 +528,18 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
                                   new Date(`${b.date}T${b.startTime}`).getTime()
                               );
 
+                            const isGuidedMod = !module.isOnline && Boolean(module.isGuidedStudy);
                             const isGroupedModule =
                               !module.isOnline &&
+                              !isGuidedMod &&
                               (Boolean(module.groupedWithPrevious) || Number(module.classesCount) === 0);
+
+                            const linkedGuidedMetas = getGuidedMetasForModule(guidedMetas, module.id);
+                            const guidedStudentState = getGuidedModuleStudentStatus(
+                              linkedGuidedMetas,
+                              studentProgress,
+                              todayIso
+                            );
 
                             const completedModuleEvents = moduleEvents.filter(e => e.status === 'COMPLETED');
                             const completedModuleParts = completedModuleEvents.reduce((sum, e) => {
@@ -453,6 +570,12 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
                                           Online
                                         </span>
                                       )}
+                                      {isGuidedMod && (
+                                        <span className="inline-flex items-center gap-1 text-[10px] bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded border border-amber-500/25 font-bold uppercase shrink-0 whitespace-nowrap">
+                                          <Target className="w-2.5 h-2.5 shrink-0" />
+                                          Estudo Guiado
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
                                   <div className="flex items-center justify-between md:justify-end gap-3 text-xs text-zinc-500 w-full md:w-auto pl-7 md:pl-0 tabular-nums">
@@ -460,11 +583,52 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
                                       <FileText className="w-3 h-3" />
                                       {moduleContents.length}
                                     </span>
+                                    {!module.isOnline && !isGuidedMod && linkedGuidedMetas.length > 0 && (
+                                      <span
+                                        className={twMerge(
+                                          "inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-bold whitespace-nowrap shrink-0",
+                                          guidedStudentState.status === 'COMPLETED'
+                                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/25"
+                                            : "bg-amber-500/10 text-amber-400 border-amber-500/25"
+                                        )}
+                                      >
+                                        <Target className="w-2.5 h-2.5 shrink-0" />
+                                        {guidedStudentState.completedCount}/{guidedStudentState.totalCount} guiadas
+                                      </span>
+                                    )}
                                     {module.isOnline ? (
                                       <div className={`flex items-center gap-1.5 text-xs shrink-0 ${module.onlineStatus === 'PUBLICADO' ? 'text-green-500' : 'text-amber-500'}`}>
                                         {module.onlineStatus === 'PUBLICADO' ? <CheckCircle2 size={14} /> : <Video size={14} />}
                                         <span className="font-medium whitespace-nowrap">{module.onlineStatus === 'PUBLICADO' ? 'Publicado' : 'Em Gravação'}</span>
                                       </div>
+                                    ) : isGuidedMod ? (
+                                      <span
+                                        className={twMerge(
+                                          "flex items-center gap-1.5 shrink-0 whitespace-nowrap font-semibold",
+                                          guidedStudentState.status === 'COMPLETED'
+                                            ? "text-emerald-400"
+                                            : guidedStudentState.status === 'IN_PROGRESS' || guidedStudentState.status === 'AVAILABLE'
+                                              ? "text-amber-400"
+                                              : guidedStudentState.status === 'SCHEDULED'
+                                                ? "text-amber-400/80"
+                                                : "text-zinc-500"
+                                        )}
+                                      >
+                                        {guidedStudentState.status === 'COMPLETED' ? (
+                                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                        ) : (
+                                          <Clock className="w-3.5 h-3.5 shrink-0" />
+                                        )}
+                                        {guidedStudentState.status === 'COMPLETED'
+                                          ? `Concluído · ${guidedStudentState.completedCount}/${guidedStudentState.totalCount}`
+                                          : guidedStudentState.status === 'IN_PROGRESS'
+                                            ? `Em andamento · ${guidedStudentState.completedCount}/${guidedStudentState.totalCount}`
+                                            : guidedStudentState.status === 'AVAILABLE'
+                                              ? `Disponível · 0/${guidedStudentState.totalCount}`
+                                              : guidedStudentState.status === 'SCHEDULED'
+                                                ? `Agendado · ${guidedStudentState.totalCount} ${guidedStudentState.totalCount === 1 ? 'meta' : 'metas'}`
+                                                : 'Aguardando metas'}
+                                      </span>
                                     ) : isGroupedModule ? (
                                       <span
                                         className={twMerge(
@@ -627,11 +791,133 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
                                       );
                                     })()}
 
+                                    {/* Guided Study Metas Section (Estudo Guiado modules OR Presencial modules with linked metas) */}
+                                    {(isGuidedMod || linkedGuidedMetas.length > 0) && (
+                                      <div className="space-y-3">
+                                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                                          <h4 className="text-xs font-semibold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                                            <Target className="w-3.5 h-3.5 shrink-0" />
+                                            Metas do Estudo Guiado ({guidedStudentState.completedCount}/{guidedStudentState.totalCount})
+                                          </h4>
+                                          {guidedStudentState.totalCount > 0 && (
+                                            <span
+                                              className={twMerge(
+                                                "text-[11px] font-bold px-2 py-0.5 rounded-full border",
+                                                guidedStudentState.status === 'COMPLETED'
+                                                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/25"
+                                                  : "bg-amber-500/10 text-amber-400 border-amber-500/25"
+                                              )}
+                                            >
+                                              {guidedStudentState.status === 'COMPLETED'
+                                                ? 'Todas concluídas'
+                                                : 'Clique em uma meta para estudar'}
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        {linkedGuidedMetas.length === 0 ? (
+                                          <div className="text-center py-6 border border-dashed border-amber-500/25 rounded-lg bg-amber-500/5 px-4">
+                                            <p className="text-xs text-zinc-400">
+                                              As metas de Estudo Guiado deste módulo serão liberadas no seu cronograma em breve.
+                                            </p>
+                                          </div>
+                                        ) : (
+                                          <div className="grid gap-2">
+                                            {linkedGuidedMetas.map(meta => {
+                                              const isMetaDone = Boolean(meta.id && studentProgress[meta.id]?.completed);
+                                              const isMetaAvailable = Boolean(meta.date) && meta.date <= todayIso;
+                                              const { label: typeLabel, Icon: TypeIcon } = getStudentGuidedMetaTypeDisplay(meta.type);
+                                              const accentColor = meta.color || '#f59e0b';
+                                              return (
+                                                <button
+                                                  key={meta.id || `${meta.date}_${meta.title}`}
+                                                  type="button"
+                                                  onClick={() => setSelectedMetaForModal(meta)}
+                                                  className={twMerge(
+                                                    "w-full text-left flex items-center justify-between gap-3 p-3 rounded-md border transition-all group",
+                                                    isMetaDone
+                                                      ? "bg-emerald-950/15 border-emerald-500/35 hover:border-emerald-400/60"
+                                                      : "bg-zinc-900 border-zinc-800 hover:border-amber-500/40 hover:bg-zinc-900/80"
+                                                  )}
+                                                >
+                                                  <div className="flex items-center gap-3 min-w-0">
+                                                    <div
+                                                      className="w-9 h-9 rounded-lg flex items-center justify-center border shrink-0"
+                                                      style={
+                                                        isMetaDone
+                                                          ? {
+                                                              backgroundColor: 'rgba(16, 185, 129, 0.14)',
+                                                              borderColor: 'rgba(16, 185, 129, 0.35)',
+                                                              color: '#34d399'
+                                                            }
+                                                          : {
+                                                              backgroundColor: `${accentColor}18`,
+                                                              borderColor: `${accentColor}40`,
+                                                              color: accentColor
+                                                            }
+                                                      }
+                                                    >
+                                                      {isMetaDone ? (
+                                                        <CheckCircle2 className="w-4 h-4" />
+                                                      ) : (
+                                                        <TypeIcon className="w-4 h-4" />
+                                                      )}
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                      <div className="flex items-center gap-2 flex-wrap">
+                                                        <span
+                                                          className="text-[10px] font-bold uppercase tracking-wider"
+                                                          style={{ color: isMetaDone ? '#34d399' : accentColor }}
+                                                        >
+                                                          {typeLabel}
+                                                        </span>
+                                                        <span className="text-sm font-medium text-zinc-200 group-hover:text-white truncate">
+                                                          {meta.title}
+                                                        </span>
+                                                      </div>
+                                                      <div className="flex items-center gap-2 text-xs text-zinc-500 tabular-nums flex-wrap mt-0.5">
+                                                        <span>
+                                                          {format(new Date(`${meta.date}T00:00:00`), "dd 'de' MMMM", { locale: ptBR })}
+                                                        </span>
+                                                        <span>·</span>
+                                                        <span>{meta.duration || 30} min</span>
+                                                      </div>
+                                                    </div>
+                                                  </div>
+
+                                                  <div className="flex items-center gap-2 shrink-0">
+                                                    <span
+                                                      className={twMerge(
+                                                        "text-xs px-2 py-0.5 rounded-full border whitespace-nowrap font-medium",
+                                                        isMetaDone
+                                                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/25"
+                                                          : isMetaAvailable
+                                                            ? "bg-amber-500/10 text-amber-300 border-amber-500/30"
+                                                            : "bg-zinc-800 text-zinc-400 border-zinc-700"
+                                                      )}
+                                                    >
+                                                      {isMetaDone
+                                                        ? 'Concluída'
+                                                        : isMetaAvailable
+                                                          ? 'Estudar'
+                                                          : 'Agendada'}
+                                                    </span>
+                                                    <PlayCircle className="w-4 h-4 text-zinc-500 group-hover:text-amber-400 transition-colors shrink-0" />
+                                                  </div>
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+
                                     {/* Classes Section */}
-                                    <div className="space-y-3">
-                                      <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
-                                        Cronograma de Aulas ({moduleEvents.length})
-                                      </h4>
+                                    {!module.isOnline && !isGuidedMod && (
+                                      <div className="space-y-3">
+                                        <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+                                          Cronograma de Aulas ({moduleEvents.length})
+                                        </h4>
                                       
                                       {moduleEvents.length === 0 ? (
                                         <div className="text-center py-8 border border-dashed border-zinc-800 rounded-lg">
@@ -718,6 +1004,7 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
                                         </div>
                                       )}
                                     </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -855,6 +1142,20 @@ export function StudentPedagogicalPlanning({ classId, masterClassId: _masterClas
           </div>
         );
       })()}
+      {selectedMetaForModal && (
+        <StudentGuidedStudyModal
+          isOpen={Boolean(selectedMetaForModal)}
+          meta={selectedMetaForModal}
+          classId={classId}
+          userId={currentUser?.uid || ''}
+          progress={selectedMetaForModal.id ? studentProgress[selectedMetaForModal.id] : undefined}
+          onClose={() => setSelectedMetaForModal(null)}
+          onProgressUpdated={async () => {
+            await refreshStudentProgress();
+            window.dispatchEvent(new CustomEvent('insanus:presential-progress-updated'));
+          }}
+        />
+      )}
     </div>
   );
 }

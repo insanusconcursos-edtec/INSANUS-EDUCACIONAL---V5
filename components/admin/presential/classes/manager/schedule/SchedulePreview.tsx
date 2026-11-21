@@ -19,7 +19,8 @@ import { classService } from '../../../../../../services/classService';
 import {
   GuidedStudyMeta,
   getGuidedMetaVideos,
-  compareGuidedMetasWithinDay
+  compareGuidedMetasWithinDay,
+  computeClassEncounterMap
 } from '../../../../../../types/guidedStudy';
 import { guidedStudyService } from '../../../../../../services/guidedStudyService';
 import { LiveEvent } from '../../../../../../types/liveEvent';
@@ -691,6 +692,23 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
     return getWeekendsOfMonth(currentDate.getFullYear(), currentDate.getMonth());
   }, [currentDate]);
 
+  const todayIsoForEncounters = useMemo(() => toLocalISODate(), []);
+
+  const encounterMap = useMemo(
+    () =>
+      computeClassEncounterMap(
+        events,
+        classData?.isGuidedStudyEnabled ? guidedMetas : [],
+        {
+          defaultShift: classData?.shift,
+          totalMeetings: classData?.totalMeetings,
+          todayIso: todayIsoForEncounters,
+          includeGuidedStudy: Boolean(classData?.isGuidedStudyEnabled)
+        }
+      ),
+    [events, guidedMetas, classData?.isGuidedStudyEnabled, classData?.shift, classData?.totalMeetings, todayIsoForEncounters]
+  );
+
   const renderDayContent = (dateString: string) => {
     const dayEvents = events.filter(e => e.date === dateString);
     const dayGaps = gaps.filter(g => g.date === dateString);
@@ -732,8 +750,14 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
         {!holidayGap && Object.entries(eventsByShift).map(([shiftName, shiftItems], shiftIndex) => {
           const shiftEvents = shiftItems.filter(i => i.type === 'event').map(i => i.data as ClassScheduleEvent);
           const firstClassEvent = shiftEvents.find(e => e.eventType !== 'SIMULADO');
-          const meetingNumber = firstClassEvent?.meetingNumber;
-          const isOverflow = firstClassEvent?.isOverflow;
+          const shiftEnum =
+            firstClassEvent?.shift ||
+            (shiftName === 'Manhã' ? 'MORNING' : shiftName === 'Tarde' ? 'AFTERNOON' : 'NIGHT');
+          const shiftEncounter = firstClassEvent
+            ? encounterMap.byShiftKey.get(`${dateString}::${shiftEnum}`)
+            : undefined;
+          const meetingNumber = shiftEncounter?.encounterNumber ?? firstClassEvent?.meetingNumber;
+          const isOverflow = shiftEncounter ? shiftEncounter.isOverflow : firstClassEvent?.isOverflow;
           const isShiftCompleted = shiftEvents.length > 0 && shiftEvents.every(e => e.status === 'COMPLETED');
           const regularShiftItems = shiftItems.filter(
             (si) => !(si.type === 'event' && (si.data as ClassScheduleEvent).eventType === 'SIMULADO')
@@ -1335,17 +1359,37 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
             }
           };
 
+          const guidedEncounter = encounterMap.byGuidedDate.get(dateString);
+
           return (
             <div className="mt-3 pt-2.5 border-t border-amber-500/20 space-y-2">
-              <div className="flex items-center justify-between gap-1.5">
+              <div className="flex items-center justify-between gap-1.5 flex-wrap">
                 <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1 whitespace-nowrap">
                   <Target className="w-3 h-3 shrink-0" /> Estudo Guiado
                 </span>
-                {dayGuidedMetas.length > 0 && (
-                  <span className="text-[10px] font-semibold text-amber-400/80 tabular-nums whitespace-nowrap">
-                    {dayGuidedMetas.length} {dayGuidedMetas.length === 1 ? 'meta' : 'metas'}
-                  </span>
-                )}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {guidedEncounter && (
+                    <span
+                      title="Dia de Estudo Guiado contabilizado como 1 encontro no cronograma"
+                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wide whitespace-nowrap ${
+                        guidedEncounter.isCompleted
+                          ? 'bg-emerald-600 text-white border-emerald-500'
+                          : guidedEncounter.isOverflow
+                            ? 'bg-red-600 text-white border-red-500'
+                            : 'bg-amber-500/15 text-amber-300 border-amber-500/35'
+                      }`}
+                    >
+                      {guidedEncounter.isOverflow
+                        ? `Encontro #${guidedEncounter.encounterNumber} (EXTRA)`
+                        : `Encontro #${guidedEncounter.encounterNumber}`}
+                    </span>
+                  )}
+                  {dayGuidedMetas.length > 0 && (
+                    <span className="text-[10px] font-semibold text-amber-400/80 tabular-nums whitespace-nowrap">
+                      {dayGuidedMetas.length} {dayGuidedMetas.length === 1 ? 'meta' : 'metas'}
+                    </span>
+                  )}
+                </div>
               </div>
 
               {dayGuidedMetas.map((meta, metaIndex) => {
@@ -1470,6 +1514,26 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
                             <p className="text-[11px] text-zinc-300 leading-relaxed whitespace-pre-line bg-zinc-950/70 border border-zinc-800/80 rounded-lg p-2">
                               {meta.description}
                             </p>
+                          </div>
+                        )}
+
+                        {Array.isArray(meta.linkedModules) && meta.linkedModules.length > 0 && (
+                          <div>
+                            <span className="text-[9px] font-bold text-amber-400/90 uppercase block mb-1 flex items-center gap-1">
+                              <Layers className="w-2.5 h-2.5" />
+                              Módulos Vinculados ({meta.linkedModules.length})
+                            </span>
+                            <div className="flex flex-wrap gap-1">
+                              {meta.linkedModules.map(link => (
+                                <span
+                                  key={link.moduleId}
+                                  title={`${link.subjectName || ''} · ${link.topicName || ''} · ${link.moduleName || ''}`}
+                                  className="text-[10px] font-medium px-2 py-0.5 rounded bg-amber-500/10 text-amber-200 border border-amber-500/25 truncate max-w-full"
+                                >
+                                  {link.moduleName || 'Módulo'}
+                                </span>
+                              ))}
+                            </div>
                           </div>
                         )}
 
@@ -2975,6 +3039,7 @@ export const SchedulePreview: React.FC<SchedulePreviewProps> = ({ classData, eve
           selectedDate={selectedDateForGuided}
           metaToEdit={editingGuidedMeta}
           subjects={subjects}
+          topics={topics}
           defaultOrder={(() => {
             const sameDay = guidedMetas.filter(m => m.date === selectedDateForGuided);
             if (sameDay.length === 0) return 0;

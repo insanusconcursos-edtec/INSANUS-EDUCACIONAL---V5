@@ -10,7 +10,7 @@ export const sanitizeSchedule = (
   const activeTopicIds = new Set(activeTopics.map(t => t.id));
   const activeModuleIds = new Set(
     activeModules
-      .filter(m => !m.isOnline)
+      .filter(m => !m.isOnline && !m.isGuidedStudy)
       .map(m => m.id)
   );
 

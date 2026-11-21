@@ -1,9 +1,39 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, FileText, CheckCircle, Clock, AlertCircle, Globe, Video, CheckCircle2, Layers, Link2, Radio, Pin } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  CheckCircle,
+  Clock,
+  AlertCircle,
+  Globe,
+  Video,
+  CheckCircle2,
+  Layers,
+  Link2,
+  Radio,
+  Pin,
+  Target,
+  FileJson,
+  HelpCircle,
+  Scale,
+  Zap,
+  BookOpen,
+  Eye
+} from 'lucide-react';
 import { Subject, SubjectGroup, Topic, Module } from '../../../../../../types/curriculum';
 import { ClassScheduleEvent } from '../../../../../../types/schedule';
 import { Teacher } from '../../../../../../types/teacher';
+import {
+  GuidedStudyMeta,
+  computeClassEncounterMap,
+  getGuidedMetasForModule,
+  getGuidedModuleAdminStatus
+} from '../../../../../../types/guidedStudy';
+import { guidedStudyService } from '../../../../../../services/guidedStudyService';
+import { StudentGuidedStudyModal } from '../../../../../student/presential/StudentGuidedStudyModal';
+import { toLocalISODate } from '../../../../../../utils/dateUtils';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { clsx } from 'clsx';
@@ -13,6 +43,9 @@ import { openWatermarkedPdf } from '../../../../../../utils/pdfSecurityService';
 import { getSubjectEffectiveSlotCount } from '../../../../../../utils/scheduler/ContentResolver';
 
 interface PedagogicalPlanningProps {
+  classId?: string;
+  isGuidedStudyEnabled?: boolean;
+  defaultShift?: string;
   subjects: Subject[];
   topics: Topic[];
   modules: Module[];
@@ -22,13 +55,67 @@ interface PedagogicalPlanningProps {
   subjectGroups?: SubjectGroup[];
 }
 
-export function PedagogicalPlanning({ subjects, topics, modules, events, teachers, totalMeetings = 0, subjectGroups = [] }: PedagogicalPlanningProps) {
+const getGuidedMetaTypeDisplay = (type: GuidedStudyMeta['type']) => {
+  switch (type) {
+    case 'interactive_map':
+      return { label: 'Mapa .JSON', Icon: FileJson };
+    case 'aula':
+      return { label: 'Videoaula', Icon: Video };
+    case 'material':
+      return { label: 'Material PDF', Icon: FileText };
+    case 'questoes':
+      return { label: 'Questões', Icon: HelpCircle };
+    case 'lei_seca':
+      return { label: 'Lei Seca', Icon: Scale };
+    case 'flashcards':
+      return { label: 'Flashcards', Icon: Zap };
+    case 'resumo':
+      return { label: 'Resumo', Icon: BookOpen };
+    default:
+      return { label: 'Meta', Icon: Target };
+  }
+};
+
+export function PedagogicalPlanning({
+  classId,
+  isGuidedStudyEnabled = false,
+  defaultShift,
+  subjects,
+  topics,
+  modules,
+  events,
+  teachers,
+  totalMeetings = 0,
+  subjectGroups = []
+}: PedagogicalPlanningProps) {
   const { currentUser, userData } = useAuth();
   const [searchParams] = useSearchParams();
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(new Set());
   const [expandedTopics, setExpandedTopics] = useState<Set<string>>(new Set());
   const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
+  const [guidedMetas, setGuidedMetas] = useState<GuidedStudyMeta[]>([]);
+  const [previewGuidedMeta, setPreviewGuidedMeta] = useState<GuidedStudyMeta | null>(null);
+  const todayIso = useMemo(() => toLocalISODate(), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!classId) {
+      setGuidedMetas([]);
+      return;
+    }
+    guidedStudyService
+      .getMetasByClass(classId)
+      .then(list => {
+        if (!cancelled) setGuidedMetas(list);
+      })
+      .catch(err => {
+        console.error('Erro ao carregar metas do estudo guiado no planejamento:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [classId]);
 
   const sortedGroups = useMemo(
     () => [...(subjectGroups || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
@@ -80,7 +167,10 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
     }
   }, [searchParams, subjects, topics, validGroupIds]);
 
-  const onlineModuleIds = new Set(modules.filter(m => m.isOnline).map(m => m.id));
+  const nonPresencialModuleIds = useMemo(
+    () => new Set(modules.filter(m => m.isOnline || m.isGuidedStudy).map(m => m.id)),
+    [modules]
+  );
 
   const handleOpenPdf = async (url: string, _title: string) => {
     try {
@@ -151,7 +241,7 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
       e =>
         e.subjectId === subjectId &&
         e.status === 'COMPLETED' &&
-        !onlineModuleIds.has(e.moduleId)
+        !nonPresencialModuleIds.has(e.moduleId)
     );
 
     const rawCompletedSlots = completedEvents.reduce((sum, e) => {
@@ -192,7 +282,7 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
       const subjectCompletedEvents = events.filter(e => 
         e.subjectId === subject.id && 
         e.status === 'COMPLETED' && 
-        !onlineModuleIds.has(e.moduleId)
+        !nonPresencialModuleIds.has(e.moduleId)
       );
 
       const rawSubjectCompleted = subjectCompletedEvents.reduce((sum, e) => {
@@ -207,32 +297,26 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
       totalCompleted += subjectCompleted;
     });
 
-    // Calculate completed meetings
-    const meetingsMap = new Map<number, ClassScheduleEvent[]>();
-    events.forEach(e => {
-      if (e.eventType === 'SIMULADO') return;
-      if (e.meetingNumber) {
-        if (!meetingsMap.has(e.meetingNumber)) {
-          meetingsMap.set(e.meetingNumber, []);
-        }
-        meetingsMap.get(e.meetingNumber)?.push(e);
+    const encounterMap = computeClassEncounterMap(
+      events,
+      isGuidedStudyEnabled ? guidedMetas : [],
+      {
+        defaultShift,
+        totalMeetings,
+        todayIso,
+        includeGuidedStudy: Boolean(isGuidedStudyEnabled)
       }
-    });
-
-    let completedMeetingsCount = 0;
-    meetingsMap.forEach((meetingEvents) => {
-      if (meetingEvents.length > 0 && meetingEvents.every(e => e.status === 'COMPLETED')) {
-        completedMeetingsCount++;
-      }
-    });
+    );
 
     return {
       totalRequired,
       totalCompleted,
-      completedMeetingsCount,
+      completedMeetingsCount: encounterMap.completedEncounters,
+      completedClassEncounters: encounterMap.completedClassEncounters,
+      completedGuidedEncounters: encounterMap.completedGuidedEncounters,
       percentage: totalRequired > 0 ? Math.round((totalCompleted / totalRequired) * 100) : 0
     };
-  }, [subjects, topics, events, onlineModuleIds]);
+  }, [subjects, topics, events, nonPresencialModuleIds, isGuidedStudyEnabled, guidedMetas, defaultShift, totalMeetings, todayIso]);
 
   return (
     <div className="space-y-6">
@@ -257,14 +341,22 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
         <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center justify-between">
           <div>
             <h3 className="text-zinc-400 text-xs font-bold uppercase tracking-wider">Contador de Encontros</h3>
-            <p className="text-3xl font-black text-white">
+            <p className="text-3xl font-black text-white tabular-nums">
               {globalStats.completedMeetingsCount} <span className="text-zinc-500 text-xl">/ {totalMeetings}</span>
             </p>
+            {globalStats.completedGuidedEncounters > 0 && (
+              <p className="text-[11px] text-zinc-400 mt-1 tabular-nums">
+                {globalStats.completedClassEncounters} presenciais ·{' '}
+                <span className="text-amber-400 font-semibold">
+                  {globalStats.completedGuidedEncounters} estudo guiado
+                </span>
+              </p>
+            )}
           </div>
           <div className="w-12 h-12 rounded-full border-2 border-zinc-800 flex items-center justify-center">
             <CheckCircle2 className={clsx(
               "w-6 h-6",
-              globalStats.completedMeetingsCount === totalMeetings && totalMeetings > 0 ? "text-emerald-500" : "text-zinc-600"
+              globalStats.completedMeetingsCount >= totalMeetings && totalMeetings > 0 ? "text-emerald-500" : "text-zinc-600"
             )} />
           </div>
         </div>
@@ -346,9 +438,14 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
                                   new Date(`${b.date}T${b.startTime}`).getTime()
                               );
 
+                            const isGuidedMod = !module.isOnline && Boolean(module.isGuidedStudy);
                             const isGroupedModule =
                               !module.isOnline &&
+                              !isGuidedMod &&
                               (Boolean(module.groupedWithPrevious) || Number(module.classesCount) === 0);
+
+                            const linkedGuidedMetas = getGuidedMetasForModule(guidedMetas, module.id);
+                            const guidedAdminStatus = getGuidedModuleAdminStatus(linkedGuidedMetas, todayIso);
 
                             const completedModuleEvents = moduleEvents.filter(e => e.status === 'COMPLETED');
                             const completedModuleParts = completedModuleEvents.reduce((sum, e) => {
@@ -368,15 +465,21 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
                                 {/* Module Header */}
                                   <button
                                     onClick={() => toggleModule(module.id)}
-                                    className="w-full flex items-center justify-between p-3 hover:bg-zinc-800/50 transition-colors"
+                                    className="w-full flex items-center justify-between p-3 hover:bg-zinc-800/50 transition-colors gap-3"
                                   >
-                                    <div className="flex items-center gap-3">
-                                      {isModuleExpanded ? <ChevronDown className="w-4 h-4 text-zinc-500" /> : <ChevronRight className="w-4 h-4 text-zinc-500" />}
-                                      <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-3 min-w-0">
+                                      {isModuleExpanded ? <ChevronDown className="w-4 h-4 text-zinc-500 shrink-0" /> : <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" />}
+                                      <div className="flex items-center gap-2 flex-wrap min-w-0">
                                         <span className="text-sm text-zinc-300 text-left">{module.name}</span>
                                         {module.isOnline && (
-                                          <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 text-[10px] font-bold uppercase">
+                                          <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 text-[10px] font-bold uppercase whitespace-nowrap">
                                             Online
+                                          </span>
+                                        )}
+                                        {isGuidedMod && (
+                                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/25 text-[10px] font-bold uppercase whitespace-nowrap">
+                                            <Target className="w-2.5 h-2.5 shrink-0" />
+                                            Estudo Guiado
                                           </span>
                                         )}
                                       </div>
@@ -386,7 +489,35 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
                                         <FileText className="w-3 h-3" />
                                         {moduleContents.length}
                                       </span>
-                                      {!module.isOnline && (
+                                      {!module.isOnline && !isGuidedMod && linkedGuidedMetas.length > 0 && (
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/25 text-[10px] font-bold whitespace-nowrap">
+                                          <Target className="w-2.5 h-2.5 shrink-0" />
+                                          +{linkedGuidedMetas.length} {linkedGuidedMetas.length === 1 ? 'guiada' : 'guiadas'}
+                                        </span>
+                                      )}
+                                      {isGuidedMod ? (
+                                        <span
+                                          className={clsx(
+                                            "flex items-center gap-1 whitespace-nowrap font-semibold",
+                                            guidedAdminStatus === 'DELIVERED'
+                                              ? "text-emerald-400"
+                                              : guidedAdminStatus === 'SCHEDULED'
+                                                ? "text-amber-400"
+                                                : "text-zinc-500"
+                                          )}
+                                        >
+                                          {guidedAdminStatus === 'DELIVERED' ? (
+                                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                          ) : (
+                                            <Clock className="w-3.5 h-3.5 shrink-0" />
+                                          )}
+                                          {guidedAdminStatus === 'DELIVERED'
+                                            ? `Entregue · ${linkedGuidedMetas.length} ${linkedGuidedMetas.length === 1 ? 'meta' : 'metas'}`
+                                            : guidedAdminStatus === 'SCHEDULED'
+                                              ? `Agendado · ${linkedGuidedMetas.length} ${linkedGuidedMetas.length === 1 ? 'meta' : 'metas'}`
+                                              : 'Pendente · Sem metas'}
+                                        </span>
+                                      ) : !module.isOnline ? (
                                         isGroupedModule ? (
                                           <span
                                             className={clsx(
@@ -409,8 +540,7 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
                                             {Math.min(module.classesCount || 1, completedModuleParts)} / {module.classesCount} aulas
                                           </span>
                                         )
-                                      )}
-                                      {module.isOnline && (
+                                      ) : (
                                         <span className="flex items-center gap-1">
                                           {module.onlineStatus === 'EM_GRAVACAO' ? (
                                             <Video className="w-3 h-3 text-amber-500" />
@@ -566,8 +696,118 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
                                       </div>
                                     )}
 
+                                    {/* Guided Study Metas Section (for Estudo Guiado modules OR Presencial modules with linked metas) */}
+                                    {(isGuidedMod || linkedGuidedMetas.length > 0) && (
+                                      <div className="space-y-3">
+                                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                                          <h4 className="text-xs font-semibold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                                            <Target className="w-3.5 h-3.5 shrink-0" />
+                                            Metas do Estudo Guiado ({linkedGuidedMetas.length})
+                                          </h4>
+                                          {isGuidedMod && (
+                                            <span
+                                              className={clsx(
+                                                "text-[11px] font-bold px-2 py-0.5 rounded-full border",
+                                                guidedAdminStatus === 'DELIVERED'
+                                                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/25"
+                                                  : guidedAdminStatus === 'SCHEDULED'
+                                                    ? "bg-amber-500/10 text-amber-400 border-amber-500/25"
+                                                    : "bg-zinc-900 text-zinc-400 border-zinc-800"
+                                              )}
+                                            >
+                                              {guidedAdminStatus === 'DELIVERED'
+                                                ? 'Entregue (todas as metas na data)'
+                                                : guidedAdminStatus === 'SCHEDULED'
+                                                  ? 'Agendado no cronograma'
+                                                  : 'Sem metas vinculadas'}
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        {linkedGuidedMetas.length === 0 ? (
+                                          <div className="text-center py-6 border border-dashed border-amber-500/25 rounded-lg bg-amber-500/5 px-4">
+                                            <p className="text-xs text-zinc-400">
+                                              Nenhuma meta do Estudo Guiado vinculada a este módulo ainda. Crie ou edite uma meta na aba <strong className="text-amber-300">Cronograma</strong> e selecione este módulo.
+                                            </p>
+                                          </div>
+                                        ) : (
+                                          <div className="grid gap-2">
+                                            {linkedGuidedMetas.map(meta => {
+                                              const isMetaDelivered = Boolean(meta.date) && meta.date <= todayIso;
+                                              const { label: typeLabel, Icon: TypeIcon } = getGuidedMetaTypeDisplay(meta.type);
+                                              const accentColor = meta.color || '#f59e0b';
+                                              return (
+                                                <div
+                                                  key={meta.id || `${meta.date}_${meta.title}`}
+                                                  className={twMerge(
+                                                    "flex items-center justify-between gap-3 p-3 rounded-md border transition-all",
+                                                    isMetaDelivered
+                                                      ? "bg-emerald-950/10 border-emerald-900/30"
+                                                      : "bg-zinc-900 border-zinc-800"
+                                                  )}
+                                                >
+                                                  <div className="flex items-center gap-3 min-w-0">
+                                                    <div
+                                                      className="w-9 h-9 rounded-lg flex items-center justify-center border shrink-0"
+                                                      style={{
+                                                        backgroundColor: `${accentColor}18`,
+                                                        borderColor: `${accentColor}40`,
+                                                        color: accentColor
+                                                      }}
+                                                    >
+                                                      <TypeIcon className="w-4 h-4" />
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                      <div className="flex items-center gap-2 flex-wrap">
+                                                        <span
+                                                          className="text-[10px] font-bold uppercase tracking-wider"
+                                                          style={{ color: accentColor }}
+                                                        >
+                                                          {typeLabel}
+                                                        </span>
+                                                        <span className="text-sm font-medium text-zinc-200 truncate">
+                                                          {meta.title}
+                                                        </span>
+                                                      </div>
+                                                      <div className="flex items-center gap-2 text-xs text-zinc-500 tabular-nums flex-wrap mt-0.5">
+                                                        <span>
+                                                          {format(new Date(`${meta.date}T00:00:00`), "dd 'de' MMMM", { locale: ptBR })}
+                                                        </span>
+                                                        <span>·</span>
+                                                        <span>{meta.duration || 30} min</span>
+                                                      </div>
+                                                    </div>
+                                                  </div>
+                                                  <div className="flex items-center gap-2 shrink-0">
+                                                    <span
+                                                      className={twMerge(
+                                                        "text-xs px-2 py-0.5 rounded-full border whitespace-nowrap",
+                                                        isMetaDelivered
+                                                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/25"
+                                                          : "bg-amber-500/10 text-amber-400 border-amber-500/25"
+                                                      )}
+                                                    >
+                                                      {isMetaDelivered ? 'Entregue' : 'Agendado'}
+                                                    </span>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => setPreviewGuidedMeta(meta)}
+                                                      className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors"
+                                                      title="Pré-visualizar meta"
+                                                    >
+                                                      <Eye className="w-3.5 h-3.5" />
+                                                    </button>
+                                                  </div>
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+
                                     {/* Classes Section */}
-                                    {!module.isOnline && (
+                                    {!module.isOnline && !isGuidedMod && (
                                       <div className="space-y-3">
                                         <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
                                           Cronograma de Aulas ({moduleEvents.length})
@@ -802,6 +1042,16 @@ export function PedagogicalPlanning({ subjects, topics, modules, events, teacher
           </div>
         );
       })()}
+      {previewGuidedMeta && (
+        <StudentGuidedStudyModal
+          isOpen={Boolean(previewGuidedMeta)}
+          isAdminPreview
+          meta={previewGuidedMeta}
+          classId={classId || ''}
+          userId={currentUser?.uid || 'admin-preview'}
+          onClose={() => setPreviewGuidedMeta(null)}
+        />
+      )}
     </div>
   );
 }

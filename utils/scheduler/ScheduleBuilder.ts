@@ -52,7 +52,7 @@ export const buildSchedule = (
     
     if (topic.modules && topic.modules.length > 0) {
       topic.modules.forEach(module => {
-        if (module.isSelected !== false && !module.isOnline) {
+        if (module.isSelected !== false && !module.isOnline && !module.isGuidedStudy) {
           const isGrouped = Boolean(module.groupedWithPrevious) || Number(module.classesCount) === 0;
           const prevSubjectSlot = lastSlotBySubject.get(topic.subjectId);
 

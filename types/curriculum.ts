@@ -27,6 +27,7 @@ export interface Module {
   isSelected?: boolean;
   contents?: ModuleContent[];
   isOnline?: boolean;
+  isGuidedStudy?: boolean;
   onlineStatus?: OnlineStatus;
   publicationDate?: string;
   teachingAreaLink?: TeachingAreaLink;

@@ -1,12 +1,20 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Trash2, Edit2, ChevronDown, ChevronUp, ChevronRight, AlertTriangle, BookOpen, User, CheckSquare, Save, Loader2, Link, Link2, Unlink, GitBranch, FolderPlus, Layers } from 'lucide-react';
+import { Plus, Trash2, Edit2, ChevronDown, ChevronUp, ChevronRight, AlertTriangle, BookOpen, User, CheckSquare, Save, Loader2, Link, Link2, Unlink, GitBranch, FolderPlus, Layers, Target } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Class } from '../../../../../types/class';
 import { Subject, SubjectGroup, Topic, Module, ModuleContent, OnlineStatus, TeachingAreaLink } from '../../../../../types/curriculum';
+import { ClassScheduleEvent } from '../../../../../types/schedule';
+import {
+  GuidedStudyMeta,
+  computeClassEncounterMap,
+  getGuidedMetasForModule,
+  getGuidedModuleAdminStatus
+} from '../../../../../types/guidedStudy';
 import { Teacher } from '../../../../../types/teacher';
 import { curriculumService } from '../../../../../services/curriculumService';
 import { classService } from '../../../../../services/classService';
 import { classScheduleService } from '../../../../../services/classScheduleService';
+import { guidedStudyService } from '../../../../../services/guidedStudyService';
 import { teacherService } from '../../../../../services/teacherService';
 import { getSubjectEffectiveSlotCount, resolveManualSchedule } from '../../../../../utils/scheduler/ContentResolver';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -36,6 +44,8 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
 
   const [topics, setTopics] = useState<Topic[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [guidedMetas, setGuidedMetas] = useState<GuidedStudyMeta[]>([]);
+  const [scheduleEvents, setScheduleEvents] = useState<ClassScheduleEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newSubject, setNewSubject] = useState({ name: '', color: '#EF4444', defaultTeacherId: '', groupId: '' });
@@ -58,6 +68,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
     groupedWithPrevious?: boolean;
     contents: ModuleContent[];
     isOnline?: boolean;
+    isGuidedStudy?: boolean;
     onlineStatus?: OnlineStatus;
     publicationDate?: string;
     teachingAreaLink?: TeachingAreaLink;
@@ -67,6 +78,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
     groupedWithPrevious: false,
     contents: [],
     isOnline: false,
+    isGuidedStudy: false,
     onlineStatus: 'EM_GRAVACAO',
     publicationDate: '',
     teachingAreaLink: { moduleId: '', folderId: '' }
@@ -84,14 +96,16 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
   const sanitizeModules = (modules: Module[]): Module[] => {
     return (modules || []).map(m => {
       const isOnlineMod = !!m.isOnline;
-      const isGrouped = !isOnlineMod && (Boolean(m.groupedWithPrevious) || Number(m.classesCount) === 0);
+      const isGuidedMod = !isOnlineMod && Boolean(m.isGuidedStudy);
+      const isGrouped = !isOnlineMod && !isGuidedMod && (Boolean(m.groupedWithPrevious) || Number(m.classesCount) === 0);
       return {
         id: m.id,
         name: m.name || '',
         groupedWithPrevious: isGrouped,
-        classesCount: isGrouped ? 0 : Math.max(1, Number(m.classesCount) || 1),
+        classesCount: (isGrouped || isGuidedMod) ? 0 : Math.max(1, Number(m.classesCount) || 1),
         isSelected: m.isSelected !== false,
         isOnline: isOnlineMod,
+        isGuidedStudy: isGuidedMod,
         onlineStatus: m.onlineStatus || 'EM_GRAVACAO',
         publicationDate: m.publicationDate || '',
         contents: (m.contents || []).map((c: any) => ({
@@ -118,14 +132,18 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
       if (!silent && subjects.length === 0) {
         setLoading(true);
       }
-      const [subjectsData, topicsData, teachersData] = await Promise.all([
+      const [subjectsData, topicsData, teachersData, guidedMetasData, scheduleEventsData] = await Promise.all([
         curriculumService.getSubjectsByClass(cls.id),
         curriculumService.getTopicsByClass(cls.id),
-        teacherService.getTeachers()
+        teacherService.getTeachers(),
+        guidedStudyService.getMetasByClass(cls.id).catch(() => [] as GuidedStudyMeta[]),
+        classScheduleService.getScheduleEventsByClass(cls.id).catch(() => [] as ClassScheduleEvent[])
       ]);
       setSubjects(subjectsData);
       setTopics(topicsData);
       setTeachers(teachersData);
+      setGuidedMetas(guidedMetasData);
+      setScheduleEvents(scheduleEventsData);
     } catch (error) {
       console.error("Error fetching data:", error);
     } finally {
@@ -170,6 +188,11 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
     setGroups([...(cls.subjectGroups || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
   }, [cls.subjectGroups]);
 
+  const todayIso = useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }, []);
+
   // Calculations
   const totalSelectedClasses = useMemo(() => {
     return subjects.reduce(
@@ -178,7 +201,24 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
     );
   }, [subjects, topics]);
 
-  const meetingsConsumed = Math.ceil(totalSelectedClasses / (cls.classesPerMeeting || 1));
+  const encounterSummary = useMemo(
+    () =>
+      computeClassEncounterMap(
+        scheduleEvents,
+        cls.isGuidedStudyEnabled ? guidedMetas : [],
+        {
+          defaultShift: cls.shift,
+          totalMeetings: cls.totalMeetings,
+          todayIso,
+          includeGuidedStudy: Boolean(cls.isGuidedStudyEnabled)
+        }
+      ),
+    [scheduleEvents, guidedMetas, cls.isGuidedStudyEnabled, cls.shift, cls.totalMeetings, todayIso]
+  );
+
+  const presencialMeetingsConsumed = Math.ceil(totalSelectedClasses / (cls.classesPerMeeting || 1));
+  const guidedOnlyEncountersCount = encounterSummary.guidedOnlyEncountersCount;
+  const meetingsConsumed = presencialMeetingsConsumed + guidedOnlyEncountersCount;
   const meetingsBalance = cls.totalMeetings - meetingsConsumed;
   const isOverLimit = meetingsBalance < 0;
 
@@ -203,7 +243,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
       if (t.id === topicId && !moduleId) {
         // Criando novo módulo ao final deste assunto: pega o último módulo presencial válido até aqui
         for (const m of mods) {
-          if (!m.isOnline && t.isSelected !== false && m.isSelected !== false) {
+          if (!m.isOnline && !m.isGuidedStudy && t.isSelected !== false && m.isSelected !== false) {
             lastValid = { topic: t, module: m };
           }
         }
@@ -214,7 +254,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
         if (t.id === topicId && m.id === moduleId) {
           return lastValid;
         }
-        if (!m.isOnline && t.isSelected !== false && m.isSelected !== false) {
+        if (!m.isOnline && !m.isGuidedStudy && t.isSelected !== false && m.isSelected !== false) {
           lastValid = { topic: t, module: m };
         }
       }
@@ -780,11 +820,13 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
         activeTopicId,
         editingModule?.id || null
       );
+      const isOnlineMod = Boolean(newModule.isOnline);
+      const isGuidedMod = !isOnlineMod && Boolean(newModule.isGuidedStudy);
       const effectiveGrouped =
-        !newModule.isOnline && Boolean(newModule.groupedWithPrevious) && Boolean(precedingMod);
-      const effectiveClassesCount = newModule.isOnline
+        !isOnlineMod && !isGuidedMod && Boolean(newModule.groupedWithPrevious) && Boolean(precedingMod);
+      const effectiveClassesCount = isOnlineMod
         ? 1
-        : effectiveGrouped
+        : isGuidedMod || effectiveGrouped
           ? 0
           : Math.max(1, Number(newModule.classesCount) || 1);
 
@@ -800,7 +842,8 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
                 groupedWithPrevious: effectiveGrouped,
                 classesCount: effectiveClassesCount, 
                 contents: newModule.contents,
-                isOnline: newModule.isOnline,
+                isOnline: isOnlineMod,
+                isGuidedStudy: isGuidedMod,
                 onlineStatus: newModule.onlineStatus,
                 publicationDate: newModule.publicationDate,
                 teachingAreaLink: newModule.teachingAreaLink
@@ -814,7 +857,8 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
           groupedWithPrevious: effectiveGrouped,
           classesCount: effectiveClassesCount,
           contents: newModule.contents,
-          isOnline: newModule.isOnline,
+          isOnline: isOnlineMod,
+          isGuidedStudy: isGuidedMod,
           onlineStatus: newModule.onlineStatus,
           publicationDate: newModule.publicationDate,
           teachingAreaLink: newModule.teachingAreaLink
@@ -839,6 +883,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
         groupedWithPrevious: false,
         contents: [],
         isOnline: false,
+        isGuidedStudy: false,
         onlineStatus: 'EM_GRAVACAO',
         publicationDate: '',
         teachingAreaLink: { moduleId: '', folderId: '' }
@@ -1170,7 +1215,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
             .filter((t) => t.subjectId === subject.id)
             .sort((a, b) => (a.order || 0) - (b.order || 0))
             .map((topic) => {
-              const topicPresencialModules = (topic.modules || []).filter((m) => !m.isOnline);
+              const topicPresencialModules = (topic.modules || []).filter((m) => !m.isOnline && !m.isGuidedStudy);
               const topicOwnClasses = topicPresencialModules.reduce((acc, mod) => {
                 const prec = getPrecedingPresencialModule(subject.id, topic.id, mod.id);
                 const isEffGrouped = (Boolean(mod.groupedWithPrevious) || Number(mod.classesCount) === 0) && Boolean(prec);
@@ -1269,14 +1314,18 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
               {/* Modules List */}
               <div className="mt-3 pl-4 border-l-2 border-zinc-800 space-y-2">
                 {topic.modules?.map((module, index) => {
-                  const precedingMod = !module.isOnline
+                  const isGuidedMod = !module.isOnline && Boolean(module.isGuidedStudy);
+                  const precedingMod = !module.isOnline && !isGuidedMod
                     ? getPrecedingPresencialModule(subject.id, topic.id, module.id)
                     : null;
                   const isGroupedWithPrev =
                     !module.isOnline &&
+                    !isGuidedMod &&
                     (Boolean(module.groupedWithPrevious) || Number(module.classesCount) === 0) &&
                     Boolean(precedingMod);
                   const displayClassesCount = Math.max(1, Number(module.classesCount) || 1);
+                  const linkedGuidedMetas = getGuidedMetasForModule(guidedMetas, module.id);
+                  const guidedStatus = getGuidedModuleAdminStatus(linkedGuidedMetas, todayIso);
 
                   return (
                   <div key={module.id} className="flex items-center justify-between gap-2 bg-zinc-950/50 p-2 rounded border border-zinc-800/50 hover:border-zinc-700 transition-colors group">
@@ -1288,13 +1337,19 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
                         className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-brand-red focus:ring-brand-red focus:ring-offset-zinc-900 cursor-pointer shrink-0"
                       />
                       <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                        <div className={`w-1.5 h-1.5 rounded-full transition-colors shrink-0 ${module.isSelected !== false ? (isGroupedWithPrev ? 'bg-amber-400' : 'bg-brand-red') : 'bg-zinc-700'}`} />
+                        <div className={`w-1.5 h-1.5 rounded-full transition-colors shrink-0 ${module.isSelected !== false ? (isGuidedMod || isGroupedWithPrev ? 'bg-amber-400' : 'bg-brand-red') : 'bg-zinc-700'}`} />
                         <span className={`text-xs ${module.isSelected !== false ? 'text-zinc-300' : 'text-zinc-600 line-through'}`}>
                           {module.name}
                         </span>
                         {module.isOnline && (
                           <span className="text-[8px] font-bold uppercase px-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 whitespace-nowrap shrink-0">
                             Online
+                          </span>
+                        )}
+                        {isGuidedMod && (
+                          <span className="inline-flex items-center gap-1 text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/25 whitespace-nowrap shrink-0">
+                            <Target className="w-2.5 h-2.5 shrink-0" />
+                            Estudo Guiado
                           </span>
                         )}
                       </div>
@@ -1304,18 +1359,54 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
                         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${module.onlineStatus === 'PUBLICADO' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
                           {module.onlineStatus === 'PUBLICADO' ? 'Publicado' : 'Em Gravação'}
                         </span>
-                      ) : isGroupedWithPrev ? (
-                        <button
-                          type="button"
-                          onClick={() => handleToggleModuleGroupWithPrevious(topic.id, module.id)}
-                          title={`Ministrado na mesma aula de "${precedingMod?.module.name}". Clique para separar em aula própria.`}
-                          className="flex items-center gap-1 text-[10px] font-bold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/30 transition-colors whitespace-nowrap shrink-0"
+                      ) : isGuidedMod ? (
+                        <span
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap tabular-nums ${
+                            guidedStatus === 'DELIVERED'
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                              : guidedStatus === 'SCHEDULED'
+                                ? 'bg-amber-500/10 text-amber-400 border-amber-500/25'
+                                : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+                          }`}
                         >
-                          <Link2 className="w-3 h-3 text-amber-400 shrink-0" />
-                          <span>Mesma aula ant.</span>
-                        </button>
+                          {guidedStatus === 'DELIVERED'
+                            ? `Entregue · ${linkedGuidedMetas.length} ${linkedGuidedMetas.length === 1 ? 'meta' : 'metas'}`
+                            : guidedStatus === 'SCHEDULED'
+                              ? `Agendado · ${linkedGuidedMetas.length} ${linkedGuidedMetas.length === 1 ? 'meta' : 'metas'}`
+                              : 'Sem metas'}
+                        </span>
+                      ) : isGroupedWithPrev ? (
+                        <div className="flex items-center gap-1.5">
+                          {linkedGuidedMetas.length > 0 && (
+                            <span
+                              title={`${linkedGuidedMetas.length} meta(s) do Estudo Guiado vinculada(s)`}
+                              className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/25 whitespace-nowrap tabular-nums"
+                            >
+                              <Target className="w-2.5 h-2.5 shrink-0" />
+                              +{linkedGuidedMetas.length}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleModuleGroupWithPrevious(topic.id, module.id)}
+                            title={`Ministrado na mesma aula de "${precedingMod?.module.name}". Clique para separar em aula própria.`}
+                            className="flex items-center gap-1 text-[10px] font-bold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/30 transition-colors whitespace-nowrap shrink-0"
+                          >
+                            <Link2 className="w-3 h-3 text-amber-400 shrink-0" />
+                            <span>Mesma aula ant.</span>
+                          </button>
+                        </div>
                       ) : (
                         <div className="flex items-center gap-1.5">
+                          {linkedGuidedMetas.length > 0 && (
+                            <span
+                              title={`${linkedGuidedMetas.length} meta(s) do Estudo Guiado vinculada(s)`}
+                              className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/25 whitespace-nowrap tabular-nums"
+                            >
+                              <Target className="w-2.5 h-2.5 shrink-0" />
+                              +{linkedGuidedMetas.length} {linkedGuidedMetas.length === 1 ? 'guiada' : 'guiadas'}
+                            </span>
+                          )}
                           {precedingMod && (
                             <button
                               type="button"
@@ -1355,9 +1446,10 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
                             setNewModule({
                               name: module.name,
                               classesCount: module.groupedWithPrevious ? 0 : Math.max(1, Number(module.classesCount) || 1),
-                              groupedWithPrevious: Boolean(module.groupedWithPrevious) || (!module.isOnline && Number(module.classesCount) === 0),
+                              groupedWithPrevious: Boolean(module.groupedWithPrevious) || (!module.isOnline && !module.isGuidedStudy && Number(module.classesCount) === 0),
                               contents: module.contents || [],
                               isOnline: module.isOnline || false,
+                              isGuidedStudy: Boolean(module.isGuidedStudy && !module.isOnline),
                               onlineStatus: module.onlineStatus || 'EM_GRAVACAO',
                               publicationDate: module.publicationDate || '',
                               teachingAreaLink: module.teachingAreaLink || { moduleId: '', folderId: '' }
@@ -1392,6 +1484,7 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
                       groupedWithPrevious: false,
                       contents: [],
                       isOnline: false,
+                      isGuidedStudy: false,
                       onlineStatus: 'EM_GRAVACAO',
                       publicationDate: '',
                       teachingAreaLink: { moduleId: '', folderId: '' }
@@ -1695,6 +1788,22 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
                   {meetingsBalance} encontros
                 </span>
               </div>
+
+              {guidedOnlyEncountersCount > 0 && (
+                <div className="mt-3 pt-2.5 border-t border-zinc-800/80 space-y-1 text-[11px] text-zinc-400 tabular-nums">
+                  <div className="flex items-center justify-between">
+                    <span>Aulas presenciais:</span>
+                    <span className="font-semibold text-zinc-200">{presencialMeetingsConsumed}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-1 text-amber-400">
+                      <Target className="w-3 h-3 shrink-0" />
+                      Dias de Estudo Guiado:
+                    </span>
+                    <span className="font-semibold text-amber-300">+{guidedOnlyEncountersCount}</span>
+                  </div>
+                </div>
+              )}
             </div>
 
             <button
@@ -2104,18 +2213,28 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
             </h3>
             
             <div className="space-y-4">
-              <div className="flex gap-4 p-1 bg-zinc-950 rounded-lg border border-zinc-800">
+              <div className="grid grid-cols-3 gap-1.5 p-1 bg-zinc-950 rounded-lg border border-zinc-800">
                 <button
-                  onClick={() => setNewModule({ ...newModule, isOnline: false })}
-                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all ${!newModule.isOnline ? 'bg-brand-red text-white shadow-lg shadow-brand-red/20' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  type="button"
+                  onClick={() => setNewModule({ ...newModule, isOnline: false, isGuidedStudy: false })}
+                  className={`py-2 px-2 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all whitespace-nowrap ${!newModule.isOnline && !newModule.isGuidedStudy ? 'bg-brand-red text-white shadow-lg shadow-brand-red/20' : 'text-zinc-500 hover:text-zinc-300'}`}
                 >
                   Presencial
                 </button>
                 <button
-                  onClick={() => setNewModule({ ...newModule, isOnline: true })}
-                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all ${newModule.isOnline ? 'bg-brand-red text-white shadow-lg shadow-brand-red/20' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  type="button"
+                  onClick={() => setNewModule({ ...newModule, isOnline: true, isGuidedStudy: false, groupedWithPrevious: false })}
+                  className={`py-2 px-2 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all whitespace-nowrap ${newModule.isOnline ? 'bg-brand-red text-white shadow-lg shadow-brand-red/20' : 'text-zinc-500 hover:text-zinc-300'}`}
                 >
                   Online
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewModule({ ...newModule, isOnline: false, isGuidedStudy: true, groupedWithPrevious: false, classesCount: 0 })}
+                  className={`py-2 px-2 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all whitespace-nowrap flex items-center justify-center gap-1 ${!newModule.isOnline && newModule.isGuidedStudy ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20' : 'text-zinc-500 hover:text-amber-300'}`}
+                >
+                  <Target className="w-3 h-3 shrink-0" />
+                  <span>Estudo Guiado</span>
                 </button>
               </div>
 
@@ -2130,7 +2249,17 @@ export const SubjectsTab: React.FC<SubjectsTabProps> = ({ cls, onUpdate }) => {
                 />
               </div>
 
-              {!newModule.isOnline ? (
+              {!newModule.isOnline && newModule.isGuidedStudy ? (
+                <div className="p-3.5 rounded-lg bg-amber-500/10 border border-amber-500/25 space-y-1.5 animate-in fade-in duration-200">
+                  <p className="text-[11px] font-bold text-amber-300 flex items-center gap-1.5 uppercase tracking-wider">
+                    <Target className="w-3.5 h-3.5 shrink-0" />
+                    Trabalhado via Metas do Estudo Guiado
+                  </p>
+                  <p className="text-[11px] text-zinc-300 leading-relaxed">
+                    Este módulo não consome aulas presenciais na grade automática. Vincule uma ou mais metas (Videoaulas, PDFs, Mapas .JSON ou Questões) ao criá-las no <strong className="text-white">Cronograma</strong>; o módulo constará como <strong className="text-emerald-400">Entregue</strong> assim que todas as metas vinculadas atingirem a data programada.
+                  </p>
+                </div>
+              ) : !newModule.isOnline ? (
                 <div className="space-y-3">
                   {(() => {
                     const activeTopicObj = topics.find(t => t.id === activeTopicId);

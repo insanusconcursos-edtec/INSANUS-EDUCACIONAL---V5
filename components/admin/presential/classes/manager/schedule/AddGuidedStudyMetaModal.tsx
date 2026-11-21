@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X,
@@ -24,7 +24,8 @@ import {
   PlayCircle,
   Clock,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  Layers
 } from 'lucide-react';
 import {
   GuidedStudyMeta,
@@ -32,11 +33,12 @@ import {
   GuidedStudyFlashcard,
   GuidedStudyInteractiveMapSummary,
   GuidedStudyVideo,
+  GuidedStudyModuleLink,
   getGuidedMetaVideos,
   resolveGuidedStudyVideoUrl
 } from '../../../../../../types/guidedStudy';
 import { InteractiveMapData } from '../../../../../../types/interactiveMap';
-import { Subject } from '../../../../../../types/curriculum';
+import { Subject, Topic } from '../../../../../../types/curriculum';
 import { pandaService } from '../../../../../../services/pandaService';
 import { guidedStudyService } from '../../../../../../services/guidedStudyService';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -71,8 +73,16 @@ interface AddGuidedStudyMetaModalProps {
   selectedDate: string; // YYYY-MM-DD
   metaToEdit?: GuidedStudyMeta | null;
   subjects?: Subject[];
+  topics?: Topic[];
   defaultOrder?: number;
 }
+
+const normalizeSearchText = (value: string): string =>
+  (value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 
 const countMindmapNodes = (node: unknown): number => {
   if (!node || typeof node !== 'object') return 0;
@@ -102,6 +112,7 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
   selectedDate,
   metaToEdit,
   subjects = [],
+  topics = [],
   defaultOrder
 }) => {
   const [metaType, setMetaType] = useState<GuidedStudyMetaType>('aula');
@@ -110,6 +121,11 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
   const [disciplineName, setDisciplineName] = useState('');
   const [duration, setDuration] = useState<number>(30);
   const [color, setColor] = useState<string>('#3b82f6');
+
+  // Vínculo com módulos do Planejamento (Estudo Guiado e Presencial)
+  const [linkedModules, setLinkedModules] = useState<GuidedStudyModuleLink[]>([]);
+  const [moduleSearch, setModuleSearch] = useState('');
+  const [showAllDisciplineModules, setShowAllDisciplineModules] = useState(false);
 
   // Type specific state
   const [videos, setVideos] = useState<GuidedStudyVideo[]>([createEmptyVideoRow()]);
@@ -224,6 +240,8 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
       setPreviewVideo(null);
       setIsPandaSelectorOpen(false);
       setPandaTargetRowIndex(null);
+      setModuleSearch('');
+      setShowAllDisciplineModules(false);
 
       if (metaToEdit) {
         const editType = metaToEdit.type || 'aula';
@@ -233,6 +251,7 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
         setDisciplineName(metaToEdit.disciplineName || '');
         setDuration(metaToEdit.duration || 30);
         setColor(metaToEdit.color || DEFAULT_META_COLORS[editType]);
+        setLinkedModules(Array.isArray(metaToEdit.linkedModules) ? metaToEdit.linkedModules : []);
         const existingVideos = getGuidedMetaVideos(metaToEdit);
         setVideos(existingVideos.length > 0 ? existingVideos : [createEmptyVideoRow()]);
         setPdfUrl(metaToEdit.pdfUrl || '');
@@ -288,6 +307,7 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
         setDisciplineName(subjects[0]?.name || '');
         setDuration(30);
         setColor(DEFAULT_META_COLORS['aula']);
+        setLinkedModules([]);
         setVideos([createEmptyVideoRow()]);
         setPdfUrl('');
         setPdfName('');
@@ -307,6 +327,120 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
       cancelled = true;
     };
   }, [isOpen, metaToEdit, subjects]);
+
+  const linkableModules = useMemo(() => {
+    const subjectById = new Map(subjects.map(s => [s.id, s]));
+    const items: Array<{
+      subjectId: string;
+      subjectName: string;
+      topicId: string;
+      topicName: string;
+      topicOrder: number;
+      moduleId: string;
+      moduleName: string;
+      isGuidedStudy: boolean;
+      isOnline: boolean;
+    }> = [];
+
+    topics.forEach(topic => {
+      if (topic.isSelected === false) return;
+      const subject = subjectById.get(topic.subjectId);
+      const subjectName = subject?.name || 'Disciplina';
+      (topic.modules || []).forEach(mod => {
+        if (mod.isSelected === false) return;
+        // Permite vincular em módulos de Estudo Guiado e módulos Presenciais
+        if (mod.isOnline) return;
+        items.push({
+          subjectId: topic.subjectId,
+          subjectName,
+          topicId: topic.id,
+          topicName: topic.name || 'Assunto',
+          topicOrder: topic.order || 0,
+          moduleId: mod.id,
+          moduleName: mod.name || 'Módulo',
+          isGuidedStudy: Boolean(mod.isGuidedStudy),
+          isOnline: Boolean(mod.isOnline)
+        });
+      });
+    });
+
+    items.sort((a, b) => {
+      if (a.isGuidedStudy !== b.isGuidedStudy) return a.isGuidedStudy ? -1 : 1;
+      const subjCmp = a.subjectName.localeCompare(b.subjectName);
+      if (subjCmp !== 0) return subjCmp;
+      if (a.topicOrder !== b.topicOrder) return a.topicOrder - b.topicOrder;
+      return a.moduleName.localeCompare(b.moduleName);
+    });
+
+    return items;
+  }, [subjects, topics]);
+
+  const normalizedDisciplineFilter = useMemo(
+    () => normalizeSearchText(disciplineName),
+    [disciplineName]
+  );
+
+  const hasDisciplineMatch = useMemo(() => {
+    if (!normalizedDisciplineFilter) return false;
+    return linkableModules.some(
+      item => normalizeSearchText(item.subjectName) === normalizedDisciplineFilter
+    );
+  }, [linkableModules, normalizedDisciplineFilter]);
+
+  const filteredLinkableModules = useMemo(() => {
+    const query = normalizeSearchText(moduleSearch);
+    return linkableModules.filter(item => {
+      if (!showAllDisciplineModules && hasDisciplineMatch && !query) {
+        if (normalizeSearchText(item.subjectName) !== normalizedDisciplineFilter) {
+          return false;
+        }
+      }
+      if (!query) return true;
+      return (
+        normalizeSearchText(item.moduleName).includes(query) ||
+        normalizeSearchText(item.topicName).includes(query) ||
+        normalizeSearchText(item.subjectName).includes(query)
+      );
+    });
+  }, [
+    linkableModules,
+    moduleSearch,
+    showAllDisciplineModules,
+    hasDisciplineMatch,
+    normalizedDisciplineFilter
+  ]);
+
+  const linkedModuleIdSet = useMemo(
+    () => new Set(linkedModules.map(link => link.moduleId)),
+    [linkedModules]
+  );
+
+  const handleToggleLinkedModule = (item: {
+    subjectId: string;
+    subjectName: string;
+    topicId: string;
+    topicName: string;
+    moduleId: string;
+    moduleName: string;
+  }) => {
+    setLinkedModules(prev => {
+      const exists = prev.some(link => link.moduleId === item.moduleId);
+      if (exists) {
+        return prev.filter(link => link.moduleId !== item.moduleId);
+      }
+      return [
+        ...prev,
+        {
+          subjectId: item.subjectId,
+          topicId: item.topicId,
+          moduleId: item.moduleId,
+          subjectName: item.subjectName,
+          topicName: item.topicName,
+          moduleName: item.moduleName
+        }
+      ];
+    });
+  };
 
   const totalVideosDuration = videos.reduce(
     (acc, v) => acc + Math.max(0, Math.round(Number(v.duration) || 0)),
@@ -765,6 +899,17 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
             ? defaultOrder
             : undefined;
 
+      const sanitizedLinkedModules: GuidedStudyModuleLink[] = linkedModules
+        .filter(link => Boolean(link.moduleId && link.topicId && link.subjectId))
+        .map(link => ({
+          subjectId: String(link.subjectId),
+          topicId: String(link.topicId),
+          moduleId: String(link.moduleId),
+          subjectName: String(link.subjectName || ''),
+          topicName: String(link.topicName || ''),
+          moduleName: String(link.moduleName || '')
+        }));
+
       const payload: GuidedStudyMeta = {
         id: metaToEdit?.id,
         classId,
@@ -776,6 +921,7 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
         duration: finalDuration,
         order: resolvedOrder,
         color,
+        linkedModules: sanitizedLinkedModules,
         videos: sanitizedVideos,
         pandaVideoUrl: sanitizedVideos[0]?.link || '',
         pandaVideoId: sanitizedVideos[0]?.pandaVideoId || '',
@@ -1173,6 +1319,131 @@ export const AddGuidedStudyMetaModal: React.FC<AddGuidedStudyMetaModalProps> = (
               />
             </div>
           </div>
+
+          {/* Vínculo com Módulo(s) do Planejamento Pedagógico */}
+          {linkableModules.length > 0 && (
+            <div className="bg-zinc-950/60 border border-zinc-800 p-4 rounded-xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span className="text-xs font-bold text-amber-400 uppercase tracking-wider">
+                    Vincular a Módulo(s) do Planejamento (Opcional)
+                  </span>
+                  {linkedModules.length > 0 && (
+                    <span className="text-[10px] font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-md tabular-nums">
+                      {linkedModules.length} {linkedModules.length === 1 ? 'vinculado' : 'vinculados'}
+                    </span>
+                  )}
+                </div>
+
+                {hasDisciplineMatch && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllDisciplineModules(prev => !prev)}
+                    className="text-[11px] font-semibold text-zinc-400 hover:text-amber-300 underline transition-colors"
+                  >
+                    {showAllDisciplineModules
+                      ? `Filtrar por ${disciplineName}`
+                      : 'Mostrar todas as disciplinas'}
+                  </button>
+                )}
+              </div>
+
+              <p className="text-[11px] text-zinc-400 leading-relaxed">
+                Vincule esta meta a um ou mais módulos de <strong className="text-amber-300">Estudo Guiado</strong> ou <strong className="text-zinc-200">Presenciais</strong> para sincronizar o status de entrega no Planejamento Pedagógico e permitir o acesso direto pelo aluno.
+              </p>
+
+              {/* Chips dos módulos já selecionados */}
+              {linkedModules.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {linkedModules.map(link => (
+                    <span
+                      key={link.moduleId}
+                      className="inline-flex items-center gap-1.5 text-[11px] font-semibold bg-amber-500/15 text-amber-200 border border-amber-500/35 px-2.5 py-1 rounded-lg max-w-full"
+                    >
+                      <span className="truncate max-w-[260px]" title={`${link.subjectName} · ${link.topicName} · ${link.moduleName}`}>
+                        {link.moduleName || 'Módulo'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLinkedModules(prev => prev.filter(item => item.moduleId !== link.moduleId))
+                        }
+                        className="text-amber-300/70 hover:text-white transition-colors shrink-0"
+                        title="Remover vínculo"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Campo de busca */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={moduleSearch}
+                  onChange={e => setModuleSearch(e.target.value)}
+                  placeholder="Buscar módulo, assunto ou disciplina..."
+                  className="w-full bg-zinc-900 border border-zinc-800 focus:border-amber-500 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Lista de módulos selecionáveis */}
+              <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+                {filteredLinkableModules.length === 0 ? (
+                  <p className="text-[11px] text-zinc-500 text-center py-3">
+                    Nenhum módulo encontrado para o filtro atual.
+                  </p>
+                ) : (
+                  filteredLinkableModules.map(item => {
+                    const isChecked = linkedModuleIdSet.has(item.moduleId);
+                    return (
+                      <button
+                        key={item.moduleId}
+                        type="button"
+                        onClick={() => handleToggleLinkedModule(item)}
+                        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 rounded-lg border text-left transition-all ${
+                          isChecked
+                            ? 'bg-amber-500/10 border-amber-500/40 text-white'
+                            : 'bg-zinc-900/80 border-zinc-800/80 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <div
+                            className={`w-4 h-4 mt-0.5 rounded border flex items-center justify-center shrink-0 transition-colors ${
+                              isChecked
+                                ? 'bg-amber-500 border-amber-500 text-black'
+                                : 'bg-zinc-950 border-zinc-700'
+                            }`}
+                          >
+                            {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold truncate">{item.moduleName}</p>
+                            <p className="text-[10px] text-zinc-500 truncate">
+                              {item.subjectName} · {item.topicName}
+                            </p>
+                          </div>
+                        </div>
+                        <span
+                          className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border shrink-0 whitespace-nowrap ${
+                            item.isGuidedStudy
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                          }`}
+                        >
+                          {item.isGuidedStudy ? 'Estudo Guiado' : 'Presencial'}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Configurações Específicas do Tipo Escolhido */}
 

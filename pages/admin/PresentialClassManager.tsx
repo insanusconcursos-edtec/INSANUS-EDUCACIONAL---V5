@@ -256,6 +256,9 @@ const PresentialClassManager: React.FC = () => {
               <p className="text-sm text-zinc-400">Acompanhe a estrutura do curso, materiais e o status das aulas agendadas.</p>
             </div>
             <PedagogicalPlanning 
+              classId={currentClass.id}
+              isGuidedStudyEnabled={Boolean(currentClass.isGuidedStudyEnabled)}
+              defaultShift={currentClass.shift}
               subjects={subjects} 
               topics={topics} 
               modules={modules} 
