@@ -610,13 +610,17 @@ export function CourseDetails({ course, onBack, isInsidePlan = false }: CourseDe
         updateCourseSearchParams({
           subjectId: queryParams.subjectId || null,
           topicId: queryParams.topicId || null,
-          moduleId: queryParams.moduleId || null
+          moduleId: queryParams.moduleId || null,
+          highlightExamId: queryParams.highlightExamId || null,
+          highlightExamTitle: queryParams.highlightExamTitle || null
         });
       } else {
         updateCourseSearchParams({
           subjectId: null,
           topicId: null,
-          moduleId: null
+          moduleId: null,
+          highlightExamId: null,
+          highlightExamTitle: null
         });
       }
     },
@@ -635,12 +639,16 @@ export function CourseDetails({ course, onBack, isInsidePlan = false }: CourseDe
     if (
       searchParams.has('subjectId') ||
       searchParams.has('topicId') ||
-      searchParams.has('moduleId')
+      searchParams.has('moduleId') ||
+      searchParams.has('highlightExamId') ||
+      searchParams.has('highlightExamTitle')
     ) {
       updateCourseSearchParams({
         subjectId: null,
         topicId: null,
-        moduleId: null
+        moduleId: null,
+        highlightExamId: null,
+        highlightExamTitle: null
       });
     }
   };

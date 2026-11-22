@@ -910,12 +910,17 @@ export const StudentPresentialDailyGoals: React.FC<StudentPresentialDailyGoalsPr
             {canOpenSimulados && onSwitchTab ? (
               <button
                 type="button"
-                onClick={() => onSwitchTab('SIMULADOS')}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-600 hover:brightness-110 text-black text-xs font-black uppercase tracking-widest shadow-lg shadow-amber-500/20 transition-all active:scale-95"
+                onClick={() => {
+                  const params: Record<string, string> = {};
+                  if (event.simulatedExamId) params.highlightExamId = event.simulatedExamId;
+                  if (event.simulatedTitle) params.highlightExamTitle = event.simulatedTitle;
+                  onSwitchTab('SIMULADOS', params);
+                }}
+                className="w-full flex items-center justify-center gap-2 py-3 px-3 rounded-xl bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-600 hover:brightness-110 text-black text-xs font-black uppercase tracking-wider text-center leading-tight shadow-lg shadow-amber-500/20 transition-all active:scale-95"
               >
-                <Trophy size={14} />
+                <Trophy size={14} className="shrink-0" />
                 <span>ACESSAR ÁREA DE SIMULADOS</span>
-                <ArrowUpRight size={14} />
+                <ArrowUpRight size={14} className="shrink-0" />
               </button>
             ) : (
               <div className="w-full py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-center text-[10px] font-black uppercase tracking-widest text-amber-300">

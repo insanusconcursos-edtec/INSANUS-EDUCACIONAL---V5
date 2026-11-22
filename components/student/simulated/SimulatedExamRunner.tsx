@@ -29,6 +29,8 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
   // Modal States
   const [showIncompleteModal, setShowIncompleteModal] = useState(false);
   const [showFinishModal, setShowFinishModal] = useState(false);
+  const [showExitModal, setShowExitModal] = useState(false);
+  const [errorModalMessage, setErrorModalMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (classData) {
@@ -101,7 +103,7 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
 
     // 0. VERIFICAÇÃO DE INTEGRIDADE
     if (!exam.questions || exam.questions.length === 0) {
-        alert("ERRO TÉCNICO: Este simulado está em modo RASCUNHO ou não possui gabarito cadastrado.");
+        setErrorModalMessage("Este simulado está em modo RASCUNHO ou não possui gabarito cadastrado.");
         return;
     }
 
@@ -197,8 +199,8 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
 
     } catch (error: any) {
         console.error("🔥 Erro ao salvar tentativa:", error);
-        alert(`Erro técnico ao salvar sua nota: ${error.message}`);
-        setShowFinishModal(false); 
+        setShowFinishModal(false);
+        setErrorModalMessage(`Erro técnico ao salvar sua nota: ${error?.message || 'Tente novamente.'}`);
     } finally {
         setIsSubmitting(false);
     }
@@ -211,13 +213,8 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
       {/* HEADER */}
       <div className="flex-none h-20 bg-zinc-900 border-b border-zinc-800 px-6 flex items-center justify-between shadow-2xl relative z-50">
           <button 
-             onClick={() => {
-                // Aqui podemos manter um confirm simples pois é saída destrutiva, 
-                // ou implementar outro modal se desejar consistência total.
-                if(Object.keys(answers).length === 0 || confirm("Deseja sair do simulado? Seu progresso será perdido.")) {
-                    onClose();
-                }
-             }}
+             type="button"
+             onClick={() => setShowExitModal(true)}
              className="flex items-center gap-2 text-zinc-400 hover:text-white hover:bg-zinc-800 px-4 py-2 rounded-lg transition-all group"
           >
              <LogOut size={20} className="group-hover:text-red-500 transition-colors" />
@@ -230,10 +227,18 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
           </div>
 
           <button 
+              type="button"
               onClick={() => {
                   const pdfLink = exam.files?.bookletUrl;
-                  if (pdfLink) window.open(pdfLink, '_blank');
-                  else alert("Link do PDF não encontrado.");
+                  if (pdfLink) {
+                      const a = document.createElement('a');
+                      a.href = pdfLink;
+                      a.target = '_blank';
+                      a.rel = 'noopener noreferrer';
+                      a.click();
+                  } else {
+                      setErrorModalMessage("Link do caderno em PDF não encontrado para este simulado.");
+                  }
               }}
               className="flex items-center gap-3 bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-lg font-bold text-xs uppercase tracking-widest shadow-lg hover:shadow-blue-500/30 transition-all transform hover:-translate-y-0.5 active:translate-y-0"
           >
@@ -464,6 +469,92 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
                     </div>
                 </div>
             </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMAÇÃO DE SAÍDA */}
+      {showExitModal && (
+        <div
+          className="fixed inset-0 z-[450] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={() => setShowExitModal(false)}
+        >
+          <div
+            className="bg-zinc-900 border border-red-500/40 rounded-2xl p-6 md:p-8 max-w-md w-full shadow-2xl relative animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center text-center">
+              <div className="bg-red-500/10 p-4 rounded-full mb-5 border border-red-500/25">
+                <AlertTriangle className="w-10 h-10 text-red-500" />
+              </div>
+              <h3 className="text-xl font-black text-white mb-2 uppercase tracking-tighter">
+                Sair do Simulado?
+              </h3>
+
+              {Object.keys(answers).length > 0 && (
+                <div className="mb-4 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-bold tabular-nums">
+                  {Object.keys(answers).length} de {exam.questionCount} questões preenchidas
+                </div>
+              )}
+
+              <p className="text-zinc-400 mb-7 text-sm leading-relaxed">
+                Tem certeza que deseja sair agora?
+                <br />
+                <strong className="text-red-400">
+                  Caso saia, todas as respostas preenchidas serão perdidas
+                </strong>{' '}
+                e não poderão ser recuperadas.
+              </p>
+
+              <div className="flex flex-col sm:flex-row gap-3 w-full">
+                <button
+                  type="button"
+                  onClick={() => setShowExitModal(false)}
+                  className="flex-1 py-3.5 px-4 rounded-xl font-bold text-xs uppercase tracking-widest transition-colors bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700"
+                >
+                  Continuar Prova
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExitModal(false);
+                    onClose();
+                  }}
+                  className="flex-1 py-3.5 px-4 rounded-xl font-black text-xs uppercase tracking-widest transition-colors shadow-lg bg-red-600 hover:bg-red-500 text-white shadow-red-900/25 flex items-center justify-center gap-2"
+                >
+                  <LogOut size={15} />
+                  Sim, Sair
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE AVISO / ERRO TÉCNICO */}
+      {errorModalMessage && (
+        <div
+          className="fixed inset-0 z-[460] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={() => setErrorModalMessage(null)}
+        >
+          <div
+            className="bg-zinc-900 border border-red-500/50 rounded-2xl p-6 md:p-8 max-w-md w-full shadow-2xl relative animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center text-center">
+              <div className="bg-red-500/10 p-4 rounded-full mb-5 border border-red-500/20">
+                <AlertTriangle className="w-10 h-10 text-red-500" />
+              </div>
+              <h3 className="text-xl font-black text-white mb-2 uppercase tracking-tighter">Atenção</h3>
+              <p className="text-zinc-400 mb-7 text-sm leading-relaxed">{errorModalMessage}</p>
+              <button
+                type="button"
+                onClick={() => setErrorModalMessage(null)}
+                className="bg-red-600 hover:bg-red-500 text-white w-full py-3.5 rounded-xl font-black text-xs uppercase tracking-widest transition-colors shadow-lg shadow-red-900/20"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

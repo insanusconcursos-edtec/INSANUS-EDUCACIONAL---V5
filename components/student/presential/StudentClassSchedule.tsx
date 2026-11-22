@@ -761,11 +761,18 @@ export const StudentClassSchedule: React.FC<StudentClassScheduleProps> = ({
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    navigateToPresentialTab('SIMULADOS');
+                                    const params: Record<string, string> = {};
+                                    if (event.simulatedExamId) {
+                                      params.highlightExamId = event.simulatedExamId;
+                                    }
+                                    if (event.simulatedTitle) {
+                                      params.highlightExamTitle = event.simulatedTitle;
+                                    }
+                                    navigateToPresentialTab('SIMULADOS', params);
                                   }}
-                                  className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded bg-gradient-to-r from-amber-500/20 via-yellow-500/15 to-amber-500/20 hover:from-amber-500/30 hover:to-yellow-500/25 border border-amber-400/40 text-amber-200 text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap shrink-0"
+                                  className="w-full min-w-0 max-w-full flex items-center justify-center gap-1 py-2 px-2 rounded-md bg-gradient-to-r from-amber-500/20 via-yellow-500/15 to-amber-500/20 hover:from-amber-500/30 hover:to-yellow-500/25 border border-amber-400/40 text-amber-200 text-[9.5px] font-bold uppercase tracking-wide leading-tight text-center whitespace-normal transition-all"
                                 >
-                                  <span>Acessar Área de Simulados</span>
+                                  <span className="break-words">Acessar Área de Simulados</span>
                                   <ArrowUpRight className="w-3 h-3 shrink-0" />
                                 </button>
                               )}

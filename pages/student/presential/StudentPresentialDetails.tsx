@@ -123,13 +123,17 @@ export const StudentPresentialDetails: React.FC = () => {
         searchParams.has('tab') ||
         searchParams.has('subjectId') ||
         searchParams.has('topicId') ||
-        searchParams.has('moduleId')
+        searchParams.has('moduleId') ||
+        searchParams.has('highlightExamId') ||
+        searchParams.has('highlightExamTitle')
       ) {
         const nextParams = new URLSearchParams(searchParams);
         nextParams.delete('tab');
         nextParams.delete('subjectId');
         nextParams.delete('topicId');
         nextParams.delete('moduleId');
+        nextParams.delete('highlightExamId');
+        nextParams.delete('highlightExamTitle');
         setSearchParams(nextParams, { replace: true });
       }
     },
@@ -839,6 +843,7 @@ export const StudentPresentialDetails: React.FC = () => {
             classId={currentClass.id} 
             masterClassId={currentClass.masterClassId}
             linkedSimulatedId={currentClass.linkedSimulatedId}
+            onSwitchTab={handleSwitchTab}
             onProgressUpdated={refreshDailyBadge}
           />
         )}

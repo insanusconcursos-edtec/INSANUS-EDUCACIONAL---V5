@@ -1,7 +1,8 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { 
-  ArrowLeft, PlayCircle, BarChart2, Trophy, FileCheck, Lock, AlertCircle, Layers, X
+  PlayCircle, BarChart2, Trophy, FileCheck, Lock, AlertCircle, Layers, X
 } from 'lucide-react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../../services/firebase';
@@ -20,10 +21,27 @@ import { StudentPerformanceDashboard } from './StudentPerformanceDashboard';
 
 interface LinkedSimulatedViewProps {
   simulatedId: string;
+  highlightExamId?: string | null;
+  highlightExamTitle?: string | null;
 }
 
-export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({ simulatedId }) => {
+const normalizeExamTitle = (value?: string | null) =>
+  (value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({
+  simulatedId,
+  highlightExamId: highlightExamIdProp,
+  highlightExamTitle: highlightExamTitleProp,
+}) => {
   const { currentUser } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const targetExamId = highlightExamIdProp ?? searchParams.get('highlightExamId');
+  const targetExamTitle = highlightExamTitleProp ?? searchParams.get('highlightExamTitle');
   
   // Navigation State
   const [viewState, setViewState] = useState<'EXAMS' | 'RESULT'>('EXAMS');
@@ -37,11 +55,23 @@ export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({ simula
   const [examAttempts, setExamAttempts] = useState<Record<string, SimulatedAttempt>>({});
   const [classAttempts, setClassAttempts] = useState<SimulatedAttempt[]>([]);
   const [classViewMode, setClassViewMode] = useState<'LIST' | 'DASHBOARD'>('LIST');
+  const [highlightedExamId, setHighlightedExamId] = useState<string | null>(null);
+  const examCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Runner State
   const [isRunningExam, setIsRunningExam] = useState(false);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [examToConfirm, setExamToConfirm] = useState<SimulatedExam | null>(null);
+
+  const clearHighlight = useCallback(() => {
+    setHighlightedExamId(null);
+    if (searchParams.has('highlightExamId') || searchParams.has('highlightExamTitle')) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('highlightExamId');
+      nextParams.delete('highlightExamTitle');
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -85,7 +115,47 @@ export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({ simula
     loadData();
   }, [simulatedId, currentUser]);
 
+  // Destaca e rola até o simulado referenciado vindo do Cronograma / Metas de Hoje
+  useEffect(() => {
+    if (loading || exams.length === 0) return;
+    if (!targetExamId && !targetExamTitle) {
+      setHighlightedExamId(null);
+      return;
+    }
+
+    const publishedExams = exams.filter(e => e.status === 'published');
+    let matched: SimulatedExam | undefined;
+
+    if (targetExamId) {
+      matched = publishedExams.find(e => e.id === targetExamId);
+    }
+
+    if (!matched && targetExamTitle) {
+      const normalizedTarget = normalizeExamTitle(targetExamTitle);
+      matched = publishedExams.find(e => normalizeExamTitle(e.title) === normalizedTarget);
+    }
+
+    if (!matched?.id) return;
+
+    const matchedId = matched.id;
+    setViewState('EXAMS');
+    setClassViewMode('LIST');
+    setHighlightedExamId(matchedId);
+
+    const scrollTimer = window.setTimeout(() => {
+      const el = examCardRefs.current[matchedId];
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 150);
+
+    return () => window.clearTimeout(scrollTimer);
+  }, [loading, exams, targetExamId, targetExamTitle]);
+
   const handleStartExam = (exam: SimulatedExam) => {
+    if (exam.id === highlightedExamId) {
+      clearHighlight();
+    }
     setExamToConfirm(exam);
   };
 
@@ -98,6 +168,9 @@ export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({ simula
   };
 
   const handleViewResult = (exam: SimulatedExam, attempt: SimulatedAttempt) => {
+    if (exam.id === highlightedExamId) {
+      clearHighlight();
+    }
     setSelectedExam(exam);
     setLastAttempt(attempt);
     setViewState('RESULT');
@@ -179,7 +252,10 @@ export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({ simula
             Simulados Disponíveis
           </button>
           <button 
-            onClick={() => setClassViewMode('DASHBOARD')}
+            onClick={() => {
+              clearHighlight();
+              setClassViewMode('DASHBOARD');
+            }}
             className={`pb-2 text-xs font-bold uppercase transition-all tracking-widest flex items-center gap-2 ${classViewMode === 'DASHBOARD' ? 'text-yellow-500 border-b-2 border-yellow-500' : 'text-zinc-500 hover:text-white'}`}
           >
             <BarChart2 size={14} />
@@ -202,23 +278,71 @@ export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({ simula
                 const now = new Date();
                 const publishDate = exam.publishDate ? new Date(exam.publishDate) : null;
                 const isBlocked = publishDate && publishDate > now;
+                const isHighlighted = Boolean(exam.id && highlightedExamId === exam.id);
                 
                 return (
-                  <div key={exam.id} className={`bg-zinc-900 border border-zinc-800 p-5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4 group hover:border-zinc-700 transition-all ${isBlocked ? 'opacity-75' : ''}`}>
-                    <div className="flex items-center gap-4">
-                      <div className={`p-3 rounded-xl ${isDone ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : isBlocked ? 'bg-zinc-800 text-zinc-600 border border-zinc-700' : 'bg-zinc-800 text-zinc-400'}`}>
+                  <div
+                    key={exam.id}
+                    ref={(el) => {
+                      if (exam.id) examCardRefs.current[exam.id] = el;
+                    }}
+                    className={`relative rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 group transition-all ${
+                      isHighlighted
+                        ? 'bg-gradient-to-r from-amber-950/35 via-zinc-900 to-zinc-900 border border-amber-500/60 shadow-[0_0_24px_rgba(245,158,11,0.2)]'
+                        : 'bg-zinc-900 border border-zinc-800 hover:border-zinc-700'
+                    } ${isBlocked && !isHighlighted ? 'opacity-75' : ''}`}
+                  >
+                    {/* Borda pulsante destacando o simulado referenciado no cronograma */}
+                    {isHighlighted && (
+                      <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute -inset-[2px] rounded-2xl border-2 border-amber-400 shadow-[0_0_28px_rgba(251,191,36,0.6),inset_0_0_16px_rgba(251,191,36,0.18)] animate-pulse z-10"
+                      />
+                    )}
+
+                    <div className="relative z-20 flex items-center gap-4">
+                      <div
+                        className={`p-3 rounded-xl ${
+                          isDone
+                            ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
+                            : isHighlighted
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-400/40'
+                              : isBlocked
+                                ? 'bg-zinc-800 text-zinc-600 border border-zinc-700'
+                                : 'bg-zinc-800 text-zinc-400'
+                        }`}
+                      >
                         {isDone ? <Trophy size={24} /> : isBlocked ? <Lock size={24} /> : <FileCheck size={24} />}
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className={`text-lg font-black uppercase tracking-tight ${isBlocked ? 'text-zinc-500' : 'text-white'}`}>{exam.title}</h3>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3
+                            className={`text-lg font-black uppercase tracking-tight ${
+                              isHighlighted
+                                ? 'text-amber-100'
+                                : isBlocked
+                                  ? 'text-zinc-500'
+                                  : 'text-white'
+                            }`}
+                          >
+                            {exam.title}
+                          </h3>
+                          {isHighlighted && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-500/20 border border-amber-400/50 text-amber-300 text-[10px] font-black uppercase tracking-wider">
+                              <span className="relative flex h-2 w-2">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
+                              </span>
+                              Simulado do Cronograma
+                            </span>
+                          )}
                           {isBlocked && (
                             <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-500 text-[9px] font-bold uppercase border border-zinc-700 flex items-center gap-1">
                               <Lock size={10} /> BLOQUEADO
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-3 text-[10px] font-bold text-zinc-500 uppercase mt-1">
+                        <div className="flex items-center gap-3 text-[10px] font-bold text-zinc-500 uppercase mt-1 flex-wrap">
                           <span className="flex items-center gap-1"><Layers size={12} /> {exam.questionCount} Questões</span>
                           {exam.hasPenalty && <span className="flex items-center gap-1 text-red-500"><AlertCircle size={12} /> Penalidade Ativa</span>}
                           {isBlocked && publishDate && (
@@ -230,7 +354,7 @@ export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({ simula
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="relative z-20 flex items-center gap-3">
                       {isDone ? (
                         <button 
                           onClick={() => handleViewResult(exam, attempt)}
@@ -248,7 +372,11 @@ export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({ simula
                       ) : (
                         <button 
                           onClick={() => handleStartExam(exam)}
-                          className="px-6 py-3 bg-brand-red hover:bg-red-600 text-white rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg shadow-red-900/20"
+                          className={`px-6 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg ${
+                            isHighlighted
+                              ? 'bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-500 hover:brightness-110 text-black shadow-amber-500/25'
+                              : 'bg-brand-red hover:bg-red-600 text-white shadow-red-900/20'
+                          }`}
                         >
                           <PlayCircle size={14} /> Iniciar Prova
                         </button>
