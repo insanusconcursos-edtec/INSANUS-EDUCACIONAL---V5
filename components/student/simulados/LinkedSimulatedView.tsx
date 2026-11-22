@@ -133,6 +133,7 @@ export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({ simula
         onClose={() => setIsRunningExam(false)}
         onComplete={handleExamComplete}
         classId={selectedClass.id}
+        classData={selectedClass}
       />
     );
   }
@@ -143,6 +144,7 @@ export const LinkedSimulatedView: React.FC<LinkedSimulatedViewProps> = ({ simula
         exam={selectedExam}
         attemptData={lastAttempt}
         onBack={handleBackToExams}
+        classData={selectedClass}
       />
     );
   }

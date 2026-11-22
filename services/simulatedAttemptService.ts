@@ -33,6 +33,8 @@ export interface SimulatedAttempt {
   maxPossibleScore?: number;
   isApproved: boolean;
   disapprovalReasons?: string[];
+  rankingCategoryId?: string;
+  rankingCategoryLabel?: string;
   completedAt: any;
   autodiagnosis?: {
     rawAnswers?: Record<number, string>;
@@ -314,7 +316,8 @@ export const submitExamAttempt = async (
   user: { uid: string; name: string; photoURL?: string; nickname?: string },
   exam: SimulatedExam,
   userAnswers: Record<number, string>,
-  classId?: string
+  classId?: string,
+  rankingSelection?: { categoryId?: string; categoryLabel?: string }
 ): Promise<SimulatedAttempt> => {
   
   console.log("Submitting attempt for:", user.name, "Exam:", exam.title);
@@ -360,6 +363,12 @@ export const submitExamAttempt = async (
     maxPossibleScore: maxPoints,
     isApproved,
     disapprovalReasons,
+    ...(rankingSelection?.categoryId
+      ? {
+          rankingCategoryId: rankingSelection.categoryId,
+          rankingCategoryLabel: rankingSelection.categoryLabel || ''
+        }
+      : {}),
     completedAt: serverTimestamp()
   };
 

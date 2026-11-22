@@ -342,6 +342,7 @@ export const SimuladosTabContent: React.FC<SimuladosTabContentProps> = ({ planId
         <SimulatedExamRunner 
           exam={activeExam}
           classId={selectedClassId!}
+          classData={selectedClass}
           onClose={() => setActiveExam(null)}
           onComplete={(result) => {
              setAttemptsMap(prev => ({ ...prev, [activeExam.id!]: result }));
@@ -358,6 +359,7 @@ export const SimuladosTabContent: React.FC<SimuladosTabContentProps> = ({ planId
         <ExamResult 
           exam={viewingExamForResult}
           attemptData={viewingAttempt}
+          classData={selectedClass}
           onBack={() => {
             setViewingAttempt(null);
             setViewingExamForResult(null);

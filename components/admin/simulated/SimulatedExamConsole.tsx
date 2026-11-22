@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   ArrowLeft, Save, ListChecks, Activity, AlertCircle, X as XIcon, Loader2,
   Plus, Copy, CheckCircle, Award, Trophy, Users, Search, Medal
 } from 'lucide-react';
 import { 
+  SimulatedClass,
   SimulatedExam, 
   ExamQuestion, 
   ExamDiscipline, 
   updateExamQuestions, 
   saveExamAutodiagnosis,
   getStudentExamResults,
+  getSimulatedClassById,
   StudentExamResult
 } from '../../../services/simulatedService';
 import { recalculateAttemptsForExam } from '../../../services/simulatedAttemptService';
@@ -19,18 +21,28 @@ import {
   SimulatedResource,
   createAdminCorrection
 } from '../../../services/simulatedResourceService';
+import {
+  getRankingOptions,
+  getVacanciesForView,
+  getVacancyStatus,
+  getVacancyStatusMeta,
+  normalizeRankingConfig
+} from '../../../utils/simulatedRanking';
 import { Scale, MessageSquare, Check, X, ShieldAlert } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 interface SimulatedExamConsoleProps {
   classId: string;
+  classData?: SimulatedClass;
   exam: SimulatedExam;
   onBack: () => void;
   onUpdate?: () => void; // Callback to refresh parent list
 }
 
-const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, exam, onBack, onUpdate }) => {
+const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, classData, exam, onBack, onUpdate }) => {
   const [activeTab, setActiveTab] = useState<'GABARITO' | 'AUTODIAGNOSTICO' | 'RESULTADOS' | 'RECURSOS'>('GABARITO');
+  const [resolvedClassData, setResolvedClassData] = useState<SimulatedClass | null>(classData || null);
+  const [selectedRankingFilter, setSelectedRankingFilter] = useState<string>('general');
   
   // Data State
   const [questions, setQuestions] = useState<ExamQuestion[]>([]);
@@ -140,6 +152,54 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
       setLoadingResults(false);
     }
   }, [classId, exam.id]);
+
+  useEffect(() => {
+    if (classData) {
+      setResolvedClassData(classData);
+      return;
+    }
+    if (!classId) return;
+    getSimulatedClassById(classId)
+      .then((cls) => {
+        if (cls) setResolvedClassData(cls);
+      })
+      .catch((err) => console.error('Erro ao carregar configurações da turma:', err));
+  }, [classId, classData]);
+
+  const normalizedRankingConfig = useMemo(
+    () => normalizeRankingConfig(resolvedClassData?.rankingConfig),
+    [resolvedClassData?.rankingConfig]
+  );
+
+  const rankingOptions = useMemo(
+    () => getRankingOptions(normalizedRankingConfig),
+    [normalizedRankingConfig]
+  );
+
+  const activeFilterVacancies = useMemo(
+    () => getVacanciesForView(normalizedRankingConfig, selectedRankingFilter),
+    [normalizedRankingConfig, selectedRankingFilter]
+  );
+
+  const filteredExamResults = useMemo(() => {
+    const base =
+      selectedRankingFilter === 'general'
+        ? examResults
+        : examResults.filter((r) => r.rankingCategoryId === selectedRankingFilter);
+
+    let approvedCounter = 0;
+    return base.map((item) => {
+      const approvedPos = item.isApproved ? ++approvedCounter : null;
+      const vacancyStatus = approvedPos
+        ? getVacancyStatus(approvedPos, activeFilterVacancies)
+        : 'none';
+      return {
+        ...item,
+        approvedPos,
+        vacancyStatus
+      };
+    });
+  }, [examResults, selectedRankingFilter, activeFilterVacancies]);
 
   useEffect(() => {
     if (activeTab === 'RESULTADOS' || isRankingModalOpen) {
@@ -594,11 +654,68 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                 <p className="text-zinc-500 text-xs mt-2 max-w-xs uppercase tracking-wider font-bold">Aguarde que os alunos enviem suas respostas para visualizar os desempenhos aqui.</p>
               </div>
             ) : (
-              <div className="flex-1 overflow-x-auto custom-scrollbar p-6">
+              <div className="flex-1 overflow-x-auto custom-scrollbar p-6 space-y-4">
+                {(rankingOptions.length > 0 || activeFilterVacancies.immediate > 0 || activeFilterVacancies.reserve > 0) && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-900/50 border border-zinc-800 rounded-xl p-3">
+                    {rankingOptions.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRankingFilter('general')}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all ${
+                            selectedRankingFilter === 'general'
+                              ? 'bg-purple-600/20 border-purple-500/50 text-purple-300'
+                              : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          Ranking Geral ({examResults.length})
+                        </button>
+                        {rankingOptions.map((opt) => {
+                          const count = examResults.filter((r) => r.rankingCategoryId === opt.id).length;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => setSelectedRankingFilter(opt.id)}
+                              className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all ${
+                                selectedRankingFilter === opt.id
+                                  ? 'bg-purple-600/20 border-purple-500/50 text-purple-300'
+                                  : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
+                              }`}
+                            >
+                              {opt.label} ({count})
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                        Ranking Geral
+                      </span>
+                    )}
+
+                    {(activeFilterVacancies.immediate > 0 || activeFilterVacancies.reserve > 0) && (
+                      <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wider">
+                        <span className="px-2 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
+                          Imediatas: {activeFilterVacancies.immediate}
+                        </span>
+                        <span className="px-2 py-1 rounded bg-amber-500/10 text-amber-400 border border-amber-500/25">
+                          CR: {activeFilterVacancies.reserve}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <table className="w-full text-left border-collapse">
                   <thead className="bg-zinc-900/50 text-[10px] font-black uppercase tracking-widest text-zinc-500">
                     <tr>
                       <th className="p-4 border-b border-zinc-800">Candidato</th>
+                      {normalizedRankingConfig.mode !== 'general' && (
+                        <th className="p-4 border-b border-zinc-800 text-center">
+                          {normalizedRankingConfig.mode === 'gender' ? 'Gênero' : 'Região'}
+                        </th>
+                      )}
                       <th className="p-4 border-b border-zinc-800 text-center">Data</th>
                       <th className="p-4 border-b border-zinc-800 text-center">Acertos</th>
                       <th className="p-4 border-b border-zinc-800 text-center">Erros</th>
@@ -608,9 +725,10 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/50">
-                    {examResults.map((result) => {
+                    {filteredExamResults.map((result) => {
                       const maxPoints = result.maxPossibleScore || result.totalQuestions || 1;
                       const percent = (result.score / maxPoints) * 100;
+                      const vacancyMeta = result.isApproved ? getVacancyStatusMeta(result.vacancyStatus) : null;
                       return (
                         <tr key={result.id} className="hover:bg-zinc-900/30 transition-all group">
                           <td className="p-4">
@@ -628,6 +746,17 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                               </div>
                             </div>
                           </td>
+                          {normalizedRankingConfig.mode !== 'general' && (
+                            <td className="p-4 text-center">
+                              {result.rankingCategoryLabel ? (
+                                <span className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-[9px] font-black uppercase tracking-wider text-zinc-300">
+                                  {result.rankingCategoryLabel}
+                                </span>
+                              ) : (
+                                <span className="text-[9px] font-bold text-zinc-600 uppercase">Geral</span>
+                              )}
+                            </td>
+                          )}
                           <td className="p-4 text-center">
                             <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
                               {result.completedAt?.toDate?.()?.toLocaleDateString('pt-BR') || '---'}
@@ -672,6 +801,11 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                               >
                                 {result.isApproved ? 'APROVADO' : 'REPROVADO'}
                               </span>
+                              {vacancyMeta && (
+                                <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest border ${vacancyMeta.className}`}>
+                                  {result.approvedPos}º • {vacancyMeta.label}
+                                </span>
+                              )}
                               {!result.isApproved && result.disapprovalReasons && result.disapprovalReasons.length > 0 && (
                                 <span
                                   title={result.disapprovalReasons.join(' | ')}
@@ -1281,7 +1415,52 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
             </div>
 
             {/* Modal Content */}
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-4">
+              {rankingOptions.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-900/50 border border-zinc-800 rounded-xl p-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRankingFilter('general')}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all ${
+                        selectedRankingFilter === 'general'
+                          ? 'bg-purple-600/20 border-purple-500/50 text-purple-300'
+                          : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Geral ({examResults.length})
+                    </button>
+                    {rankingOptions.map((opt) => {
+                      const count = examResults.filter((r) => r.rankingCategoryId === opt.id).length;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setSelectedRankingFilter(opt.id)}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all ${
+                            selectedRankingFilter === opt.id
+                              ? 'bg-purple-600/20 border-purple-500/50 text-purple-300'
+                              : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          {opt.label} ({count})
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {(activeFilterVacancies.immediate > 0 || activeFilterVacancies.reserve > 0) && (
+                    <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-wider">
+                      <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
+                        Imed: {activeFilterVacancies.immediate}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/25">
+                        CR: {activeFilterVacancies.reserve}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <table className="w-full">
                 <thead className="bg-zinc-900 text-[10px] font-black uppercase tracking-widest text-zinc-500 sticky top-0 z-10">
                   <tr>
@@ -1294,9 +1473,11 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-900">
-                  {examResults
+                  {filteredExamResults
                     .filter(r => r.studentName.toLowerCase().includes(rankingSearch.toLowerCase()))
-                    .map((r, index) => (
+                    .map((r, index) => {
+                      const vacancyMeta = r.isApproved ? getVacancyStatusMeta(r.vacancyStatus) : null;
+                      return (
                       <tr key={r.id} className="hover:bg-zinc-900/50 transition-colors">
                         <td className="p-4 text-center">
                           <span className={`font-mono font-black text-sm ${index < 3 ? 'text-yellow-500' : 'text-zinc-600'}`}>
@@ -1311,17 +1492,36 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                             <div className="w-8 h-8 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center overflow-hidden">
                               {r.studentPhoto ? <img src={r.studentPhoto} alt={r.studentName} className="w-full h-full object-cover" /> : <Users size={14} className="text-zinc-700" />}
                             </div>
-                            <span className="text-xs font-black text-zinc-300 uppercase tracking-tight">{r.studentName}</span>
+                            <div>
+                              <span className="block text-xs font-black text-zinc-300 uppercase tracking-tight">{r.studentName}</span>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                {r.rankingCategoryLabel && selectedRankingFilter === 'general' && (
+                                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
+                                    {r.rankingCategoryLabel}
+                                  </span>
+                                )}
+                                {vacancyMeta && (
+                                  <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded border ${vacancyMeta.className}`}>
+                                    {vacancyMeta.label}
+                                  </span>
+                                )}
+                                {!r.isApproved && (
+                                  <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-red-500/10 border border-red-500/30 text-red-400">
+                                    Reprovado
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
                         </td>
                         <td className="p-4 text-center text-emerald-500 font-bold">{r.correctCount}</td>
                         <td className="p-4 text-center text-red-500 font-bold">{r.wrongCount}</td>
                         <td className="p-4 text-center text-zinc-500 font-mono text-[10px]">{((r.score / (r.maxPossibleScore || r.totalQuestions || 1)) * 100).toFixed(1)}%</td>
                         <td className="p-4 text-center">
-                          <span className="text-sm font-black text-white">{r.score.toFixed(1)}</span>
+                          <span className={`text-sm font-black ${r.isApproved ? 'text-white' : 'text-red-400'}`}>{r.score.toFixed(1)}</span>
                         </td>
                       </tr>
-                    ))}
+                    );})}
                 </tbody>
               </table>
             </div>

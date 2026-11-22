@@ -15,6 +15,7 @@ import SimulatedExamConfigModal from './SimulatedExamConfigModal';
 import SimulatedExamConsole from './SimulatedExamConsole';
 import ConfirmationModal from '../../ui/ConfirmationModal';
 import Loading from '../../ui/Loading';
+import { getRankingModeLabel } from '../../../utils/simulatedRanking';
 
 interface SimulatedClassDetailsProps {
   classData: SimulatedClass;
@@ -111,6 +112,7 @@ const SimulatedClassDetails: React.FC<SimulatedClassDetailsProps> = ({ classData
       return (
           <SimulatedExamConsole 
               classId={classData.id}
+              classData={classData}
               exam={selectedConsoleExam}
               onBack={() => {
                   fetchData(); // Refresh parent list to prevent stale data on return
@@ -135,12 +137,15 @@ const SimulatedClassDetails: React.FC<SimulatedClassDetailsProps> = ({ classData
                     <ChevronLeft size={20} />
                 </button>
                 <div>
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
                         <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest border border-zinc-800 px-2 py-0.5 rounded-full">
                             {classData.organization}
                         </span>
                         <span className="text-[10px] font-black text-purple-500 uppercase tracking-widest border border-purple-500/20 bg-purple-500/10 px-2 py-0.5 rounded-full">
                             {exams.length} Simulados
+                        </span>
+                        <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 rounded-full">
+                            {getRankingModeLabel(classData.rankingConfig)}
                         </span>
                     </div>
                     <h1 className="text-2xl font-black text-white uppercase tracking-tighter leading-none">

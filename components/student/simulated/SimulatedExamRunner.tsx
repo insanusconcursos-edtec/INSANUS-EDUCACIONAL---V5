@@ -1,30 +1,59 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Loader2, FileText, CheckCircle2, AlertTriangle, LogOut, Check, ArrowLeft, Layers } from 'lucide-react';
-import { SimulatedExam } from '../../../services/simulatedService';
+import { Loader2, FileText, CheckCircle2, AlertTriangle, LogOut, Check, ArrowLeft, Layers, Trophy, Users, MapPin } from 'lucide-react';
+import { getSimulatedClassById, SimulatedClass, SimulatedExam } from '../../../services/simulatedService';
 import { useAuth } from '../../../contexts/AuthContext';
 import { submitExamAttempt, SimulatedAttempt } from '../../../services/simulatedAttemptService';
 import { updateStudent } from '../../../services/userService';
+import { getRankingOptions, normalizeRankingConfig } from '../../../utils/simulatedRanking';
 
 interface SimulatedExamRunnerProps {
   exam: SimulatedExam;
   onClose: () => void;
   onComplete: (result: SimulatedAttempt) => void;
   classId?: string;
+  classData?: SimulatedClass | null;
 }
 
-const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose, onComplete, classId }) => {
+const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose, onComplete, classId, classData }) => {
   const { currentUser, userData } = useAuth();
   
   // States
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [missingQuestions, setMissingQuestions] = useState<number[]>([]);
+  const [resolvedClassData, setResolvedClassData] = useState<SimulatedClass | null>(classData || null);
+  const [selectedRankingCategoryId, setSelectedRankingCategoryId] = useState<string>('');
   
   // Modal States
   const [showIncompleteModal, setShowIncompleteModal] = useState(false);
-  const [showFinishModal, setShowFinishModal] = useState(false); 
+  const [showFinishModal, setShowFinishModal] = useState(false);
+
+  useEffect(() => {
+    if (classData) {
+      setResolvedClassData(classData);
+      return;
+    }
+    if (!classId) return;
+    getSimulatedClassById(classId)
+      .then((cls) => {
+        if (cls) setResolvedClassData(cls);
+      })
+      .catch((err) => console.error('Erro ao carregar configurações de ranking da turma:', err));
+  }, [classId, classData]);
+
+  const normalizedRankingConfig = useMemo(
+    () => normalizeRankingConfig(resolvedClassData?.rankingConfig),
+    [resolvedClassData?.rankingConfig]
+  );
+
+  const rankingOptions = useMemo(
+    () => getRankingOptions(normalizedRankingConfig),
+    [normalizedRankingConfig]
+  );
+
+  const requiresRankingSelection = rankingOptions.length > 0; 
 
   // Discipline Headers Support
   const headers = React.useMemo(() => {
@@ -101,6 +130,7 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
   // PASSO 2 (PARTE B): Envio Real
   const handleConfirmSubmission = async () => {
     if (!currentUser) return;
+    if (requiresRankingSelection && !selectedRankingCategoryId) return;
     
     // Fecha o modal visualmente mas mantém loading no botão se necessário, 
     // ou podemos manter o modal aberto com estado de loading (melhor UX)
@@ -108,6 +138,8 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
 
     try {
         console.log("🔄 Enviando respostas para cálculo...");
+
+        const selectedOption = rankingOptions.find((opt) => opt.id === selectedRankingCategoryId);
 
         // Chama o serviço que encapsula a lógica de cálculo e salvamento no Firestore
         const result = await submitExamAttempt(
@@ -119,7 +151,10 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
             },
             exam,
             answers,
-            classId
+            classId,
+            selectedOption
+              ? { categoryId: selectedOption.id, categoryLabel: selectedOption.label }
+              : undefined
         );
         
         console.log("✅ Tentativa salva com sucesso:", result);
@@ -338,17 +373,78 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
       {/* PASSO 3: MODAL DE CONFIRMAÇÃO DE ENVIO */}
       {showFinishModal && (
         <div className="fixed inset-0 z-[400] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-zinc-900 border border-emerald-500/30 rounded-2xl p-8 max-w-md w-full shadow-2xl relative animate-in zoom-in-95 duration-200">
+            <div className="bg-zinc-900 border border-emerald-500/30 rounded-2xl p-6 md:p-8 max-w-lg w-full shadow-2xl relative animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
                 <div className="flex flex-col items-center text-center">
-                    <div className="bg-emerald-500/10 p-4 rounded-full mb-6 border border-emerald-500/20">
+                    <div className="bg-emerald-500/10 p-4 rounded-full mb-5 border border-emerald-500/20">
                         <CheckCircle2 className="w-10 h-10 text-emerald-500" />
                     </div>
                     <h3 className="text-xl font-black text-white mb-2 uppercase tracking-tighter">Finalizar Simulado?</h3>
-                    <p className="text-zinc-400 mb-8 text-sm leading-relaxed">
-                        Tem certeza que deseja enviar suas respostas? 
+                    <p className="text-zinc-400 mb-6 text-sm leading-relaxed">
+                        Tem certeza que deseja enviar suas respostas?
                         <br/>
                         Ao confirmar, sua nota será calculada automaticamente e você não poderá mais alterar as respostas.
                     </p>
+
+                    {requiresRankingSelection && (
+                        <div className="w-full text-left bg-zinc-950/80 border border-zinc-800 rounded-xl p-4 mb-6 space-y-3">
+                            <div className="flex items-start gap-2.5">
+                                <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/25 shrink-0">
+                                    {normalizedRankingConfig.mode === 'gender' ? <Users size={15} /> : <MapPin size={15} />}
+                                </div>
+                                <div>
+                                    <h4 className="text-xs font-black text-white uppercase tracking-wider">
+                                        {normalizedRankingConfig.mode === 'gender'
+                                          ? 'Selecione o Ranking por Gênero *'
+                                          : 'Selecione a Região do Ranking *'}
+                                    </h4>
+                                    <p className="text-[11px] text-zinc-500 mt-0.5 leading-snug">
+                                        Escolha a categoria em que deseja concorrer. Sua pontuação também será contabilizada automaticamente no Ranking Geral.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className={`grid gap-2 ${normalizedRankingConfig.mode === 'gender' ? 'grid-cols-2' : 'grid-cols-1 max-h-52 overflow-y-auto pr-1'}`}>
+                                {rankingOptions.map((opt) => {
+                                    const isSelected = selectedRankingCategoryId === opt.id;
+                                    const hasVacancies = opt.immediate > 0 || opt.reserve > 0;
+                                    return (
+                                        <button
+                                            key={opt.id}
+                                            type="button"
+                                            onClick={() => setSelectedRankingCategoryId(opt.id)}
+                                            className={`p-3 rounded-xl border text-left transition-all flex items-center justify-between gap-2 ${
+                                                isSelected
+                                                    ? 'bg-emerald-500/15 border-emerald-500 text-white shadow-lg shadow-emerald-950/40'
+                                                    : 'bg-zinc-900/70 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                                            }`}
+                                        >
+                                            <div className="min-w-0">
+                                                <span className="block text-xs font-black uppercase tracking-wide truncate">
+                                                    {opt.label}
+                                                </span>
+                                                {hasVacancies && (
+                                                    <span className="block text-[10px] font-bold text-zinc-500 mt-0.5">
+                                                        {opt.immediate} imediatas • {opt.reserve} CR
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${
+                                                isSelected ? 'bg-emerald-500 border-emerald-400 text-black' : 'border-zinc-700'
+                                            }`}>
+                                                {isSelected && <Check size={12} strokeWidth={3} />}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {!selectedRankingCategoryId && (
+                                <p className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                                    <Trophy size={11} /> Selecione uma opção para liberar o envio.
+                                </p>
+                            )}
+                        </div>
+                    )}
                     
                     <div className="flex gap-3 w-full">
                         <button 
@@ -359,8 +455,8 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
                         </button>
                         <button 
                             onClick={handleConfirmSubmission}
-                            disabled={isSubmitting}
-                            className="flex-1 py-4 rounded-xl font-black text-xs uppercase tracking-widest transition-colors shadow-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/20 flex items-center justify-center gap-2"
+                            disabled={isSubmitting || (requiresRankingSelection && !selectedRankingCategoryId)}
+                            className="flex-1 py-4 rounded-xl font-black text-xs uppercase tracking-widest transition-colors shadow-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/20 flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                             {isSubmitting ? <Loader2 className="animate-spin" size={16}/> : <Check size={16} />}
                             {isSubmitting ? 'Enviando...' : 'Sim, Finalizar'}

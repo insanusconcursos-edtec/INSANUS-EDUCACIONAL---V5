@@ -21,6 +21,30 @@ import { toPlainObject } from './firestoreUtils';
 export type ExamType = 'multiple_choice' | 'true_false'; // Certo/Errado (Cespe) vs Múltipla Escolha
 export type ExamStatus = 'draft' | 'published';
 
+export type RankingMode = 'general' | 'gender' | 'regional';
+
+export interface RankingVacancies {
+  immediate: number; // Vagas imediatas
+  reserve: number;   // Cadastro reserva (CR)
+}
+
+export interface RankingRegionConfig {
+  id: string;
+  name: string;
+  immediate: number;
+  reserve: number;
+}
+
+export interface ClassRankingConfig {
+  mode: RankingMode;
+  general?: RankingVacancies;
+  gender?: {
+    male: RankingVacancies;
+    female: RankingVacancies;
+  };
+  regions?: RankingRegionConfig[];
+}
+
 export interface BlockDiscipline {
   id: string;
   name: string;
@@ -71,6 +95,8 @@ export interface StudentExamResult {
   completedAt: any;
   isApproved: boolean;
   disapprovalReasons?: string[];
+  rankingCategoryId?: string;
+  rankingCategoryLabel?: string;
 }
 
 export interface SimulatedExam {
@@ -130,6 +156,7 @@ export interface SimulatedClass {
   excludeFromFreePass?: boolean;
   isBlocked?: boolean;
   unlockDate?: string | null;
+  rankingConfig?: ClassRankingConfig;
 }
 
 // === HELPERS ===
@@ -329,7 +356,9 @@ export const getStudentExamResults = async (classId: string, examId: string): Pr
       maxPossibleScore: data.maxPossibleScore,
       completedAt: data.completedAt,
       isApproved: data.isApproved,
-      disapprovalReasons: Array.isArray(data.disapprovalReasons) ? data.disapprovalReasons : []
+      disapprovalReasons: Array.isArray(data.disapprovalReasons) ? data.disapprovalReasons : [],
+      rankingCategoryId: data.rankingCategoryId || '',
+      rankingCategoryLabel: data.rankingCategoryLabel || ''
     } as StudentExamResult;
   });
 };

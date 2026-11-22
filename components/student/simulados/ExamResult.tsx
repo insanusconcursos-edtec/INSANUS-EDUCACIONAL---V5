@@ -11,7 +11,7 @@ import {
 import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db } from '../../../services/firebase';
 import { useAuth } from '../../../contexts/AuthContext';
-import { SimulatedExam } from '../../../services/simulatedService';
+import { getSimulatedClassById, SimulatedClass, SimulatedExam } from '../../../services/simulatedService';
 import { SimulatedAttempt, evaluateSimulatedAttempt } from '../../../services/simulatedAttemptService';
 import { StudentAutoDiagnosis } from './StudentAutoDiagnosis';
 import { updateStudent } from '../../../services/userService';
@@ -21,35 +21,64 @@ import {
   getResourcesForExam,
   SimulatedResource 
 } from '../../../services/simulatedResourceService';
-import { ShieldAlert, Send, Clock, CheckCircle2, XCircle, AlertTriangle, Scale } from 'lucide-react';
+import {
+  getRankingOptions,
+  getVacanciesForView,
+  getVacancyStatus,
+  getVacancyStatusMeta,
+  normalizeRankingConfig,
+  VacancyStatus
+} from '../../../utils/simulatedRanking';
+import { ShieldAlert, Send, Clock, CheckCircle2, XCircle, AlertTriangle, Scale, Users, MapPin } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 // Helper Component para Linha do Ranking
-const RankingRow: React.FC<{ rank: SimulatedAttempt & { originalRank: number }, currentUserId?: string }> = ({ rank, currentUserId }) => {
+const RankingRow: React.FC<{
+    rank: SimulatedAttempt & { originalRank: number; vacancyStatus?: VacancyStatus };
+    currentUserId?: string;
+    showCategoryTag?: boolean;
+    showVacancyBadge?: boolean;
+}> = ({ rank, currentUserId, showCategoryTag = false, showVacancyBadge = false }) => {
     const isCurrentUser = rank.userId === currentUserId;
+    const vacancyMeta = showVacancyBadge && rank.isApproved && rank.vacancyStatus
+        ? getVacancyStatusMeta(rank.vacancyStatus)
+        : null;
+
     return (
         <tr className={`transition-colors hover:bg-zinc-800/30 ${isCurrentUser ? 'bg-zinc-800/50 border-l-2 border-l-brand-red' : ''}`}>
             <td className="p-4 text-center font-mono text-zinc-400 font-bold text-sm">
-                {/* Ícones de Pódio para Top 3 Global */}
-                {rank.originalRank === 1 ? <Medal size={20} className="text-yellow-500 mx-auto" /> : 
-                 rank.originalRank === 2 ? <Medal size={20} className="text-zinc-400 mx-auto" /> : 
-                 rank.originalRank === 3 ? <Medal size={20} className="text-amber-700 mx-auto" /> : 
+                {/* Ícones de Pódio para Top 3 */}
+                {rank.isApproved && rank.originalRank === 1 ? <Medal size={20} className="text-yellow-500 mx-auto" /> : 
+                 rank.isApproved && rank.originalRank === 2 ? <Medal size={20} className="text-zinc-400 mx-auto" /> : 
+                 rank.isApproved && rank.originalRank === 3 ? <Medal size={20} className="text-amber-700 mx-auto" /> : 
                  `${rank.originalRank}º`}
             </td>
             <td className="p-4">
                 <div className="flex items-center gap-3">
                     {/* Avatar ou Inicial */}
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs border border-zinc-700 overflow-hidden ${isCurrentUser ? 'bg-brand-red text-white' : 'bg-zinc-800 text-zinc-400'}`}>
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs border border-zinc-700 overflow-hidden shrink-0 ${isCurrentUser ? 'bg-brand-red text-white' : 'bg-zinc-800 text-zinc-400'}`}>
                         {rank.userPhoto ? (
                             <img src={rank.userPhoto} alt={rank.userName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                         ) : (
                             rank.userName ? rank.userName[0].toUpperCase() : 'A'
                         )}
                     </div>
-                    <div>
-                        <span className={`block font-bold uppercase ${isCurrentUser ? 'text-white' : 'text-zinc-300'}`}>
-                            {rank.userName} {isCurrentUser && '(Você)'}
-                        </span>
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={`font-bold uppercase ${isCurrentUser ? 'text-white' : 'text-zinc-300'}`}>
+                                {rank.userName} {isCurrentUser && '(Você)'}
+                            </span>
+                            {showCategoryTag && rank.rankingCategoryLabel && (
+                                <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-700 text-[8px] font-black uppercase tracking-wider text-zinc-300">
+                                    {rank.rankingCategoryLabel}
+                                </span>
+                            )}
+                            {vacancyMeta && (
+                                <span className={`px-1.5 py-0.5 rounded border text-[8px] font-black uppercase tracking-wider ${vacancyMeta.className}`}>
+                                    {vacancyMeta.label}
+                                </span>
+                            )}
+                        </div>
                         {rank.completedAt && (
                             <span className="text-[9px] text-zinc-500 font-mono">
                                 {new Date(rank.completedAt?.seconds * 1000).toLocaleDateString()}
@@ -86,10 +115,25 @@ interface ExamResultProps {
     exam: SimulatedExam;
     attemptData: SimulatedAttempt;
     onBack: () => void;
+    classData?: SimulatedClass | null;
 }
 
-export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBack }) => {
+export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBack, classData }) => {
     const { currentUser, userData } = useAuth();
+    const [resolvedClassData, setResolvedClassData] = useState<SimulatedClass | null>(classData || null);
+
+    useEffect(() => {
+        if (classData) {
+            setResolvedClassData(classData);
+            return;
+        }
+        if (!attemptData.classId) return;
+        getSimulatedClassById(attemptData.classId)
+            .then((cls) => {
+                if (cls) setResolvedClassData(cls);
+            })
+            .catch((err) => console.error('Erro ao carregar configurações de ranking da turma:', err));
+    }, [classData, attemptData.classId]);
     
     // Sincronização de Nível (se for simulado de nivelamento)
     useEffect(() => {
@@ -313,9 +357,36 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
     // Estados do Ranking
     const [rankingData, setRankingData] = useState<SimulatedAttempt[]>([]);
     const [loadingRanking, setLoadingRanking] = useState(false);
+    const [selectedRankingView, setSelectedRankingView] = useState<string>('general');
+    const [hasInitializedRankingView, setHasInitializedRankingView] = useState(false);
     
     // Estado de Busca no Ranking
     const [rankingSearch, setRankingSearch] = useState('');
+
+    const normalizedRankingConfig = useMemo(
+        () => normalizeRankingConfig(resolvedClassData?.rankingConfig),
+        [resolvedClassData?.rankingConfig]
+    );
+
+    const rankingOptions = useMemo(
+        () => getRankingOptions(normalizedRankingConfig),
+        [normalizedRankingConfig]
+    );
+
+    const hasSpecificRanking = rankingOptions.length > 0;
+
+    // Define automaticamente a aba padrão do ranking para a categoria do aluno (quando houver)
+    useEffect(() => {
+        if (!hasInitializedRankingView && hasSpecificRanking) {
+            const userCatId = attemptData.rankingCategoryId;
+            if (userCatId && rankingOptions.some((opt) => opt.id === userCatId)) {
+                setSelectedRankingView(userCatId);
+            } else {
+                setSelectedRankingView('general');
+            }
+            setHasInitializedRankingView(true);
+        }
+    }, [hasInitializedRankingView, hasSpecificRanking, attemptData.rankingCategoryId, rankingOptions]);
 
     // Função para buscar o Ranking (só executa se o usuário clicar na aba)
     useEffect(() => {
@@ -330,7 +401,7 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
                         where('simulatedId', '==', exam.id),
                         orderBy('score', 'desc'),
                         orderBy('completedAt', 'asc'), // Desempate: quem fez primeiro
-                        limit(100) // Limite de segurança
+                        limit(300) // Limite amplo para comportar divisões regionais/gênero
                     );
                     
                     const snapshot = await getDocs(q);
@@ -346,21 +417,98 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
         }
     }, [activeTab, exam.id, rankingData.length]);
 
-    // Lógica de Filtro + Separação Aprovados/Reprovados
-    const { approvedList, reprovedList } = useMemo(() => {
-        // 1. Calcula Rank Global e Filtra por Busca
-        const processedList = rankingData
-            .map((item, index) => ({ ...item, originalRank: index + 1 })) // 1º Passo: Fixar a posição real global
-            .filter(item => 
-                item.userName?.toLowerCase().includes(rankingSearch.toLowerCase()) // 2º Passo: Filtrar pelo nome
-            );
+    const activeViewVacancies = useMemo(
+        () => getVacanciesForView(normalizedRankingConfig, selectedRankingView),
+        [normalizedRankingConfig, selectedRankingView]
+    );
 
-        // 2. Separa as listas
-        return {
-            approvedList: processedList.filter(i => i.isApproved),
-            reprovedList: processedList.filter(i => !i.isApproved)
+    const hasVacanciesConfigured = activeViewVacancies.immediate > 0 || activeViewVacancies.reserve > 0;
+
+    // Resumo das posições do aluno logado (Geral + Específico)
+    const userRankingSummary = useMemo(() => {
+        if (!currentUser || rankingData.length === 0) return null;
+
+        const computeSummaryForSubset = (subset: SimulatedAttempt[], viewId: string) => {
+            const approved = subset.filter((i) => i.isApproved);
+            const reproved = subset.filter((i) => !i.isApproved);
+            const approvedIdx = approved.findIndex((i) => i.userId === currentUser.uid);
+            const reprovedIdx = reproved.findIndex((i) => i.userId === currentUser.uid);
+            const vacancies = getVacanciesForView(normalizedRankingConfig, viewId);
+
+            if (approvedIdx >= 0) {
+                const pos = approvedIdx + 1;
+                return {
+                    position: pos,
+                    total: subset.length,
+                    approvedTotal: approved.length,
+                    isApproved: true,
+                    vacancyStatus: getVacancyStatus(pos, vacancies)
+                };
+            }
+            if (reprovedIdx >= 0) {
+                return {
+                    position: approved.length + reprovedIdx + 1,
+                    total: subset.length,
+                    approvedTotal: approved.length,
+                    isApproved: false,
+                    vacancyStatus: 'none' as VacancyStatus
+                };
+            }
+            return null;
         };
-    }, [rankingData, rankingSearch]);
+
+        const generalSummary = computeSummaryForSubset(rankingData, 'general');
+
+        let specificSummary: (ReturnType<typeof computeSummaryForSubset> & { label: string; categoryId: string }) | null = null;
+        if (hasSpecificRanking && attemptData.rankingCategoryId) {
+            const option = rankingOptions.find((o) => o.id === attemptData.rankingCategoryId);
+            const subset = rankingData.filter((i) => i.rankingCategoryId === attemptData.rankingCategoryId);
+            const computed = computeSummaryForSubset(subset, attemptData.rankingCategoryId);
+            if (computed) {
+                specificSummary = {
+                    ...computed,
+                    categoryId: attemptData.rankingCategoryId,
+                    label: option?.label || attemptData.rankingCategoryLabel || 'Categoria'
+                };
+            }
+        }
+
+        return { general: generalSummary, specific: specificSummary };
+    }, [currentUser, rankingData, normalizedRankingConfig, hasSpecificRanking, attemptData.rankingCategoryId, attemptData.rankingCategoryLabel, rankingOptions]);
+
+    // Lógica de Filtro (Categoria + Busca) + Posição Real entre Aprovados/Reprovados + Faixa de Vagas
+    const { approvedList, reprovedList } = useMemo(() => {
+        const viewSubset =
+            selectedRankingView === 'general'
+                ? rankingData
+                : rankingData.filter((item) => item.rankingCategoryId === selectedRankingView);
+
+        const searchLower = rankingSearch.trim().toLowerCase();
+
+        const approved = viewSubset
+            .filter((i) => i.isApproved)
+            .map((item, idx) => ({
+                ...item,
+                originalRank: idx + 1,
+                vacancyStatus: getVacancyStatus(idx + 1, activeViewVacancies)
+            }))
+            .filter((item) => !searchLower || item.userName?.toLowerCase().includes(searchLower));
+
+        const approvedTotalCount = viewSubset.filter((i) => i.isApproved).length;
+        const reproved = viewSubset
+            .filter((i) => !i.isApproved)
+            .map((item, idx) => ({
+                ...item,
+                originalRank: approvedTotalCount + idx + 1,
+                vacancyStatus: 'none' as VacancyStatus
+            }))
+            .filter((item) => !searchLower || item.userName?.toLowerCase().includes(searchLower));
+
+        return {
+            approvedList: approved,
+            reprovedList: reproved
+        };
+    }, [rankingData, selectedRankingView, rankingSearch, activeViewVacancies]);
 
     return createPortal(
         <div className="fixed inset-0 z-[100000] w-screen h-screen bg-[#0a0a0a] flex flex-col animate-in fade-in slide-in-from-right-8 duration-500 overflow-hidden">
@@ -1026,33 +1174,195 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
                         />
                     )}
 
-                    {/* --- ABA 3: RANKING GERAL (DIVIDIDO) --- */}
+                    {/* --- ABA 3: RANKING (ESPECÍFICO + GERAL + VAGAS) --- */}
                     {activeTab === 'RANKING' && (
-                        <div className="space-y-8 animate-in fade-in duration-300">
-                            
-                            {/* CABEÇALHO E BUSCA */}
-                            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-col md:flex-row justify-between items-center gap-4">
-                                <div>
-                                    <h3 className="text-sm font-black text-white flex items-center gap-2 uppercase tracking-widest">
-                                        <Trophy size={16} className="text-yellow-500" />
-                                        Classificação Geral
-                                    </h3>
-                                    <p className="text-[10px] text-zinc-500 mt-1 uppercase tracking-wider">
-                                        Ranking ordenado pela maior nota líquida. 
-                                    </p>
+                        <div className="space-y-6 animate-in fade-in duration-300">
+
+                            {/* RESUMO DAS POSIÇÕES DO ALUNO (ESPECÍFICO + GERAL) */}
+                            {!loadingRanking && userRankingSummary && (
+                                <div className={`grid grid-cols-1 ${hasSpecificRanking ? 'md:grid-cols-2' : ''} gap-4`}>
+                                    {hasSpecificRanking && (
+                                        <div className="bg-zinc-900/80 border border-purple-500/30 rounded-xl p-4 flex items-center justify-between gap-4">
+                                            <div className="flex items-center gap-3 min-w-0">
+                                                <div className="p-2.5 rounded-xl bg-purple-500/15 text-purple-400 border border-purple-500/30 shrink-0">
+                                                    {normalizedRankingConfig.mode === 'gender' ? <Users size={18} /> : <MapPin size={18} />}
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <span className="block text-[9px] font-black text-purple-400 uppercase tracking-widest">
+                                                        Seu Ranking Específico
+                                                    </span>
+                                                    {userRankingSummary.specific ? (
+                                                        <>
+                                                            <p className="text-sm font-black text-white uppercase truncate">
+                                                                {userRankingSummary.specific.label}
+                                                            </p>
+                                                            <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                                                                {userRankingSummary.specific.total} participantes nesta categoria
+                                                            </p>
+                                                        </>
+                                                    ) : (
+                                                        <p className="text-xs text-zinc-400 font-bold mt-0.5">
+                                                            Sem categoria vinculada (somente Ranking Geral)
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {userRankingSummary.specific && (
+                                                <div className="text-right shrink-0">
+                                                    <span className="block text-2xl font-black text-white leading-none">
+                                                        {userRankingSummary.specific.position}º
+                                                    </span>
+                                                    {userRankingSummary.specific.isApproved ? (
+                                                        (() => {
+                                                            const meta = getVacancyStatusMeta(userRankingSummary.specific.vacancyStatus);
+                                                            return meta ? (
+                                                                <span className={`inline-block mt-1 px-2 py-0.5 rounded border text-[8px] font-black uppercase tracking-wider ${meta.className}`}>
+                                                                    {meta.label}
+                                                                </span>
+                                                            ) : (
+                                                                <span className="inline-block mt-1 px-2 py-0.5 rounded border text-[8px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border-emerald-500/30">
+                                                                    Aprovado
+                                                                </span>
+                                                            );
+                                                        })()
+                                                    ) : (
+                                                        <span className="inline-block mt-1 px-2 py-0.5 rounded border text-[8px] font-black uppercase tracking-wider bg-red-500/15 text-red-400 border-red-500/30">
+                                                            Reprovado
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {userRankingSummary.general && (
+                                        <div className="bg-zinc-900/80 border border-yellow-500/25 rounded-xl p-4 flex items-center justify-between gap-4">
+                                            <div className="flex items-center gap-3 min-w-0">
+                                                <div className="p-2.5 rounded-xl bg-yellow-500/15 text-yellow-500 border border-yellow-500/25 shrink-0">
+                                                    <Trophy size={18} />
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <span className="block text-[9px] font-black text-yellow-500 uppercase tracking-widest">
+                                                        Sua Posição no Ranking Geral
+                                                    </span>
+                                                    <p className="text-sm font-black text-white uppercase">
+                                                        Classificação Geral
+                                                    </p>
+                                                    <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                                                        {userRankingSummary.general.total} participantes no total
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            <div className="text-right shrink-0">
+                                                <span className="block text-2xl font-black text-white leading-none">
+                                                    {userRankingSummary.general.position}º
+                                                </span>
+                                                {userRankingSummary.general.isApproved ? (
+                                                    (() => {
+                                                        const meta = getVacancyStatusMeta(userRankingSummary.general.vacancyStatus);
+                                                        return meta ? (
+                                                            <span className={`inline-block mt-1 px-2 py-0.5 rounded border text-[8px] font-black uppercase tracking-wider ${meta.className}`}>
+                                                                {meta.label}
+                                                            </span>
+                                                        ) : (
+                                                            <span className="inline-block mt-1 px-2 py-0.5 rounded border text-[8px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border-emerald-500/30">
+                                                                Aprovado
+                                                            </span>
+                                                        );
+                                                    })()
+                                                ) : (
+                                                    <span className="inline-block mt-1 px-2 py-0.5 rounded border text-[8px] font-black uppercase tracking-wider bg-red-500/15 text-red-400 border-red-500/30">
+                                                        Reprovado
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* CABEÇALHO, SELETOR DE RANKING E BUSCA */}
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-4">
+                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                    <div>
+                                        <h3 className="text-sm font-black text-white flex items-center gap-2 uppercase tracking-widest">
+                                            <Trophy size={16} className="text-yellow-500" />
+                                            {selectedRankingView === 'general'
+                                                ? 'Classificação Geral'
+                                                : `Ranking — ${rankingOptions.find((o) => o.id === selectedRankingView)?.label || 'Categoria'}`}
+                                        </h3>
+                                        <p className="text-[10px] text-zinc-500 mt-1 uppercase tracking-wider">
+                                            Ordenado pela maior nota líquida. Apenas candidatos aprovados ocupam vagas.
+                                        </p>
+                                    </div>
+
+                                    {/* BARRA DE PESQUISA */}
+                                    <div className="relative w-full md:w-64">
+                                        <Search className="absolute left-3 top-2.5 text-zinc-500" size={14} />
+                                        <input 
+                                            type="text" 
+                                            placeholder="BUSCAR ALUNO..." 
+                                            value={rankingSearch}
+                                            onChange={(e) => setRankingSearch(e.target.value)}
+                                            className="w-full bg-zinc-950 text-white text-xs font-bold py-2 pl-9 pr-4 rounded-lg border border-zinc-800 focus:border-brand-red focus:outline-none placeholder-zinc-600 uppercase"
+                                        />
+                                    </div>
                                 </div>
 
-                                {/* BARRA DE PESQUISA */}
-                                <div className="relative w-full md:w-64">
-                                    <Search className="absolute left-3 top-2.5 text-zinc-500" size={14} />
-                                    <input 
-                                        type="text" 
-                                        placeholder="BUSCAR ALUNO..." 
-                                        value={rankingSearch}
-                                        onChange={(e) => setRankingSearch(e.target.value)}
-                                        className="w-full bg-zinc-950 text-white text-xs font-bold py-2 pl-9 pr-4 rounded-lg border border-zinc-800 focus:border-brand-red focus:outline-none placeholder-zinc-600 uppercase"
-                                    />
-                                </div>
+                                {/* SELETOR DE CATEGORIAS + PAINEL DE VAGAS */}
+                                {(hasSpecificRanking || hasVacanciesConfigured) && (
+                                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-3 border-t border-zinc-800/80">
+                                        {hasSpecificRanking ? (
+                                            <div className="flex flex-wrap items-center gap-1.5">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSelectedRankingView('general')}
+                                                    className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all ${
+                                                        selectedRankingView === 'general'
+                                                            ? 'bg-yellow-500/15 border-yellow-500/50 text-yellow-400'
+                                                            : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
+                                                    }`}
+                                                >
+                                                    Ranking Geral
+                                                </button>
+                                                {rankingOptions.map((opt) => {
+                                                    const isMine = attemptData.rankingCategoryId === opt.id;
+                                                    const isSelected = selectedRankingView === opt.id;
+                                                    return (
+                                                        <button
+                                                            key={opt.id}
+                                                            type="button"
+                                                            onClick={() => setSelectedRankingView(opt.id)}
+                                                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all ${
+                                                                isSelected
+                                                                    ? 'bg-purple-500/20 border-purple-500/60 text-purple-300'
+                                                                    : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
+                                                            }`}
+                                                        >
+                                                            {opt.label}{isMine ? ' • Você' : ''}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        ) : <div />}
+
+                                        {hasVacanciesConfigured && (
+                                            <div className="flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-wider">
+                                                {selectedRankingView === 'general' && hasSpecificRanking && (
+                                                    <span className="text-[9px] text-zinc-500 font-bold">Total somado:</span>
+                                                )}
+                                                <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
+                                                    Vagas Imediatas: {activeViewVacancies.immediate}
+                                                </span>
+                                                <span className="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/25">
+                                                    Cadastro Reserva: {activeViewVacancies.reserve}
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
 
                             {loadingRanking ? (
@@ -1083,7 +1393,44 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
                                                 </thead>
                                                 <tbody className="divide-y divide-zinc-800 text-xs">
                                                     {approvedList.length > 0 ? (
-                                                        approvedList.map(rank => <RankingRow key={rank.id} rank={rank} currentUserId={currentUser?.uid} />)
+                                                        approvedList.map((rank, idx) => {
+                                                            const prevStatus = idx > 0 ? approvedList[idx - 1].vacancyStatus : null;
+                                                            const showReserveDivider =
+                                                                !rankingSearch.trim() &&
+                                                                hasVacanciesConfigured &&
+                                                                rank.vacancyStatus === 'reserve' &&
+                                                                prevStatus === 'immediate';
+                                                            const showSurplusDivider =
+                                                                !rankingSearch.trim() &&
+                                                                hasVacanciesConfigured &&
+                                                                rank.vacancyStatus === 'surplus' &&
+                                                                (prevStatus === 'reserve' || prevStatus === 'immediate');
+
+                                                            return (
+                                                                <React.Fragment key={rank.id}>
+                                                                    {showReserveDivider && (
+                                                                        <tr className="bg-amber-500/10">
+                                                                            <td colSpan={5} className="px-4 py-1.5 text-center text-[9px] font-black uppercase tracking-widest text-amber-400">
+                                                                                ─── Corte de Vagas Imediatas ({activeViewVacancies.immediate}) • Início do Cadastro Reserva ───
+                                                                            </td>
+                                                                        </tr>
+                                                                    )}
+                                                                    {showSurplusDivider && (
+                                                                        <tr className="bg-zinc-950/90">
+                                                                            <td colSpan={5} className="px-4 py-1.5 text-center text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                                                                ─── Corte do Cadastro Reserva ({activeViewVacancies.immediate + activeViewVacancies.reserve}) • Aprovados Excedentes ───
+                                                                            </td>
+                                                                        </tr>
+                                                                    )}
+                                                                    <RankingRow
+                                                                        rank={rank}
+                                                                        currentUserId={currentUser?.uid}
+                                                                        showCategoryTag={hasSpecificRanking && selectedRankingView === 'general'}
+                                                                        showVacancyBadge={hasVacanciesConfigured}
+                                                                    />
+                                                                </React.Fragment>
+                                                            );
+                                                        })
                                                     ) : (
                                                         <tr><td colSpan={5} className="p-8 text-center text-zinc-600 font-bold uppercase tracking-widest text-[10px]">Nenhum aprovado neste filtro.</td></tr>
                                                     )}
@@ -1114,7 +1461,14 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
                                                 </thead>
                                                 <tbody className="divide-y divide-zinc-800 text-xs">
                                                     {reprovedList.length > 0 ? (
-                                                        reprovedList.map(rank => <RankingRow key={rank.id} rank={rank} currentUserId={currentUser?.uid} />)
+                                                        reprovedList.map(rank => (
+                                                            <RankingRow
+                                                                key={rank.id}
+                                                                rank={rank}
+                                                                currentUserId={currentUser?.uid}
+                                                                showCategoryTag={hasSpecificRanking && selectedRankingView === 'general'}
+                                                            />
+                                                        ))
                                                     ) : (
                                                         <tr><td colSpan={5} className="p-8 text-center text-zinc-600 font-bold uppercase tracking-widest text-[10px]">Nenhum reprovado neste filtro.</td></tr>
                                                     )}

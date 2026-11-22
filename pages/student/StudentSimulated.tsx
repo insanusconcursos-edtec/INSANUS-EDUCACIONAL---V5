@@ -249,6 +249,7 @@ const StudentSimulated: React.FC = () => {
               onClose={() => setIsRunningExam(false)}
               onComplete={handleExamComplete}
               classId={selectedClass?.id}
+              classData={selectedClass}
           />
       );
   }
@@ -260,6 +261,7 @@ const StudentSimulated: React.FC = () => {
               exam={selectedExam}
               attemptData={lastAttempt}
               onBack={handleBackToExams}
+              classData={selectedClass}
           />
       );
   }
