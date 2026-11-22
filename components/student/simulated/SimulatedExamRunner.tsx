@@ -29,7 +29,7 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
   // Discipline Headers Support
   const headers = React.useMemo(() => {
     if (!exam.hasBlocks || !exam.blocks) return {};
-    const h: Record<number, { name: string; range: string }> = {};
+    const h: Record<number, { name: string; range: string; blockName: string; forbidZeroDiscipline: boolean }> = {};
     let currentStart = 1;
     exam.blocks.forEach(block => {
       (block.disciplines || []).forEach(disc => {
@@ -37,7 +37,9 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
         const qEnd = currentStart + (Number(disc.questionCount) || 0) - 1;
         h[qStart] = { 
           name: disc.name, 
-          range: `Questões ${String(qStart).padStart(2, '0')} a ${String(qEnd).padStart(2, '0')}` 
+          range: `Questões ${String(qStart).padStart(2, '0')} a ${String(qEnd).padStart(2, '0')}`,
+          blockName: block.name || '',
+          forbidZeroDiscipline: Boolean(block.forbidZeroDiscipline)
         };
         currentStart = qEnd + 1;
       });
@@ -219,16 +221,24 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
                       return (
                           <React.Fragment key={qNum}>
                             {discHeader && (
-                                <div className="col-span-full mt-8 first:mt-2 mb-4 border-l-4 border-purple-600 bg-zinc-900/50 p-4 rounded-r-xl flex items-center justify-between shadow-[0_10px_20px_rgba(0,0,0,0.3)] border-y border-r border-zinc-800">
+                                <div className="col-span-full mt-8 first:mt-2 mb-4 border-l-4 border-purple-600 bg-zinc-900/50 p-4 rounded-r-xl flex flex-wrap items-center justify-between gap-3 shadow-[0_10px_20px_rgba(0,0,0,0.3)] border-y border-r border-zinc-800">
                                     <div className="flex items-center gap-3">
                                         <div className="w-10 h-10 rounded-xl bg-purple-600/10 flex items-center justify-center text-purple-500 border border-purple-500/20">
                                             <Layers size={18} />
                                         </div>
                                         <div>
                                             <h3 className="text-sm font-black text-white uppercase tracking-widest leading-none mb-1">{discHeader.name}</h3>
-                                            <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">{discHeader.range}</p>
+                                            <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">
+                                                {discHeader.blockName ? `${discHeader.blockName} • ` : ''}{discHeader.range}
+                                            </p>
                                         </div>
                                     </div>
+                                    {discHeader.forbidZeroDiscipline && (
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-500/10 border border-red-500/30 text-[10px] font-black uppercase tracking-wider text-red-400">
+                                            <AlertTriangle size={12} />
+                                            Não zerar esta disciplina
+                                        </span>
+                                    )}
                                 </div>
                             )}
 

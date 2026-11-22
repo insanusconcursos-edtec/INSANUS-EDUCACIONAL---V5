@@ -14,6 +14,7 @@ import {
   updateExam,
   ExamStatus
 } from '../../../services/simulatedService';
+import { recalculateAttemptsForExam } from '../../../services/simulatedAttemptService';
 
 interface SimulatedExamConfigModalProps {
   isOpen: boolean;
@@ -100,7 +101,12 @@ const SimulatedExamConfigModal: React.FC<SimulatedExamConfigModalProps> = ({
         setIsLeveling(examToEdit.isLeveling || false);
         if (examToEdit.levelingRanges) setLevelingRanges(examToEdit.levelingRanges);
         setHasBlocks(examToEdit.hasBlocks);
-        setBlocks(examToEdit.blocks || []);
+        setBlocks(
+          (examToEdit.blocks || []).map(b => ({
+            ...b,
+            forbidZeroDiscipline: Boolean(b.forbidZeroDiscipline)
+          }))
+        );
         
         // Load Duration
         if (examToEdit.duration) {
@@ -151,7 +157,7 @@ const SimulatedExamConfigModal: React.FC<SimulatedExamConfigModalProps> = ({
 
   // Block Logic
   const handleAddBlock = () => {
-    setBlocks([...blocks, { name: '', questionCount: 0, minApproval: 0, disciplines: [] }]);
+    setBlocks([...blocks, { name: '', questionCount: 0, minApproval: 0, forbidZeroDiscipline: false, disciplines: [] }]);
   };
 
   const handleBlockChange = (index: number, field: keyof ExamBlock, value: any) => {
@@ -262,6 +268,7 @@ const SimulatedExamConfigModal: React.FC<SimulatedExamConfigModalProps> = ({
                 name: b.name || 'Sem Nome',
                 questionCount: Number(b.questionCount) || 0,
                 minApproval: Number(b.minApproval) || 0,
+                forbidZeroDiscipline: Boolean(b.forbidZeroDiscipline),
                 disciplines: (b.disciplines || []).map(d => ({
                     id: d.id || crypto.randomUUID(),
                     name: d.name || 'Sem Nome',
@@ -282,6 +289,19 @@ const SimulatedExamConfigModal: React.FC<SimulatedExamConfigModalProps> = ({
 
         if (examToEdit && examToEdit.id) {
             await updateExam(classId, examToEdit.id, examData, filesToUpload);
+            try {
+                const mergedExam: SimulatedExam = {
+                    ...examToEdit,
+                    ...examData,
+                    id: examToEdit.id,
+                    files: examToEdit.files || {},
+                    questions: examToEdit.questions || [],
+                    autodiagnosisDisciplines: examToEdit.autodiagnosisDisciplines || []
+                };
+                await recalculateAttemptsForExam(classId, examToEdit.id, mergedExam);
+            } catch (recalcError) {
+                console.error("Erro ao recalcular tentativas após salvar configuração:", recalcError);
+            }
         } else {
             await addExamToClass(classId, examData, filesToUpload || {});
         }
@@ -683,6 +703,43 @@ const SimulatedExamConfigModal: React.FC<SimulatedExamConfigModalProps> = ({
                                                 onChange={e => handleBlockChange(index, 'minApproval', Number(e.target.value))}
                                                 className="w-full bg-zinc-900 border-b border-zinc-800 px-2 py-1.5 text-xs text-white text-center focus:outline-none focus:border-purple-500"
                                             />
+                                        </div>
+                                    </div>
+
+                                    {/* Regra Condicional do Bloco: Não Zerar Nenhuma Disciplina */}
+                                    <div
+                                        onClick={() => handleBlockChange(index, 'forbidZeroDiscipline', !block.forbidZeroDiscipline)}
+                                        className={`p-3 rounded-lg border transition-all cursor-pointer select-none flex items-center justify-between gap-4 ${
+                                            block.forbidZeroDiscipline
+                                                ? 'bg-red-950/25 border-red-500/40'
+                                                : 'bg-zinc-900/40 border-zinc-800/80 hover:border-zinc-700'
+                                        }`}
+                                    >
+                                        <div className="flex items-start gap-2.5 min-w-0">
+                                            <AlertTriangle
+                                                size={14}
+                                                className={`mt-0.5 shrink-0 ${block.forbidZeroDiscipline ? 'text-red-400' : 'text-zinc-600'}`}
+                                            />
+                                            <div className="min-w-0">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className={`text-[10px] font-black uppercase tracking-wider ${block.forbidZeroDiscipline ? 'text-red-400' : 'text-zinc-300'}`}>
+                                                        Não zerar nenhuma disciplina
+                                                    </span>
+                                                    {block.forbidZeroDiscipline && (
+                                                        <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/30">
+                                                            Critério Eliminatório
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-[10px] text-zinc-500 leading-snug mt-0.5">
+                                                    Se ativado, o candidato será reprovado caso zere (nota ≤ 0) qualquer disciplina deste bloco, mesmo atingindo a nota mínima.
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div
+                                            className={`w-9 h-5 rounded-full relative shrink-0 transition-colors ${block.forbidZeroDiscipline ? 'bg-red-500' : 'bg-zinc-700'}`}
+                                        >
+                                            <div className={`absolute top-1 left-1 w-3 h-3 bg-white rounded-full transition-transform ${block.forbidZeroDiscipline ? 'translate-x-4' : ''}`} />
                                         </div>
                                     </div>
 

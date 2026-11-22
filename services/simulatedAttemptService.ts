@@ -32,8 +32,10 @@ export interface SimulatedAttempt {
   totalQuestions: number;
   maxPossibleScore?: number;
   isApproved: boolean;
+  disapprovalReasons?: string[];
   completedAt: any;
   autodiagnosis?: {
+    rawAnswers?: Record<number, string>;
     analysis: Record<string, {
       strong: number;
       review: number;
@@ -43,6 +45,249 @@ export interface SimulatedAttempt {
     }>;
   };
 }
+
+export interface DisciplineEvaluation {
+  id: string;
+  name: string;
+  questionCount: number;
+  startIndex: number;
+  endIndex: number;
+  correctCount: number;
+  wrongCount: number;
+  blankCount: number;
+  score: number;
+  maxPoints: number;
+  isZeroed: boolean;
+}
+
+export interface BlockEvaluation {
+  name: string;
+  questionCount: number;
+  minApproval: number;
+  forbidZeroDiscipline: boolean;
+  score: number;
+  maxPoints: number;
+  percent: number;
+  passedMinApproval: boolean;
+  zeroedDisciplines: string[];
+  passedNoZeroRule: boolean;
+  isApproved: boolean;
+  disciplines: DisciplineEvaluation[];
+}
+
+export interface AttemptEvaluationResult {
+  score: number;
+  correctCount: number;
+  wrongCount: number;
+  blankCount: number;
+  maxPossibleScore: number;
+  overallPercent: number;
+  passedOverallMin: boolean;
+  isApproved: boolean;
+  disapprovalReasons: string[];
+  blockEvaluations: BlockEvaluation[];
+}
+
+const EPSILON = 1e-9;
+
+/**
+ * Avalia pontuação, aproveitamento por bloco/disciplina e todos os critérios de aprovação
+ * (nota mínima geral, nota mínima por bloco e regra condicional "não zerar nenhuma disciplina").
+ */
+export const evaluateSimulatedAttempt = (
+  exam: SimulatedExam,
+  userAnswers: Record<number, string> = {}
+): AttemptEvaluationResult => {
+  const questionsMap = new Map<number, ExamQuestion>();
+  if (exam.questions) {
+    exam.questions.forEach(q => {
+      questionsMap.set(q.index, q);
+    });
+  }
+
+  const gradeQuestion = (qIndex: number) => {
+    const userAnswer = userAnswers[qIndex] || (userAnswers as Record<string, string>)[String(qIndex)];
+    const questionData = questionsMap.get(qIndex);
+    const correctAnswer = questionData?.answer;
+    const weight = Number(questionData?.value) || 1;
+
+    if (questionData?.isAnnulled) {
+      return { status: 'correct' as const, points: weight, weight };
+    }
+    if (!userAnswer) {
+      return { status: 'blank' as const, points: 0, weight };
+    }
+    if (userAnswer === correctAnswer) {
+      return { status: 'correct' as const, points: weight, weight };
+    }
+    return {
+      status: 'wrong' as const,
+      points: exam.hasPenalty ? -weight : 0,
+      weight
+    };
+  };
+
+  // 1. Cálculo Geral
+  let correct = 0;
+  let wrong = 0;
+  let blank = 0;
+  let rawScore = 0;
+  let totalMaxPoints = 0;
+
+  for (let i = 1; i <= exam.questionCount; i++) {
+    const graded = gradeQuestion(i);
+    totalMaxPoints += graded.weight;
+    rawScore += graded.points;
+    if (graded.status === 'correct') correct++;
+    else if (graded.status === 'wrong') wrong++;
+    else blank++;
+  }
+
+  const maxPoints = totalMaxPoints > 0 ? totalMaxPoints : exam.questionCount;
+  const overallPercent = maxPoints > 0 ? (rawScore / maxPoints) * 100 : 0;
+  const minOverallPercent = Number(exam.minApprovalPercent) || 0;
+  const minOverallScore = (minOverallPercent / 100) * maxPoints;
+  const passedOverallMin = minOverallPercent <= 0 || rawScore + EPSILON >= minOverallScore;
+
+  const disapprovalReasons: string[] = [];
+  if (!passedOverallMin) {
+    disapprovalReasons.push(
+      `Não atingiu a nota mínima geral de ${minOverallPercent}% (${Number(rawScore.toFixed(2))} de ${Number(minOverallScore.toFixed(2))} pts exigidos)`
+    );
+  }
+
+  // 2. Cálculo e Critérios por Bloco / Disciplina
+  const blockEvaluations: BlockEvaluation[] = [];
+
+  if (exam.hasBlocks && Array.isArray(exam.blocks) && exam.blocks.length > 0) {
+    let currentStart = 1;
+
+    exam.blocks.forEach((block, blockIdx) => {
+      const blockName = block.name?.trim() || `Bloco ${blockIdx + 1}`;
+      const blockMinApproval = Number(block.minApproval) || 0;
+      const forbidZeroDiscipline = Boolean(block.forbidZeroDiscipline);
+      const blockDisciplines = block.disciplines || [];
+
+      let blockScore = 0;
+      let blockMaxPoints = 0;
+      const disciplinesEval: DisciplineEvaluation[] = [];
+      const zeroedDisciplines: string[] = [];
+
+      if (blockDisciplines.length > 0) {
+        blockDisciplines.forEach((disc, discIdx) => {
+          const discName = disc.name?.trim() || `Disciplina ${discIdx + 1}`;
+          const qCount = Math.max(0, Number(disc.questionCount) || 0);
+          const startIndex = currentStart;
+          const endIndex = qCount > 0 ? currentStart + qCount - 1 : currentStart - 1;
+
+          let dCorrect = 0;
+          let dWrong = 0;
+          let dBlank = 0;
+          let dScore = 0;
+          let dMaxPoints = 0;
+
+          for (let i = startIndex; i <= endIndex; i++) {
+            const graded = gradeQuestion(i);
+            dMaxPoints += graded.weight;
+            dScore += graded.points;
+            if (graded.status === 'correct') dCorrect++;
+            else if (graded.status === 'wrong') dWrong++;
+            else dBlank++;
+          }
+
+          if (qCount > 0) {
+            currentStart = endIndex + 1;
+          }
+
+          blockScore += dScore;
+          blockMaxPoints += dMaxPoints;
+
+          const roundedDiscScore = Number(dScore.toFixed(4));
+          const isZeroed = qCount > 0 && roundedDiscScore <= 0;
+          if (isZeroed) {
+            zeroedDisciplines.push(discName);
+          }
+
+          disciplinesEval.push({
+            id: disc.id || `${blockIdx}_${discIdx}`,
+            name: discName,
+            questionCount: qCount,
+            startIndex,
+            endIndex,
+            correctCount: dCorrect,
+            wrongCount: dWrong,
+            blankCount: dBlank,
+            score: Number(dScore.toFixed(2)),
+            maxPoints: Number(dMaxPoints.toFixed(2)),
+            isZeroed
+          });
+        });
+      } else {
+        const qCount = Math.max(0, Number(block.questionCount) || 0);
+        const startIndex = currentStart;
+        const endIndex = qCount > 0 ? currentStart + qCount - 1 : currentStart - 1;
+
+        for (let i = startIndex; i <= endIndex; i++) {
+          const graded = gradeQuestion(i);
+          blockMaxPoints += graded.weight;
+          blockScore += graded.points;
+        }
+
+        if (qCount > 0) {
+          currentStart = endIndex + 1;
+        }
+      }
+
+      const blockMinScore = (blockMinApproval / 100) * blockMaxPoints;
+      const passedMinApproval =
+        blockMinApproval <= 0 || blockMaxPoints <= 0 || blockScore + EPSILON >= blockMinScore;
+      const passedNoZeroRule = !forbidZeroDiscipline || zeroedDisciplines.length === 0;
+      const blockApproved = passedMinApproval && passedNoZeroRule;
+
+      if (!passedMinApproval) {
+        disapprovalReasons.push(
+          `Não atingiu o mínimo de ${blockMinApproval}% no bloco "${blockName}" (${Number(blockScore.toFixed(2))} de ${Number(blockMinScore.toFixed(2))} pts exigidos)`
+        );
+      }
+
+      if (!passedNoZeroRule) {
+        zeroedDisciplines.forEach(discName => {
+          disapprovalReasons.push(
+            `Zerou a disciplina "${discName}" no bloco "${blockName}" (regra: não zerar nenhuma disciplina)`
+          );
+        });
+      }
+
+      blockEvaluations.push({
+        name: blockName,
+        questionCount: Number(block.questionCount) || 0,
+        minApproval: blockMinApproval,
+        forbidZeroDiscipline,
+        score: Number(blockScore.toFixed(2)),
+        maxPoints: Number(blockMaxPoints.toFixed(2)),
+        percent: blockMaxPoints > 0 ? Number(((blockScore / blockMaxPoints) * 100).toFixed(1)) : 0,
+        passedMinApproval,
+        zeroedDisciplines,
+        passedNoZeroRule,
+        isApproved: blockApproved,
+        disciplines: disciplinesEval
+      });
+    });
+  }
+
+  return {
+    score: Number(rawScore.toFixed(2)),
+    correctCount: correct,
+    wrongCount: wrong,
+    blankCount: blank,
+    maxPossibleScore: Number(maxPoints.toFixed(2)),
+    overallPercent: Number(overallPercent.toFixed(1)),
+    passedOverallMin,
+    isApproved: disapprovalReasons.length === 0,
+    disapprovalReasons,
+    blockEvaluations
+  };
+};
 
 /**
  * Verifica se o usuário já realizou este simulado.
@@ -80,62 +325,17 @@ export const submitExamAttempt = async (
     throw new Error("Você já realizou este simulado.");
   }
 
-  // 2. Cálculo da Nota
-  let correct = 0;
-  let wrong = 0;
-  let blank = 0;
-  let score = 0;
-  let totalMaxPoints = 0;
-
-  const questionsMap = new Map<number, ExamQuestion>();
-  if (exam.questions) {
-    exam.questions.forEach(q => {
-      questionsMap.set(q.index, q);
-    });
-  }
-
-  // Itera sobre o total de questões do simulado
-  for (let i = 1; i <= exam.questionCount; i++) {
-    // Normalização da chave (aceita number ou string)
-    const userAnswer = userAnswers[i] || userAnswers[String(i)];
-    const questionData = questionsMap.get(i);
-    const correctAnswer = questionData?.answer;
-    const questionWeight = questionData?.value || 1;
-
-    totalMaxPoints += questionWeight;
-
-    // Se a questão foi anulada, conta como ponto para todos (Acerto Automático)
-    if (questionData?.isAnnulled) {
-        correct++;
-        score += questionWeight;
-        continue;
-    }
-
-    if (!userAnswer) {
-        blank++;
-        // Em branco não pontua nem penaliza
-    } else if (userAnswer === correctAnswer) {
-        correct++;
-        score += questionWeight; // Ponto ponderado por acerto
-    } else {
-        wrong++;
-        // Lógica de Penalidade (Estilo Cespe)
-        if (exam.hasPenalty) {
-            score -= questionWeight; // Penalidade ponderada por erro
-        }
-    }
-  }
-
-  // 3. Aprovação e Nota Líquida
-  // Permite nota negativa (padrão Cespe)
-  const maxPoints = totalMaxPoints > 0 ? totalMaxPoints : exam.questionCount;
-  
-  // Percentual para aprovação
-  // Nota: Se a nota for negativa, consideramos 0 para efeito de % de aproveitamento visual,
-  // mas o score salvo pode ser negativo. Para aprovação, score >= minPoints.
-  // Cálculo de aprovação baseado em percentual da pontuação total possível
-  const minScore = (exam.minApprovalPercent / 100) * maxPoints;
-  const isApproved = score >= minScore;
+  // 2. Cálculo da Nota e Critérios de Aprovação (Geral + Blocos + Não Zerar Disciplinas)
+  const evaluation = evaluateSimulatedAttempt(exam, userAnswers);
+  const {
+    correctCount: correct,
+    wrongCount: wrong,
+    blankCount: blank,
+    score,
+    maxPossibleScore: maxPoints,
+    isApproved,
+    disapprovalReasons
+  } = evaluation;
 
   // 4. Preparar Nome de Exibição
   // Lógica: Se tem nickname, usa. Senão, usa Nome.
@@ -152,13 +352,14 @@ export const submitExamAttempt = async (
     simulatedTitle: exam.title,
     classId: classId || '',
     userAnswers,
-    score: Number(score.toFixed(2)), // Fix decimal
+    score,
     correctCount: correct,
     wrongCount: wrong,
     blankCount: blank,
     totalQuestions: exam.questionCount,
-    maxPossibleScore: Number(maxPoints.toFixed(2)),
+    maxPossibleScore: maxPoints,
     isApproved,
+    disapprovalReasons,
     completedAt: serverTimestamp()
   };
 
@@ -350,64 +551,21 @@ export const recalculateAttemptsForExam = async (
     return;
   }
 
-  const questionsMap = new Map<number, ExamQuestion>();
-  if (exam.questions) {
-    exam.questions.forEach(q => {
-      questionsMap.set(q.index, q);
-    });
-  }
-
   // 2. Processar cada tentativa
   for (const docSnap of snapshot.docs) {
     const attempt = docSnap.data() as SimulatedAttempt;
     const userAnswers = attempt.userAnswers || {};
 
-    let correct = 0;
-    let wrong = 0;
-    let blank = 0;
-    let score = 0;
-    let totalMaxPoints = 0;
-
-    // Itera sobre o total de questões do simulado
-    for (let i = 1; i <= exam.questionCount; i++) {
-      const userAnswer = userAnswers[i] || userAnswers[String(i)];
-      const questionData = questionsMap.get(i);
-      const correctAnswer = questionData?.answer;
-      const questionWeight = questionData?.value || 1;
-
-      totalMaxPoints += questionWeight;
-
-      // Se a questão foi anulada, conta como ponto para todos
-      if (questionData?.isAnnulled) {
-        correct++;
-        score += questionWeight;
-        continue;
-      }
-
-      if (!userAnswer) {
-        blank++;
-      } else if (userAnswer === correctAnswer) {
-        correct++;
-        score += questionWeight;
-      } else {
-        wrong++;
-        if (exam.hasPenalty) {
-          score -= questionWeight;
-        }
-      }
-    }
-
-    const maxPoints = totalMaxPoints > 0 ? totalMaxPoints : exam.questionCount;
-    const minScore = (exam.minApprovalPercent / 100) * maxPoints;
-    const isApproved = score >= minScore;
+    const evaluation = evaluateSimulatedAttempt(exam, userAnswers);
 
     const updates: Partial<SimulatedAttempt> = {
-      score: Number(score.toFixed(2)),
-      correctCount: correct,
-      wrongCount: wrong,
-      blankCount: blank,
-      maxPossibleScore: Number(maxPoints.toFixed(2)),
-      isApproved
+      score: evaluation.score,
+      correctCount: evaluation.correctCount,
+      wrongCount: evaluation.wrongCount,
+      blankCount: evaluation.blankCount,
+      maxPossibleScore: evaluation.maxPossibleScore,
+      isApproved: evaluation.isApproved,
+      disapprovalReasons: evaluation.disapprovalReasons
     };
 
     // Recalcular autodiagnóstico se ele existir e contiver respostas

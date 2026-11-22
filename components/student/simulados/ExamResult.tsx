@@ -12,7 +12,7 @@ import { collection, query, where, orderBy, limit, getDocs } from 'firebase/fire
 import { db } from '../../../services/firebase';
 import { useAuth } from '../../../contexts/AuthContext';
 import { SimulatedExam } from '../../../services/simulatedService';
-import { SimulatedAttempt } from '../../../services/simulatedAttemptService';
+import { SimulatedAttempt, evaluateSimulatedAttempt } from '../../../services/simulatedAttemptService';
 import { StudentAutoDiagnosis } from './StudentAutoDiagnosis';
 import { updateStudent } from '../../../services/userService';
 import { 
@@ -61,9 +61,22 @@ const RankingRow: React.FC<{ rank: SimulatedAttempt & { originalRank: number }, 
             <td className="p-4 text-center text-emerald-500 font-bold">{rank.correctCount}</td>
             <td className="p-4 text-center text-red-500 font-bold">{rank.wrongCount}</td>
             <td className="p-4 text-center">
-                <span className={`text-sm font-black ${rank.isApproved ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {rank.score.toFixed(1)}
-                </span>
+                <div className="flex flex-col items-center">
+                    <span
+                        title={!rank.isApproved && rank.disapprovalReasons?.length ? rank.disapprovalReasons.join(' | ') : undefined}
+                        className={`text-sm font-black ${rank.isApproved ? 'text-emerald-400' : 'text-red-400'}`}
+                    >
+                        {rank.score.toFixed(1)}
+                    </span>
+                    {!rank.isApproved && rank.disapprovalReasons && rank.disapprovalReasons.length > 0 && (
+                        <span
+                            title={rank.disapprovalReasons.join(' | ')}
+                            className="text-[9px] font-bold text-red-400/80 uppercase tracking-wider max-w-[180px] truncate mt-0.5"
+                        >
+                            {rank.disapprovalReasons[0]}
+                        </span>
+                    )}
+                </div>
             </td>
         </tr>
     );
@@ -282,6 +295,20 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
         }
         return stats;
     }, [disciplineStats, chartMode]);
+
+    // Avaliação detalhada dos critérios de aprovação (geral, blocos e regra de não zerar disciplina)
+    const attemptEvaluation = useMemo(
+        () => evaluateSimulatedAttempt(exam, attemptData.userAnswers || {}),
+        [exam, attemptData.userAnswers]
+    );
+
+    const activeDisapprovalReasons = useMemo(() => {
+        if (attemptData.isApproved) return [];
+        if (attemptData.disapprovalReasons && attemptData.disapprovalReasons.length > 0) {
+            return attemptData.disapprovalReasons;
+        }
+        return attemptEvaluation.disapprovalReasons;
+    }, [attemptData.isApproved, attemptData.disapprovalReasons, attemptEvaluation.disapprovalReasons]);
 
     // Estados do Ranking
     const [rankingData, setRankingData] = useState<SimulatedAttempt[]>([]);
@@ -532,6 +559,111 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
                                     <span className="text-[10px] uppercase text-zinc-500 font-bold tracking-widest">Em Branco</span>
                                 </div>
                             </div>
+
+                            {/* MOTIVOS DE REPROVAÇÃO (Critérios não atingidos) */}
+                            {!attemptData.isApproved && activeDisapprovalReasons.length > 0 && (
+                                <div className="p-5 rounded-2xl border border-red-500/30 bg-red-950/20 flex items-start gap-4 animate-in fade-in duration-300">
+                                    <div className="p-2.5 rounded-xl bg-red-500/15 text-red-400 border border-red-500/30 shrink-0">
+                                        <AlertTriangle size={20} />
+                                    </div>
+                                    <div className="space-y-2 min-w-0">
+                                        <div>
+                                            <h4 className="text-xs font-black text-red-400 uppercase tracking-widest">
+                                                Critérios de Aprovação Não Atingidos
+                                            </h4>
+                                            <p className="text-[11px] text-zinc-400 mt-0.5">
+                                                Mesmo com boa pontuação geral, é obrigatório cumprir todos os critérios do edital do simulado:
+                                            </p>
+                                        </div>
+                                        <ul className="space-y-1.5">
+                                            {activeDisapprovalReasons.map((reason, idx) => (
+                                                <li key={idx} className="text-xs text-red-200 font-semibold flex items-start gap-2">
+                                                    <XCircle size={14} className="text-red-400 shrink-0 mt-0.5" />
+                                                    <span>{reason}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* RESUMO DE CRITÉRIOS POR BLOCO */}
+                            {exam.hasBlocks && attemptEvaluation.blockEvaluations.length > 0 && (
+                                <div className="bg-zinc-900/40 rounded-2xl border border-zinc-800/70 p-5 md:p-6 space-y-4">
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+                                        <h3 className="text-sm font-black text-white uppercase tracking-widest flex items-center gap-2">
+                                            <ListChecks size={16} className="text-purple-400" />
+                                            Desempenho e Critérios por Bloco
+                                        </h3>
+                                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                                            Mínimo geral exigido: {exam.minApprovalPercent}%
+                                        </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {attemptEvaluation.blockEvaluations.map((block, bIdx) => (
+                                            <div
+                                                key={bIdx}
+                                                className={`p-4 rounded-xl border space-y-3 ${
+                                                    block.isApproved
+                                                        ? 'bg-zinc-950/70 border-emerald-500/25'
+                                                        : 'bg-red-950/15 border-red-500/35'
+                                                }`}
+                                            >
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <h4 className="text-xs font-black text-white uppercase tracking-wider truncate">
+                                                            {block.name}
+                                                        </h4>
+                                                        <p className="text-[10px] text-zinc-500 font-bold uppercase mt-0.5">
+                                                            {block.score.toFixed(1)} / {block.maxPoints.toFixed(1)} pts ({block.percent.toFixed(1)}%)
+                                                        </p>
+                                                    </div>
+                                                    <span
+                                                        className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest shrink-0 border ${
+                                                            block.isApproved
+                                                                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                                                                : 'bg-red-500/15 text-red-400 border-red-500/30'
+                                                        }`}
+                                                    >
+                                                        {block.isApproved ? 'Aprovado' : 'Reprovado'}
+                                                    </span>
+                                                </div>
+
+                                                <div className="flex flex-wrap gap-2">
+                                                    {block.minApproval > 0 && (
+                                                        <span
+                                                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold border ${
+                                                                block.passedMinApproval
+                                                                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                                                                    : 'bg-red-500/10 text-red-400 border-red-500/30'
+                                                            }`}
+                                                        >
+                                                            {block.passedMinApproval ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
+                                                            Mínimo do bloco: {block.minApproval}%
+                                                        </span>
+                                                    )}
+
+                                                    {block.forbidZeroDiscipline && (
+                                                        <span
+                                                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold border ${
+                                                                block.passedNoZeroRule
+                                                                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                                                                    : 'bg-red-500/10 text-red-400 border-red-500/30'
+                                                            }`}
+                                                        >
+                                                            {block.passedNoZeroRule ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                                                            {block.passedNoZeroRule
+                                                                ? 'Não zerar disciplinas: OK'
+                                                                : `Zerou: ${block.zeroedDisciplines.join(', ')}`}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
                             {/* GRÁFICO DE DESEMPENHO POR DISCIPLINA */}
                             {disciplineStats.length > 0 && (

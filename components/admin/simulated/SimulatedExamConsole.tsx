@@ -663,11 +663,24 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, ex
                             </td>
                           )}
                           <td className="p-4 text-center">
-                            <span className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest border ${
-                              result.isApproved ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-red-500/10 border-red-500/30 text-red-400'
-                            }`}>
-                              {result.isApproved ? 'APROVADO' : 'REPROVADO'}
-                            </span>
+                            <div className="flex flex-col items-center gap-1">
+                              <span
+                                title={!result.isApproved && result.disapprovalReasons?.length ? result.disapprovalReasons.join(' | ') : undefined}
+                                className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest border ${
+                                  result.isApproved ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-red-500/10 border-red-500/30 text-red-400'
+                                }`}
+                              >
+                                {result.isApproved ? 'APROVADO' : 'REPROVADO'}
+                              </span>
+                              {!result.isApproved && result.disapprovalReasons && result.disapprovalReasons.length > 0 && (
+                                <span
+                                  title={result.disapprovalReasons.join(' | ')}
+                                  className="text-[9px] font-semibold text-red-400/80 max-w-[200px] truncate"
+                                >
+                                  {result.disapprovalReasons[0]}
+                                </span>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );

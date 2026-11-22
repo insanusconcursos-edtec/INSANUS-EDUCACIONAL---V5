@@ -30,7 +30,8 @@ export interface BlockDiscipline {
 export interface ExamBlock {
   name: string;
   questionCount: number;
-  minApproval: number; // Porcentagem ou valor absoluto (depende da regra, assumindo % por enquanto)
+  minApproval: number; // Porcentagem mínima de aprovação no bloco
+  forbidZeroDiscipline?: boolean; // Regra condicional: não zerar nenhuma disciplina do bloco
   disciplines?: BlockDiscipline[];
 }
 
@@ -69,6 +70,7 @@ export interface StudentExamResult {
   maxPossibleScore?: number;
   completedAt: any;
   isApproved: boolean;
+  disapprovalReasons?: string[];
 }
 
 export interface SimulatedExam {
@@ -326,7 +328,8 @@ export const getStudentExamResults = async (classId: string, examId: string): Pr
       totalQuestions: data.totalQuestions,
       maxPossibleScore: data.maxPossibleScore,
       completedAt: data.completedAt,
-      isApproved: data.isApproved
+      isApproved: data.isApproved,
+      disapprovalReasons: Array.isArray(data.disapprovalReasons) ? data.disapprovalReasons : []
     } as StudentExamResult;
   });
 };
