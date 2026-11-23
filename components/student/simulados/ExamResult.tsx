@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { 
@@ -166,7 +166,20 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
     // Estado para controlar as Abas
     const [activeTab, setActiveTab] = useState<'PERFORMANCE' | 'RANKING' | 'AUTODIAGNOSIS' | 'RECURSOS'>(initialTab); 
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);    
+    const [isRankingSelectOpen, setIsRankingSelectOpen] = useState(false);
+    const rankingSelectRef = useRef<HTMLDivElement | null>(null);
     const [chartMode, setChartMode] = useState<'quantity' | 'percentage' | 'autodiagnosis'>('quantity');
+
+    useEffect(() => {
+        if (!isRankingSelectOpen) return;
+        const handleClickOutside = (event: MouseEvent) => {
+            if (rankingSelectRef.current && !rankingSelectRef.current.contains(event.target as Node)) {
+                setIsRankingSelectOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [isRankingSelectOpen]);
 
     // Recursos states
     const [studentResources, setStudentResources] = useState<SimulatedResource[]>([]);
@@ -1315,37 +1328,171 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
                                 {(hasSpecificRanking || hasVacanciesConfigured) && (
                                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pt-3 border-t border-zinc-800/80">
                                         {hasSpecificRanking ? (
-                                            <div className="flex flex-wrap items-center gap-1.5">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setSelectedRankingView('general')}
-                                                    className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all ${
-                                                        selectedRankingView === 'general'
-                                                            ? 'bg-yellow-500/15 border-yellow-500/50 text-yellow-400'
-                                                            : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
-                                                    }`}
-                                                >
-                                                    Ranking Geral
-                                                </button>
-                                                {rankingOptions.map((opt) => {
-                                                    const isMine = attemptData.rankingCategoryId === opt.id;
-                                                    const isSelected = selectedRankingView === opt.id;
-                                                    return (
-                                                        <button
-                                                            key={opt.id}
-                                                            type="button"
-                                                            onClick={() => setSelectedRankingView(opt.id)}
-                                                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all ${
-                                                                isSelected
-                                                                    ? 'bg-purple-500/20 border-purple-500/60 text-purple-300'
-                                                                    : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
+                                            <>
+                                                {/* SELETOR MOBILE (DROPDOWN CUSTOMIZADO ABRINDO PARA BAIXO) */}
+                                                <div ref={rankingSelectRef} className="md:hidden w-full space-y-1.5 relative">
+                                                    <span className="block text-[9px] font-black text-zinc-400 uppercase tracking-widest">
+                                                        {normalizedRankingConfig.mode === 'gender'
+                                                            ? 'Selecionar Ranking por Gênero'
+                                                            : 'Selecionar Ranking por Região'}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setIsRankingSelectOpen((prev) => !prev)}
+                                                        aria-expanded={isRankingSelectOpen}
+                                                        aria-haspopup="listbox"
+                                                        className={`w-full flex items-center justify-between gap-2 bg-zinc-950 rounded-xl px-3.5 py-3 text-xs font-black uppercase tracking-wider border transition-all ${
+                                                            selectedRankingView === 'general'
+                                                                ? 'border-yellow-500/50 text-yellow-300'
+                                                                : 'border-purple-500/60 text-purple-200'
+                                                        }`}
+                                                    >
+                                                        <div className="flex items-center gap-2.5 min-w-0">
+                                                            <span
+                                                                className={`shrink-0 ${
+                                                                    selectedRankingView === 'general'
+                                                                        ? 'text-yellow-400'
+                                                                        : 'text-purple-400'
+                                                                }`}
+                                                            >
+                                                                {selectedRankingView === 'general' ? (
+                                                                    <Trophy size={15} />
+                                                                ) : normalizedRankingConfig.mode === 'gender' ? (
+                                                                    <Users size={15} />
+                                                                ) : (
+                                                                    <MapPin size={15} />
+                                                                )}
+                                                            </span>
+                                                            <span className="truncate">
+                                                                {selectedRankingView === 'general'
+                                                                    ? 'Ranking Geral'
+                                                                    : (() => {
+                                                                          const activeOpt = rankingOptions.find(
+                                                                              (o) => o.id === selectedRankingView
+                                                                          );
+                                                                          const isMine =
+                                                                              attemptData.rankingCategoryId ===
+                                                                              selectedRankingView;
+                                                                          return `${activeOpt?.label || 'Categoria'}${isMine ? ' • Você' : ''}`;
+                                                                      })()}
+                                                            </span>
+                                                        </div>
+                                                        <ChevronDown
+                                                            size={16}
+                                                            className={`shrink-0 text-zinc-400 transition-transform duration-200 ${
+                                                                isRankingSelectOpen ? 'rotate-180' : ''
                                                             }`}
+                                                        />
+                                                    </button>
+
+                                                    {isRankingSelectOpen && (
+                                                        <div
+                                                            role="listbox"
+                                                            className="absolute top-full left-0 right-0 mt-2 bg-[#161618] border border-zinc-700/80 rounded-xl shadow-2xl z-[220] max-h-60 overflow-y-auto divide-y divide-zinc-800/60 animate-in fade-in slide-in-from-top-1 duration-150"
                                                         >
-                                                            {opt.label}{isMine ? ' • Você' : ''}
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                role="option"
+                                                                aria-selected={selectedRankingView === 'general'}
+                                                                onClick={() => {
+                                                                    setSelectedRankingView('general');
+                                                                    setIsRankingSelectOpen(false);
+                                                                }}
+                                                                className={`w-full flex items-center justify-between gap-2 px-4 py-3 text-left text-[11px] font-black uppercase tracking-wider transition-colors ${
+                                                                    selectedRankingView === 'general'
+                                                                        ? 'bg-yellow-500/15 text-yellow-300'
+                                                                        : 'text-zinc-300 hover:bg-zinc-800/80'
+                                                                }`}
+                                                            >
+                                                                <span className="flex items-center gap-2 min-w-0">
+                                                                    <Trophy
+                                                                        size={13}
+                                                                        className={
+                                                                            selectedRankingView === 'general'
+                                                                                ? 'text-yellow-400 shrink-0'
+                                                                                : 'text-zinc-500 shrink-0'
+                                                                        }
+                                                                    />
+                                                                    <span className="truncate">Ranking Geral</span>
+                                                                </span>
+                                                                {selectedRankingView === 'general' && (
+                                                                    <Check size={14} className="text-yellow-400 shrink-0" />
+                                                                )}
+                                                            </button>
+
+                                                            {rankingOptions.map((opt) => {
+                                                                const isMine = attemptData.rankingCategoryId === opt.id;
+                                                                const isSelected = selectedRankingView === opt.id;
+                                                                return (
+                                                                    <button
+                                                                        key={opt.id}
+                                                                        type="button"
+                                                                        role="option"
+                                                                        aria-selected={isSelected}
+                                                                        onClick={() => {
+                                                                            setSelectedRankingView(opt.id);
+                                                                            setIsRankingSelectOpen(false);
+                                                                        }}
+                                                                        className={`w-full flex items-center justify-between gap-2 px-4 py-3 text-left text-[11px] font-black uppercase tracking-wider transition-colors ${
+                                                                            isSelected
+                                                                                ? 'bg-purple-500/20 text-purple-200'
+                                                                                : 'text-zinc-300 hover:bg-zinc-800/80'
+                                                                        }`}
+                                                                    >
+                                                                        <span className="flex items-center gap-2 min-w-0">
+                                                                            <span className="truncate">{opt.label}</span>
+                                                                            {isMine && (
+                                                                                <span className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-400/40 text-[8px] font-black text-purple-300 shrink-0">
+                                                                                    Você
+                                                                                </span>
+                                                                            )}
+                                                                        </span>
+                                                                        {isSelected && (
+                                                                            <Check
+                                                                                size={14}
+                                                                                className="text-purple-400 shrink-0"
+                                                                            />
+                                                                        )}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* SELETOR DESKTOP (BOTÕES) */}
+                                                <div className="hidden md:flex flex-wrap items-center gap-1.5">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setSelectedRankingView('general')}
+                                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all ${
+                                                            selectedRankingView === 'general'
+                                                                ? 'bg-yellow-500/15 border-yellow-500/50 text-yellow-400'
+                                                                : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
+                                                        }`}
+                                                    >
+                                                        Ranking Geral
+                                                    </button>
+                                                    {rankingOptions.map((opt) => {
+                                                        const isMine = attemptData.rankingCategoryId === opt.id;
+                                                        const isSelected = selectedRankingView === opt.id;
+                                                        return (
+                                                            <button
+                                                                key={opt.id}
+                                                                type="button"
+                                                                onClick={() => setSelectedRankingView(opt.id)}
+                                                                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider border transition-all ${
+                                                                    isSelected
+                                                                        ? 'bg-purple-500/20 border-purple-500/60 text-purple-300'
+                                                                        : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-white'
+                                                                }`}
+                                                            >
+                                                                {opt.label}{isMine ? ' • Você' : ''}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </>
                                         ) : <div />}
 
                                         {hasVacanciesConfigured && (

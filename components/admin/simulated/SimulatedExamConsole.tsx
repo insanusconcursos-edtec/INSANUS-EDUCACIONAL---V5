@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   ArrowLeft, Save, ListChecks, Activity, AlertCircle, X as XIcon, Loader2,
-  Plus, Copy, CheckCircle, Award, Trophy, Users, Search, Medal
+  Plus, Copy, CheckCircle, Award, Trophy, Users, Search, Medal, ChevronDown, MapPin
 } from 'lucide-react';
 import { 
   SimulatedClass,
@@ -96,6 +96,19 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, cl
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [newDisciplineName, setNewDisciplineName] = useState('');
+  const [isAdminRankingSelectOpen, setIsAdminRankingSelectOpen] = useState(false);
+  const adminRankingSelectRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isAdminRankingSelectOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (adminRankingSelectRef.current && !adminRankingSelectRef.current.contains(event.target as Node)) {
+        setIsAdminRankingSelectOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isAdminRankingSelectOpen]);
 
   // Helper to get question department (Block > Discipline)
   const getQuestionInfo = (qIndex: number) => {
@@ -1418,7 +1431,106 @@ const SimulatedExamConsole: React.FC<SimulatedExamConsoleProps> = ({ classId, cl
             <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-4">
               {rankingOptions.length > 0 && (
                 <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-900/50 border border-zinc-800 rounded-xl p-3">
-                  <div className="flex flex-wrap items-center gap-1.5">
+                  {/* SELETOR MOBILE (DROPDOWN CUSTOMIZADO ABRINDO PARA BAIXO) */}
+                  <div ref={adminRankingSelectRef} className="md:hidden w-full space-y-1.5 relative">
+                    <span className="block text-[9px] font-black text-zinc-400 uppercase tracking-widest">
+                      {normalizedRankingConfig.mode === 'gender'
+                        ? 'Selecionar Ranking por Gênero'
+                        : 'Selecionar Ranking por Região'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsAdminRankingSelectOpen((prev) => !prev)}
+                      aria-expanded={isAdminRankingSelectOpen}
+                      aria-haspopup="listbox"
+                      className="w-full flex items-center justify-between gap-2 bg-zinc-950 border border-purple-500/50 text-purple-200 rounded-xl px-3.5 py-2.5 text-xs font-black uppercase tracking-wider transition-all"
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        <span className="text-purple-400 shrink-0">
+                          {selectedRankingFilter === 'general' ? (
+                            <Trophy size={14} />
+                          ) : normalizedRankingConfig.mode === 'gender' ? (
+                            <Users size={14} />
+                          ) : (
+                            <MapPin size={14} />
+                          )}
+                        </span>
+                        <span className="truncate">
+                          {selectedRankingFilter === 'general'
+                            ? `Geral (${examResults.length})`
+                            : (() => {
+                                const opt = rankingOptions.find((o) => o.id === selectedRankingFilter);
+                                const count = examResults.filter(
+                                  (r) => r.rankingCategoryId === selectedRankingFilter
+                                ).length;
+                                return `${opt?.label || 'Categoria'} (${count})`;
+                              })()}
+                        </span>
+                      </span>
+                      <ChevronDown
+                        size={15}
+                        className={`text-zinc-400 shrink-0 transition-transform duration-200 ${
+                          isAdminRankingSelectOpen ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </button>
+
+                    {isAdminRankingSelectOpen && (
+                      <div
+                        role="listbox"
+                        className="absolute top-full left-0 right-0 mt-2 bg-[#161618] border border-zinc-700/80 rounded-xl shadow-2xl z-[120] max-h-56 overflow-y-auto divide-y divide-zinc-800/60 animate-in fade-in slide-in-from-top-1 duration-150"
+                      >
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={selectedRankingFilter === 'general'}
+                          onClick={() => {
+                            setSelectedRankingFilter('general');
+                            setIsAdminRankingSelectOpen(false);
+                          }}
+                          className={`w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-[11px] font-black uppercase tracking-wider transition-colors ${
+                            selectedRankingFilter === 'general'
+                              ? 'bg-purple-600/20 text-purple-200'
+                              : 'text-zinc-300 hover:bg-zinc-800/80'
+                          }`}
+                        >
+                          <span className="truncate">Geral ({examResults.length})</span>
+                          {selectedRankingFilter === 'general' && (
+                            <Check size={14} className="text-purple-400 shrink-0" />
+                          )}
+                        </button>
+                        {rankingOptions.map((opt) => {
+                          const count = examResults.filter((r) => r.rankingCategoryId === opt.id).length;
+                          const isSelected = selectedRankingFilter === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              role="option"
+                              aria-selected={isSelected}
+                              onClick={() => {
+                                setSelectedRankingFilter(opt.id);
+                                setIsAdminRankingSelectOpen(false);
+                              }}
+                              className={`w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left text-[11px] font-black uppercase tracking-wider transition-colors ${
+                                isSelected
+                                  ? 'bg-purple-600/20 text-purple-200'
+                                  : 'text-zinc-300 hover:bg-zinc-800/80'
+                              }`}
+                            >
+                              <span className="truncate">
+                                {opt.label} ({count})
+                              </span>
+                              {isSelected && <Check size={14} className="text-purple-400 shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* SELETOR DESKTOP (BOTÕES) */}
+                  <div className="hidden md:flex flex-wrap items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => setSelectedRankingFilter('general')}
