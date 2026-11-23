@@ -18,6 +18,7 @@ import {
   loadStudentLiveAccessContext,
   canStudentAccessLiveEvent,
 } from '../../../utils/liveEventAccess';
+import { isLikelyPdfUrl, openWatermarkedPdf } from '../../../utils/pdfSecurityService';
 
 export const StudentLiveEventRoom: React.FC = () => {
   const { eventId } = useParams<{ eventId: string }>();
@@ -348,25 +349,57 @@ export const StudentLiveEventRoom: React.FC = () => {
                 Materiais de Apoio
               </h3>
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                {event.materials.map((material) => (
-                  <a
-                    key={material.id}
-                    href={material.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="bg-zinc-900/50 p-5 rounded-2xl border border-zinc-800 hover:border-yellow-400/50 hover:bg-zinc-900 transition-all flex items-center gap-4 group"
-                  >
-                    <div className="w-12 h-12 bg-zinc-800 rounded-xl flex items-center justify-center shrink-0 group-hover:bg-yellow-400 transition-colors">
-                      <FileText size={20} className="text-zinc-400 group-hover:text-black transition-colors" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h4 className="text-white font-bold truncate text-sm uppercase tracking-tight" title={material.title}>
-                        {material.title}
-                      </h4>
-                      <span className="text-[9px] font-black text-zinc-600 uppercase tracking-widest mt-1 block">Download Disponível</span>
-                    </div>
-                  </a>
-                ))}
+                {event.materials.map((material) => {
+                  const isPdfMaterial = isLikelyPdfUrl(material.url, material.title);
+                  if (isPdfMaterial) {
+                    return (
+                      <button
+                        key={material.id}
+                        type="button"
+                        onClick={() => openWatermarkedPdf(
+                          material.url,
+                          {
+                            uid: currentUser?.uid,
+                            name: userData?.name || currentUser?.displayName || '',
+                            email: currentUser?.email || userData?.email || '',
+                            cpf: userData?.cpf || '',
+                          },
+                          { fileName: material.title }
+                        )}
+                        className="w-full text-left bg-zinc-900/50 p-5 rounded-2xl border border-zinc-800 hover:border-yellow-400/50 hover:bg-zinc-900 transition-all flex items-center gap-4 group"
+                      >
+                        <div className="w-12 h-12 bg-zinc-800 rounded-xl flex items-center justify-center shrink-0 group-hover:bg-yellow-400 transition-colors">
+                          <FileText size={20} className="text-zinc-400 group-hover:text-black transition-colors" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h4 className="text-white font-bold truncate text-sm uppercase tracking-tight" title={material.title}>
+                            {material.title}
+                          </h4>
+                          <span className="text-[9px] font-black text-zinc-600 uppercase tracking-widest mt-1 block">PDF Protegido • Baixar</span>
+                        </div>
+                      </button>
+                    );
+                  }
+                  return (
+                    <a
+                      key={material.id}
+                      href={material.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="bg-zinc-900/50 p-5 rounded-2xl border border-zinc-800 hover:border-yellow-400/50 hover:bg-zinc-900 transition-all flex items-center gap-4 group"
+                    >
+                      <div className="w-12 h-12 bg-zinc-800 rounded-xl flex items-center justify-center shrink-0 group-hover:bg-yellow-400 transition-colors">
+                        <FileText size={20} className="text-zinc-400 group-hover:text-black transition-colors" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-white font-bold truncate text-sm uppercase tracking-tight" title={material.title}>
+                          {material.title}
+                        </h4>
+                        <span className="text-[9px] font-black text-zinc-600 uppercase tracking-widest mt-1 block">Download Disponível</span>
+                      </div>
+                    </a>
+                  );
+                })}
               </div>
             </div>
           )}

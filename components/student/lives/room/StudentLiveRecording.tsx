@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import { Download, PlayCircle } from 'lucide-react';
 import { AlternativeYouTubePlayer } from '../../../shared/AlternativeYouTubePlayer';
+import { useAuth } from '../../../../contexts/AuthContext';
+import { isLikelyPdfUrl, openWatermarkedPdf } from '../../../../utils/pdfSecurityService';
 
 export const StudentLiveRecording = ({ event }: { event: any }) => {
+  const { currentUser, userData } = useAuth();
   const [activeVideoIndex, setActiveVideoIndex] = useState(0);
   const recordings = event.recordings || [];
   const materials = event.materials || [];
@@ -82,18 +85,43 @@ export const StudentLiveRecording = ({ event }: { event: any }) => {
             <p className="text-sm text-gray-400">Nenhum material disponibilizado.</p>
           ) : (
             <div className="flex flex-col gap-2">
-              {materials.map((mat: any, idx: number) => (
-                <a 
-                  key={mat.id || idx}
-                  href={mat.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-3 p-3 rounded-lg border border-gray-800 bg-gray-900 hover:border-gray-600 transition"
-                >
-                  <Download size={18} className="text-gray-400" />
-                  <span className="text-sm text-white font-medium truncate">{mat.title}</span>
-                </a>
-              ))}
+              {materials.map((mat: any, idx: number) => {
+                const isPdf = isLikelyPdfUrl(mat.url, mat.title);
+                if (isPdf) {
+                  return (
+                    <button
+                      key={mat.id || idx}
+                      type="button"
+                      onClick={() => openWatermarkedPdf(
+                        mat.url,
+                        {
+                          uid: currentUser?.uid,
+                          name: userData?.name || currentUser?.displayName || '',
+                          email: currentUser?.email || userData?.email || '',
+                          cpf: userData?.cpf || ''
+                        },
+                        { fileName: mat.title }
+                      )}
+                      className="w-full text-left flex items-center gap-3 p-3 rounded-lg border border-gray-800 bg-gray-900 hover:border-gray-600 transition"
+                    >
+                      <Download size={18} className="text-gray-400 shrink-0" />
+                      <span className="text-sm text-white font-medium truncate">{mat.title}</span>
+                    </button>
+                  );
+                }
+                return (
+                  <a 
+                    key={mat.id || idx}
+                    href={mat.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-3 p-3 rounded-lg border border-gray-800 bg-gray-900 hover:border-gray-600 transition"
+                  >
+                    <Download size={18} className="text-gray-400 shrink-0" />
+                    <span className="text-sm text-white font-medium truncate">{mat.title}</span>
+                  </a>
+                );
+              })}
             </div>
           )}
         </div>

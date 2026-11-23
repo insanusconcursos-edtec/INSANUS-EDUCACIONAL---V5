@@ -5,6 +5,7 @@ import { SimuladoFocusMode } from '../goals/SimuladoFocusMode';
 import { scheduleUserSimulado } from '../../../services/scheduleService';
 import { collection, query, where, getDocs, documentId, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../../services/firebase';
+import { openWatermarkedPdf } from '../../../utils/pdfSecurityService';
 
 interface ComputedSimulado {
     id: string;
@@ -314,9 +315,22 @@ export const StudentDailyGoals = ({ planData, userData }: { planData: any, userD
                                                         <p className="text-gray-500 text-xs">PDF • Clique para abrir</p>
                                                     </div>
                                                 </div>
-                                                <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded uppercase transition-colors">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => openWatermarkedPdf(
+                                                        pdfUrl,
+                                                        {
+                                                            uid: user?.uid,
+                                                            name: userData?.name || user?.displayName || '',
+                                                            email: user?.email || userData?.email || '',
+                                                            cpf: userData?.cpf || ''
+                                                        },
+                                                        { fileName: `${simulado.title || 'Simulado'} - Caderno de Questoes.pdf` }
+                                                    )}
+                                                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded uppercase transition-colors"
+                                                >
                                                     Abrir PDF
-                                                </a>
+                                                </button>
                                             </div>
                                         ) : (
                                             <div className="text-gray-600 text-sm italic p-4 text-center border border-gray-800 border-dashed rounded">

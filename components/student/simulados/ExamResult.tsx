@@ -29,8 +29,9 @@ import {
   normalizeRankingConfig,
   VacancyStatus
 } from '../../../utils/simulatedRanking';
-import { ShieldAlert, Send, Clock, CheckCircle2, XCircle, AlertTriangle, Scale, Users, MapPin } from 'lucide-react';
+import { ShieldAlert, Send, Clock, CheckCircle2, XCircle, AlertTriangle, Scale, Users, MapPin, Loader2 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { openWatermarkedPdf } from '../../../utils/pdfSecurityService';
 
 // Helper Component para Linha do Ranking
 const RankingRow: React.FC<{
@@ -169,6 +170,26 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
     const [isRankingSelectOpen, setIsRankingSelectOpen] = useState(false);
     const rankingSelectRef = useRef<HTMLDivElement | null>(null);
     const [chartMode, setChartMode] = useState<'quantity' | 'percentage' | 'autodiagnosis'>('quantity');
+    const [downloadingPdfKey, setDownloadingPdfKey] = useState<string | null>(null);
+
+    const handleDownloadProtectedPdf = async (url: string, key: string, fileName: string) => {
+        if (!url || downloadingPdfKey) return;
+        setDownloadingPdfKey(key);
+        try {
+            await openWatermarkedPdf(
+                url,
+                {
+                    uid: currentUser?.uid,
+                    name: userData?.name || currentUser?.displayName || '',
+                    email: currentUser?.email || userData?.email || '',
+                    cpf: userData?.cpf || ''
+                },
+                { fileName }
+            );
+        } finally {
+            setDownloadingPdfKey(null);
+        }
+    };
 
     useEffect(() => {
         if (!isRankingSelectOpen) return;
@@ -536,11 +557,17 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
                     <div className="flex items-center gap-2 md:gap-4">
                         {exam.files?.bookletUrl && (
                             <button 
-                                onClick={() => window.open(exam.files.bookletUrl, '_blank')}
-                                className="hidden lg:flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-widest shadow-lg hover:shadow-blue-500/30 transition-all transform hover:-translate-y-0.5"
+                                type="button"
+                                disabled={downloadingPdfKey !== null}
+                                onClick={() => handleDownloadProtectedPdf(
+                                    exam.files.bookletUrl!,
+                                    'header-booklet',
+                                    `${exam.title || 'Simulado'} - Caderno de Questoes.pdf`
+                                )}
+                                className="hidden lg:flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-widest shadow-lg hover:shadow-blue-500/30 transition-all transform hover:-translate-y-0.5 disabled:opacity-60"
                             >
-                                <FileText size={16} />
-                                Baixar Caderno
+                                {downloadingPdfKey === 'header-booklet' ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
+                                {downloadingPdfKey === 'header-booklet' ? 'Preparando...' : 'Baixar Caderno'}
                             </button>
                         )}
                         <button 
@@ -1056,11 +1083,26 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
                                         </div>
                                         <div className="w-full md:w-auto flex justify-center mt-2 md:mt-0">
                                             <button 
-                                                onClick={() => window.open(exam.files.bookletUrl, '_blank')}
-                                                className="w-full md:w-auto px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded-lg border border-gray-700 transition-all flex items-center justify-center gap-2 uppercase tracking-wider"
+                                                type="button"
+                                                disabled={downloadingPdfKey !== null}
+                                                onClick={() => handleDownloadProtectedPdf(
+                                                    exam.files.bookletUrl!,
+                                                    'card-booklet',
+                                                    `${exam.title || 'Simulado'} - Caderno de Questoes.pdf`
+                                                )}
+                                                className="w-full md:w-auto px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded-lg border border-gray-700 transition-all flex items-center justify-center gap-2 uppercase tracking-wider disabled:opacity-60"
                                             >
-                                                Visualizar
-                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                                                {downloadingPdfKey === 'card-booklet' ? (
+                                                    <>
+                                                        <Loader2 size={14} className="animate-spin" />
+                                                        Preparando...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        Baixar PDF
+                                                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                                    </>
+                                                )}
                                             </button>
                                         </div>
                                     </div>
@@ -1089,11 +1131,26 @@ export const ExamResult: React.FC<ExamResultProps> = ({ exam, attemptData, onBac
                                         </div>
                                         <div className="w-full md:w-auto flex justify-center mt-2 md:mt-0">
                                             <button 
-                                                onClick={() => window.open(exam.files.answerKeyUrl, '_blank')}
-                                                className="w-full md:w-auto px-4 py-2 bg-gray-800 hover:bg-green-600 text-white text-xs font-bold rounded-lg border border-gray-700 hover:border-green-500 transition-all flex items-center justify-center gap-2 uppercase tracking-wider"
+                                                type="button"
+                                                disabled={downloadingPdfKey !== null}
+                                                onClick={() => handleDownloadProtectedPdf(
+                                                    exam.files.answerKeyUrl!,
+                                                    'card-answerkey',
+                                                    `${exam.title || 'Simulado'} - Gabarito Comentado.pdf`
+                                                )}
+                                                className="w-full md:w-auto px-4 py-2 bg-gray-800 hover:bg-green-600 text-white text-xs font-bold rounded-lg border border-gray-700 hover:border-green-500 transition-all flex items-center justify-center gap-2 uppercase tracking-wider disabled:opacity-60"
                                             >
-                                                Visualizar
-                                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                                {downloadingPdfKey === 'card-answerkey' ? (
+                                                    <>
+                                                        <Loader2 size={14} className="animate-spin" />
+                                                        Preparando...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        Baixar PDF
+                                                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                                    </>
+                                                )}
                                             </button>
                                         </div>
                                     </div>

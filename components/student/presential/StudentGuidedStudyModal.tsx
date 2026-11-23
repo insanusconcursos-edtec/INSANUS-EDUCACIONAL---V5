@@ -16,7 +16,8 @@ import {
   Check,
   Loader2,
   AlertCircle,
-  Info
+  Info,
+  ShieldCheck
 } from 'lucide-react';
 import {
   GuidedStudyMeta,
@@ -27,6 +28,8 @@ import { CourseContent } from '../../../types/course';
 import { guidedStudyService } from '../../../services/guidedStudyService';
 import { InteractiveLessonPlayer } from '../courses/player/InteractiveLessonPlayer';
 import { PandaVideoPlayer } from '../../ui/video/PandaVideoPlayer';
+import { useAuth } from '../../../contexts/AuthContext';
+import { getWatermarkedPdfBlob, openWatermarkedPdf } from '../../../utils/pdfSecurityService';
 
 interface StudentGuidedStudyModalProps {
   isOpen: boolean;
@@ -51,6 +54,7 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
   isAdminPreview = false,
   initialVideoIndex = 0
 }) => {
+  const { currentUser, userData } = useAuth();
   const [isCompleted, setIsCompleted] = useState<boolean>(!!progress?.completed);
   const [isSaving, setIsSaving] = useState(false);
   const [showOrientationBanner, setShowOrientationBanner] = useState(true);
@@ -72,6 +76,13 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
   const [resolvedMapJson, setResolvedMapJson] = useState<string | null>(null);
   const [isLoadingMap, setIsLoadingMap] = useState<boolean>(false);
   const [mapLoadError, setMapLoadError] = useState<string | null>(null);
+
+  // Protected PDF state (embedded viewer + instant watermarked download)
+  const [watermarkedPdfUrl, setWatermarkedPdfUrl] = useState<string | null>(null);
+  const [watermarkedPdfFileName, setWatermarkedPdfFileName] = useState<string | null>(null);
+  const [isPreparingPdf, setIsPreparingPdf] = useState<boolean>(false);
+  const [isPdfProtected, setIsPdfProtected] = useState<boolean>(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState<boolean>(false);
 
   const loadRemoteInteractiveMap = useCallback(async (url: string) => {
     try {
@@ -152,7 +163,110 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
     };
   }, [isOpen, isTimerRunning, isCompleted, isAdminPreview]);
 
+  // Prepare watermarked PDF blob for embedded viewer when student opens a PDF meta
+  useEffect(() => {
+    if (!isOpen || !meta?.pdfUrl || isAdminPreview) {
+      setWatermarkedPdfUrl(null);
+      setWatermarkedPdfFileName(null);
+      setIsPdfProtected(false);
+      setIsPreparingPdf(false);
+      return;
+    }
+
+    let cancelled = false;
+    let createdObjectUrl: string | null = null;
+
+    const prepareProtectedPdf = async () => {
+      setIsPreparingPdf(true);
+      setIsPdfProtected(false);
+      setWatermarkedPdfUrl(null);
+
+      try {
+        const { blob, fileName, watermarked } = await getWatermarkedPdfBlob(
+          meta.pdfUrl!,
+          {
+            uid: currentUser?.uid || userId,
+            name: userData?.name || currentUser?.displayName || '',
+            email: currentUser?.email || userData?.email || '',
+            cpf: userData?.cpf || '',
+          },
+          meta.pdfName || meta.title
+        );
+
+        if (cancelled) return;
+
+        createdObjectUrl = URL.createObjectURL(blob);
+        setWatermarkedPdfUrl(createdObjectUrl);
+        setWatermarkedPdfFileName(fileName);
+        setIsPdfProtected(watermarked);
+      } catch (err) {
+        console.warn('[GuidedStudy] Fallback para visualizador direto do PDF:', err);
+        if (!cancelled) {
+          setWatermarkedPdfUrl(null);
+          setWatermarkedPdfFileName(null);
+          setIsPdfProtected(false);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsPreparingPdf(false);
+        }
+      }
+    };
+
+    prepareProtectedPdf();
+
+    return () => {
+      cancelled = true;
+      if (createdObjectUrl) {
+        URL.revokeObjectURL(createdObjectUrl);
+      }
+    };
+  }, [
+    isOpen,
+    meta?.pdfUrl,
+    meta?.pdfName,
+    meta?.title,
+    isAdminPreview,
+    currentUser?.uid,
+    currentUser?.displayName,
+    currentUser?.email,
+    userId,
+    userData?.name,
+    userData?.email,
+    userData?.cpf,
+  ]);
+
   if (!isOpen || !meta) return null;
+
+  const handleDownloadProtectedPdf = async () => {
+    if (!meta.pdfUrl || isDownloadingPdf) return;
+
+    if (!isAdminPreview && watermarkedPdfUrl) {
+      const link = document.createElement('a');
+      link.href = watermarkedPdfUrl;
+      link.download = watermarkedPdfFileName || meta.pdfName || `${meta.title || 'material'}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
+    setIsDownloadingPdf(true);
+    try {
+      await openWatermarkedPdf(
+        meta.pdfUrl,
+        {
+          uid: currentUser?.uid || userId,
+          name: userData?.name || currentUser?.displayName || '',
+          email: currentUser?.email || userData?.email || '',
+          cpf: userData?.cpf || '',
+        },
+        { fileName: meta.pdfName || meta.title }
+      );
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
 
   const formatTimer = (totalSecs: number) => {
     const mins = Math.floor(totalSecs / 60);
@@ -562,28 +676,47 @@ export const StudentGuidedStudyModal: React.FC<StudentGuidedStudyModalProps> = (
                 {/* PDF Viewer / Download */}
                 {meta.pdfUrl ? (
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between p-3 bg-zinc-800/80 border border-zinc-700 rounded-xl">
-                      <div className="flex items-center gap-2 text-xs text-amber-400 font-bold truncate">
+                    <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-zinc-800/80 border border-zinc-700 rounded-xl">
+                      <div className="flex items-center gap-2 text-xs text-amber-400 font-bold min-w-0 flex-1">
                         <FileText className="w-4 h-4 shrink-0" />
                         <span className="truncate">{meta.pdfName || 'Material em PDF'}</span>
+                        {isPdfProtected && !isAdminPreview && (
+                          <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-400 shrink-0">
+                            <ShieldCheck className="w-3 h-3" />
+                            Protegido
+                          </span>
+                        )}
                       </div>
-                      <a
-                        href={meta.pdfUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                      <button
+                        type="button"
+                        onClick={handleDownloadProtectedPdf}
+                        disabled={isPreparingPdf || isDownloadingPdf}
+                        className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
                       >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>Baixar PDF</span>
-                      </a>
+                        {isPreparingPdf || isDownloadingPdf ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Download className="w-3.5 h-3.5" />
+                        )}
+                        <span>{isPreparingPdf ? 'Protegendo PDF...' : 'Baixar PDF'}</span>
+                      </button>
                     </div>
 
-                    <div className="w-full h-96 bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden">
-                      <iframe
-                        src={`${meta.pdfUrl}#toolbar=1`}
-                        className="w-full h-full border-0"
-                        title={meta.pdfName || 'PDF'}
-                      />
+                    <div className="w-full h-96 bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden relative">
+                      {isPreparingPdf ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-zinc-400">
+                          <Loader2 className="w-7 h-7 animate-spin text-amber-400" />
+                          <span className="text-xs font-semibold">
+                            Aplicando marca d&apos;água de segurança no documento...
+                          </span>
+                        </div>
+                      ) : (
+                        <iframe
+                          src={`${watermarkedPdfUrl || meta.pdfUrl}#toolbar=1`}
+                          className="w-full h-full border-0"
+                          title={meta.pdfName || 'PDF'}
+                        />
+                      )}
                     </div>
                   </div>
                 ) : null}

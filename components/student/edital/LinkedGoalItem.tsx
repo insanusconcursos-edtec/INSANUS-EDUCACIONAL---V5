@@ -9,6 +9,7 @@ import {
 import { Meta, MetaType } from '../../../services/metaService';
 import { isPandaVideo } from '../../../utils/videoHelpers';
 import { openWatermarkedPdf } from '../../../utils/pdfSecurityService';
+import toast from 'react-hot-toast';
 import { useAuth } from '../../../contexts/AuthContext';
 import MindMapViewerModal from '../MindMapViewerModal';
 import FlashcardPlayerModal from '../FlashcardPlayerModal';
@@ -87,14 +88,19 @@ const LinkedGoalItem: React.FC<LinkedGoalItemProps> = ({
     if (!currentUser || loadingPdf) return;
     setLoadingPdf(true);
     try {
-      await openWatermarkedPdf(url, {
-        uid: currentUser?.uid,
-        email: currentUser.email || '',
-        cpf: userData?.cpf || '000.000.000-00'
-      });
+      await openWatermarkedPdf(
+        url,
+        {
+          uid: currentUser?.uid,
+          name: userData?.name || currentUser?.displayName || '',
+          email: currentUser.email || userData?.email || '',
+          cpf: userData?.cpf || ''
+        },
+        { fileName: goal.title }
+      );
     } catch (error) {
       console.error(error);
-      alert("Erro ao abrir documento protegido.");
+      toast.error("Erro ao abrir documento protegido.");
     } finally {
       setLoadingPdf(false);
     }

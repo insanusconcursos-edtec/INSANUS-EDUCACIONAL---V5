@@ -5,6 +5,7 @@ import { CourseLesson, CourseContent } from '../../../../types/course';
 import { courseService } from '../../../../services/courseService';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { openWatermarkedPdf } from '../../../../utils/pdfSecurityService';
+import toast from 'react-hot-toast';
 import { AlternativeYouTubePlayer } from '../../../shared/AlternativeYouTubePlayer';
 import { InteractiveLessonPlayer } from './InteractiveLessonPlayer';
 
@@ -36,21 +37,26 @@ export function CoursePlayerContent({ lesson }: CoursePlayerContentProps) {
   }, [lesson.id]);
 
   // Função para abrir PDF com marca d'água
-  const handleOpenPdf = async (url: string, contentId: string) => {
+  const handleOpenPdf = async (url: string, contentId: string, fileName?: string) => {
     if (!url || !currentUser) return;
     if (openingPdfId) return; // Evita múltiplos cliques
 
     setOpeningPdfId(contentId);
 
     try {
-        await openWatermarkedPdf(url, {
-            uid: currentUser.uid,
-            email: currentUser.email || 'usuario@insanus.com',
-            cpf: userData?.cpf || '000.000.000-00'
-        });
+        await openWatermarkedPdf(
+            url,
+            {
+                uid: currentUser.uid,
+                name: userData?.name || currentUser.displayName || '',
+                email: currentUser.email || userData?.email || '',
+                cpf: userData?.cpf || ''
+            },
+            { fileName }
+        );
     } catch (error: any) {
         console.error("Erro ao abrir PDF:", error);
-        alert(`Erro ao gerar documento seguro: ${error.message}`);
+        toast.error(error?.message || "Erro ao gerar documento seguro.");
     } finally {
         setOpeningPdfId(null);
     }
@@ -169,7 +175,7 @@ export function CoursePlayerContent({ lesson }: CoursePlayerContentProps) {
                                     <div className="absolute -left-8 top-0 w-8 h-1/2 border-l-2 border-b-2 border-orange-500/30 rounded-bl-lg"></div>
                                 )}
                                 <div 
-                                    onClick={() => handleOpenPdf(item.fileUrl || '', item.id)}
+                                    onClick={() => handleOpenPdf(item.fileUrl || '', item.id, item.title)}
                                     className={`
                                         flex items-center gap-4 p-4 bg-[#1a1d24] border ${styles.borderClass} rounded-xl transition-all group mb-4 cursor-pointer
                                         ${openingPdfId === item.id ? 'opacity-75 pointer-events-none' : `hover:border-red-600/50 hover:bg-[#202329]` }
@@ -198,7 +204,7 @@ export function CoursePlayerContent({ lesson }: CoursePlayerContentProps) {
                                     <div className="relative ml-16 mt-2">
                                         <div className="absolute -left-8 top-0 w-8 h-1/2 border-l-2 border-b-2 border-blue-500/30 rounded-bl-lg"></div>
                                         <div 
-                                            onClick={() => handleOpenPdf(item.commentedAnswerKeyUrl!, `${item.id}-answerkey`)}
+                                            onClick={() => handleOpenPdf(item.commentedAnswerKeyUrl!, `${item.id}-answerkey`, `${item.title || 'Material'} - Gabarito Comentado.pdf`)}
                                             className={`
                                                 flex items-center gap-3 p-3 bg-blue-900/5 border border-blue-500/20 rounded-xl transition-all group mb-4 cursor-pointer
                                                 ${openingPdfId === `${item.id}-answerkey` ? 'opacity-75 pointer-events-none' : `hover:border-blue-500/50 hover:bg-blue-900/10` }

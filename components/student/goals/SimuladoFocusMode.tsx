@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '../../../contexts/AuthContext';
+import { openWatermarkedPdf } from '../../../utils/pdfSecurityService';
 
 interface SimuladoFocusModeProps {
     simulado: {
@@ -12,8 +14,10 @@ interface SimuladoFocusModeProps {
 }
 
 export const SimuladoFocusMode = ({ simulado, onClose, onComplete }: SimuladoFocusModeProps) => {
+    const { currentUser, userData } = useAuth();
     const [timeLeft, setTimeLeft] = useState(simulado.duration * 60);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
     
     // NOVO: Estado para controlar o PopUp customizado de conclusão
     const [showFinishConfirmation, setShowFinishConfirmation] = useState(false);
@@ -86,11 +90,30 @@ export const SimuladoFocusMode = ({ simulado, onClose, onComplete }: SimuladoFoc
                 <div className="flex flex-wrap justify-center items-center gap-4">
                     {simulado.pdfUrl && (
                         <button 
-                            onClick={() => window.open(simulado.pdfUrl, '_blank')}
-                            className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded border border-gray-600 flex items-center gap-2 transition-colors shadow-lg"
+                            type="button"
+                            disabled={isDownloadingPdf}
+                            onClick={async () => {
+                                if (!simulado.pdfUrl || isDownloadingPdf) return;
+                                setIsDownloadingPdf(true);
+                                try {
+                                    await openWatermarkedPdf(
+                                        simulado.pdfUrl,
+                                        {
+                                            uid: currentUser?.uid,
+                                            name: userData?.name || currentUser?.displayName || '',
+                                            email: currentUser?.email || userData?.email || '',
+                                            cpf: userData?.cpf || ''
+                                        },
+                                        { fileName: `${simulado.title || 'Simulado'} - Caderno de Prova.pdf` }
+                                    );
+                                } finally {
+                                    setIsDownloadingPdf(false);
+                                }
+                            }}
+                            className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded border border-gray-600 flex items-center gap-2 transition-colors shadow-lg disabled:opacity-60"
                         >
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                            ABRIR CADERNO DE PROVA
+                            {isDownloadingPdf ? 'PREPARANDO PDF...' : 'BAIXAR CADERNO DE PROVA'}
                         </button>
                     )}
                     <div className="text-gray-500 text-xs font-mono border-l border-gray-700 pl-4 hidden md:block">

@@ -7,6 +7,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { submitExamAttempt, SimulatedAttempt } from '../../../services/simulatedAttemptService';
 import { updateStudent } from '../../../services/userService';
 import { getRankingOptions, normalizeRankingConfig } from '../../../utils/simulatedRanking';
+import { openWatermarkedPdf } from '../../../utils/pdfSecurityService';
 
 interface SimulatedExamRunnerProps {
   exam: SimulatedExam;
@@ -31,6 +32,7 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
   const [showFinishModal, setShowFinishModal] = useState(false);
   const [showExitModal, setShowExitModal] = useState(false);
   const [errorModalMessage, setErrorModalMessage] = useState<string | null>(null);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   useEffect(() => {
     if (classData) {
@@ -228,22 +230,33 @@ const SimulatedExamRunner: React.FC<SimulatedExamRunnerProps> = ({ exam, onClose
 
           <button 
               type="button"
-              onClick={() => {
+              disabled={isDownloadingPdf}
+              onClick={async () => {
                   const pdfLink = exam.files?.bookletUrl;
-                  if (pdfLink) {
-                      const a = document.createElement('a');
-                      a.href = pdfLink;
-                      a.target = '_blank';
-                      a.rel = 'noopener noreferrer';
-                      a.click();
-                  } else {
+                  if (!pdfLink) {
                       setErrorModalMessage("Link do caderno em PDF não encontrado para este simulado.");
+                      return;
+                  }
+                  setIsDownloadingPdf(true);
+                  try {
+                      await openWatermarkedPdf(
+                          pdfLink,
+                          {
+                              uid: currentUser?.uid,
+                              name: userData?.name || currentUser?.displayName || '',
+                              email: currentUser?.email || userData?.email || '',
+                              cpf: userData?.cpf || ''
+                          },
+                          { fileName: `${exam.title || 'Simulado'} - Caderno de Questoes.pdf` }
+                      );
+                  } finally {
+                      setIsDownloadingPdf(false);
                   }
               }}
-              className="flex items-center gap-3 bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-lg font-bold text-xs uppercase tracking-widest shadow-lg hover:shadow-blue-500/30 transition-all transform hover:-translate-y-0.5 active:translate-y-0"
+              className="flex items-center gap-3 bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-lg font-bold text-xs uppercase tracking-widest shadow-lg hover:shadow-blue-500/30 transition-all transform hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-60 disabled:cursor-wait"
           >
-              <FileText size={18} />
-              Baixar Caderno
+              {isDownloadingPdf ? <Loader2 size={18} className="animate-spin" /> : <FileText size={18} />}
+              {isDownloadingPdf ? 'Preparando PDF...' : 'Baixar Caderno'}
           </button>
       </div>
 

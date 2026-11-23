@@ -177,7 +177,7 @@ function StudentTopicAccordion({ topic, courseId, planId, disciplineId, discipli
     }
   };
 
-  const handleOpenPdf = async (url: string, id: string) => {
+  const handleOpenPdf = async (url: string, id: string, fileName?: string) => {
     if (isMaintenance) {
         toast.error(maintenanceMessage || 'O conteúdo do curso foi trancado para atualização.');
         return;
@@ -185,13 +185,18 @@ function StudentTopicAccordion({ topic, courseId, planId, disciplineId, discipli
     if (!user || openingPdfId) return;
     setOpeningPdfId(id);
     try {
-        await openWatermarkedPdf(url, {
-            uid: user.uid,
-            email: user.email || 'Email não identificado',
-            cpf: userData?.cpf || user.uid 
-        });
+        await openWatermarkedPdf(
+            url,
+            {
+                uid: user.uid,
+                name: userData?.name || user.displayName || '',
+                email: user.email || userData?.email || '',
+                cpf: userData?.cpf || ''
+            },
+            { fileName }
+        );
     } catch (error) {
-        alert("Erro ao gerar documento seguro.");
+        toast.error("Erro ao gerar documento seguro.");
     } finally {
         setOpeningPdfId(null);
     }

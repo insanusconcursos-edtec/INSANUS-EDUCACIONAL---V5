@@ -8,7 +8,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { useStudyContext } from '../../../contexts/StudyContext';
 import { notebookService } from '../../../services/notebookService';
 import { toPlainObject } from '../../../services/firestoreUtils';
-import { applyWatermarkToPdf } from '../../../utils/pdfSecurityService';
+import { getWatermarkedPdfBlob, openWatermarkedPdf } from '../../../utils/pdfSecurityService';
 import toast from 'react-hot-toast';
 
 // Import CSS for annotations and text layers
@@ -55,6 +55,8 @@ export const InsanusPdfViewer: React.FC<InsanusPdfViewerProps> = ({ url }) => {
     const [pageNumber, setPageNumber] = useState<number>(1);
     const [scale, setScale] = useState<number>(1.0);
     const [isDocumentLoading, setIsDocumentLoading] = useState(true);
+    const [watermarkedUrl, setWatermarkedUrl] = useState<string | null>(null);
+    const [isPreparingWatermark, setIsPreparingWatermark] = useState(false);
     
     // Tools State
     const [activeTool, setActiveTool] = useState<ToolType>('select');
@@ -76,10 +78,56 @@ export const InsanusPdfViewer: React.FC<InsanusPdfViewerProps> = ({ url }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const lastSavedRef = useRef({ highlights: [] as any[], notes: [] as any[] });
 
+    // Prepare Watermarked PDF Blob for embedded viewer
+    useEffect(() => {
+        if (!url) {
+            setWatermarkedUrl(null);
+            setIsPreparingWatermark(false);
+            return;
+        }
+
+        let cancelled = false;
+        let objectUrl: string | null = null;
+
+        const preparePdf = async () => {
+            setIsPreparingWatermark(true);
+            setIsDocumentLoading(true);
+            setWatermarkedUrl(null);
+            try {
+                const { blob } = await getWatermarkedPdfBlob(url, {
+                    uid: currentUser?.uid,
+                    name: userData?.name || currentUser?.displayName || '',
+                    email: currentUser?.email || userData?.email || '',
+                    cpf: userData?.cpf || '',
+                });
+                if (cancelled) return;
+                objectUrl = URL.createObjectURL(blob);
+                setWatermarkedUrl(objectUrl);
+            } catch (err) {
+                console.warn('[InsanusPdfViewer] Fallback para leitura direta:', err);
+                if (!cancelled) {
+                    setWatermarkedUrl(null);
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsPreparingWatermark(false);
+                }
+            }
+        };
+
+        preparePdf();
+
+        return () => {
+            cancelled = true;
+            if (objectUrl) {
+                URL.revokeObjectURL(objectUrl);
+            }
+        };
+    }, [url, currentUser?.uid, currentUser?.displayName, currentUser?.email, userData?.name, userData?.email, userData?.cpf]);
+
     // Load Annotations
     useEffect(() => {
         if (currentUser && url) {
-            setIsDocumentLoading(true);
             loadAnnotations();
         }
     }, [currentUser, url]);
@@ -439,18 +487,22 @@ export const InsanusPdfViewer: React.FC<InsanusPdfViewerProps> = ({ url }) => {
                 onMouseMove={handleMouseMove}
                 onClick={handleContainerClick}
             >
-                {(isLoadingAnnotations || isDocumentLoading) && (
+                {(isLoadingAnnotations || isDocumentLoading || isPreparingWatermark) && (
                     <div className="absolute inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center">
                         <div className="flex flex-col items-center gap-3">
                             <Loader2 className="animate-spin text-red-600" size={32} />
-                            <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Carregando Material...</span>
+                            <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">
+                                {isPreparingWatermark ? 'Aplicando proteção ao documento...' : 'Carregando Material...'}
+                            </span>
                         </div>
                     </div>
                 )}
                 
+                {!isPreparingWatermark && (
                 <Document
-                    file={url}
+                    file={watermarkedUrl || url}
                     onLoadSuccess={onDocumentLoadSuccess}
+                    onLoadError={() => setIsDocumentLoading(false)}
                     loading={null}
                     error={
                         <div className="flex flex-col items-center justify-center mt-20 gap-4 text-center p-6 bg-red-500/5 rounded-2xl border border-red-500/10 mx-auto max-w-sm">
@@ -459,14 +511,18 @@ export const InsanusPdfViewer: React.FC<InsanusPdfViewerProps> = ({ url }) => {
                                 <p className="text-sm font-bold text-red-500 mb-1">Erro ao carregar o PDF</p>
                                 <p className="text-[10px] text-zinc-500 font-medium">Isso pode ocorrer devido a restrições de segurança ou falha na conexão.</p>
                             </div>
-                            <a 
-                                href={url} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
+                            <button 
+                                type="button"
+                                onClick={() => openWatermarkedPdf(url, {
+                                    uid: currentUser?.uid,
+                                    name: userData?.name || currentUser?.displayName || '',
+                                    email: currentUser?.email || userData?.email || '',
+                                    cpf: userData?.cpf || ''
+                                })}
                                 className="px-5 py-2 bg-red-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-red-700 transition-all"
                             >
-                                Abrir em nova aba
-                            </a>
+                                Baixar PDF Protegido
+                            </button>
                         </div>
                     }
                 >
@@ -546,6 +602,7 @@ export const InsanusPdfViewer: React.FC<InsanusPdfViewerProps> = ({ url }) => {
                         </div>
                     </div>
                 </Document>
+                )}
 
                 {/* Note Editor Popup */}
                 {activeNote && (

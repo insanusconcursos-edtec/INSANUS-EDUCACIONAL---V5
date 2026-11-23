@@ -11,6 +11,7 @@ import { useStudyContext } from '../../contexts/StudyContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { isPandaVideo } from '../../utils/videoHelpers';
 import { openWatermarkedPdf } from '../../utils/pdfSecurityService';
+import toast from 'react-hot-toast';
 import VideoPlayerModal from './VideoPlayerModal';
 import MindMapViewerModal from './MindMapViewerModal';
 import FlashcardPlayerModal from './FlashcardPlayerModal';
@@ -323,7 +324,7 @@ export const StudentGoalCard: React.FC<StudentGoalCardProps> = ({ goal, onStart,
   };
 
   // --- LOGIC: PDF SECURITY (WATERMARK) ---
-  const handleFileClick = async (fileUrl: string, index: number) => {
+  const handleFileClick = async (fileUrl: string, index: number, fileName?: string) => {
     if (!fileUrl) return;
     if (loadingPdfIndex !== null) return;
 
@@ -340,17 +341,19 @@ export const StudentGoalCard: React.FC<StudentGoalCardProps> = ({ goal, onStart,
     setLoadingPdfIndex(index);
     
     try {
-        const userCpf = userData?.cpf || '000.000.000-00';
-        const userEmail = currentUser?.email || 'usuario@insanus.com';
-
-        await openWatermarkedPdf(fileUrl, {
-            uid: currentUser?.uid,
-            email: userEmail,
-            cpf: userCpf
-        });
+        await openWatermarkedPdf(
+            fileUrl,
+            {
+                uid: currentUser?.uid,
+                name: userData?.name || currentUser?.displayName || '',
+                email: currentUser?.email || userData?.email || '',
+                cpf: userData?.cpf || ''
+            },
+            { fileName }
+        );
     } catch (error: any) {
         console.error("Erro ao abrir PDF:", error);
-        alert(`Erro de Segurança: ${error.message || "Não foi possível carregar o arquivo."}`);
+        toast.error(error?.message || "Não foi possível carregar o arquivo.");
     } finally {
         setLoadingPdfIndex(null);
     }
@@ -508,9 +511,14 @@ export const StudentGoalCard: React.FC<StudentGoalCardProps> = ({ goal, onStart,
                                         <p className="text-gray-500 text-xs">PDF • Clique para abrir</p>
                                     </div>
                                 </div>
-                                <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="w-full sm:w-auto text-center px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded uppercase transition-colors">
-                                    Abrir PDF
-                                </a>
+                                <button
+                                    type="button"
+                                    disabled={loadingPdfIndex === -1}
+                                    onClick={() => handleFileClick(pdfUrl, -1, `${goal.title || 'Simulado'} - Caderno de Questoes.pdf`)}
+                                    className="w-full sm:w-auto text-center px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded uppercase transition-colors disabled:opacity-60"
+                                >
+                                    {loadingPdfIndex === -1 ? 'Preparando...' : 'Abrir PDF'}
+                                </button>
                             </div>
                         ) : (
                             <div className="text-gray-500 text-sm italic p-4 text-center border border-gray-800 border-dashed rounded">Nenhum caderno disponível.</div>
@@ -761,7 +769,7 @@ export const StudentGoalCard: React.FC<StudentGoalCardProps> = ({ goal, onStart,
                         return (
                             <div 
                                 key={idx} 
-                                onClick={() => !isLoading && handleFileClick(file.url, idx)}
+                                onClick={() => !isLoading && handleFileClick(file.url, idx, file.name)}
                                 className={`
                                     flex items-center justify-between p-2 rounded-lg bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-800 transition-colors group/item cursor-pointer
                                     ${isLoading ? 'opacity-70 cursor-wait bg-zinc-800' : ''}
